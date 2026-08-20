@@ -9,8 +9,8 @@ class GrowwProvider:
 
     def __init__(self, settings):
         self.api_key = os.getenv("GROWW_API_KEY", "").strip()
-self.api_secret = os.getenv("GROWW_API_SECRET", "").strip()
-self.access_token = os.getenv("GROWW_ACCESS_TOKEN", "").strip()
+        self.api_secret = os.getenv("GROWW_API_SECRET", "").strip()
+        self.access_token = os.getenv("GROWW_ACCESS_TOKEN", "").strip()
 
         if not self.access_token and (not self.api_key or not self.api_secret):
             raise RuntimeError(
