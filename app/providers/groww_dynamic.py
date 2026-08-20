@@ -1,6 +1,7 @@
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+from app.external_context import external_market_context
 from .groww import GrowwProvider
 
 
@@ -59,7 +60,6 @@ class DynamicGrowwProvider(GrowwProvider):
         return {
             "timezone": "Asia/Kolkata",
             "checked_at": now.isoformat(),
-            # Existing frontend interprets is_open as whether fresh execution is allowed.
             "is_open": execution_allowed,
             "status": phase,
             "phase": phase,
@@ -109,6 +109,50 @@ class DynamicGrowwProvider(GrowwProvider):
             "warning": "Research contract suggestion only. Groww option-chain volume may be unavailable or zero; verify live bid/ask spread, lot size, liquidity and slippage before execution.",
         }
 
+    def _apply_external_context(self, result, external):
+        """Conservatively confirm/penalize an existing setup with GIFT/news context.
+
+        External context never changes a technical NO_TRADE into SETUP. Adjustments
+        are direction-aware and deliberately capped so technical/F&O structure
+        remains dominant.
+        """
+        technical = result.get("technical", {})
+        direction = technical.get("direction")
+        if direction not in ("LONG", "SHORT"):
+            result["external_context"] = external
+            result["external_context_adjustment"] = 0.0
+            return
+
+        gift = external.get("gift_nifty", {})
+        news = external.get("news", {})
+        gift_score = float(gift.get("context_score") or 0)
+        news_score = float(news.get("context_score") or 0)
+
+        # Positive context supports LONG and opposes SHORT; invert for SHORT.
+        signed = gift_score + news_score
+        if direction == "SHORT":
+            signed = -signed
+        adjustment = max(-8.0, min(8.0, signed))
+
+        original = float(result.get("overall_alpha_score", 50))
+        # The frontend interprets low alpha as strong SHORT, so supportive SHORT
+        # context should push alpha lower rather than higher.
+        adjusted = original + adjustment if direction == "LONG" else original - adjustment
+        result["overall_alpha_score_before_external"] = round(original, 1)
+        result["overall_alpha_score"] = round(max(0, min(100, adjusted)), 1)
+        result["external_context"] = external
+        result["external_context_adjustment"] = round(adjustment, 1)
+
+        reasons = result.setdefault("score_adjustments", [])
+        if gift.get("status") == "AVAILABLE" and abs(gift_score) >= 0.5:
+            reasons.append(
+                f"GIFT NIFTY {gift.get('bias', 'UNKNOWN')} context: {gift.get('change_pct')}%"
+            )
+        if news.get("status") in ("AVAILABLE", "NO_HEADLINES") and abs(news_score) >= 0.5:
+            reasons.append(
+                f"Recent news context {news.get('bias', 'NEUTRAL')}: {news_score:+.1f}"
+            )
+
     async def fno_confirm(
         self,
         symbol,
@@ -126,6 +170,11 @@ class DynamicGrowwProvider(GrowwProvider):
             include_market=include_market,
             take_snapshot=take_snapshot,
         )
+
+        # Fetch external context only for confirmation calls, not for every raw
+        # MTF candidate. This keeps the 44-stock technical scan fast and cheap.
+        external = await external_market_context(symbol)
+        self._apply_external_context(result, external)
 
         session = self._market_session()
         result["market_session"] = session
