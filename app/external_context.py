@@ -1,8 +1,10 @@
+import html
 import re
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -18,6 +20,54 @@ BEARISH_WORDS = {
     "probe", "penalty", "default", "war", "sanction", "tariff", "lawsuit",
 }
 
+# Human-readable names improve both the Google News query and relevance filter.
+SYMBOL_ALIASES = {
+    "RELIANCE": ["reliance industries", "reliance"],
+    "TCS": ["tata consultancy services", "tcs"],
+    "INFY": ["infosys", "infy"],
+    "HDFCBANK": ["hdfc bank", "hdfcbank"],
+    "ICICIBANK": ["icici bank", "icicibank"],
+    "SBIN": ["state bank of india", "sbi"],
+    "AXISBANK": ["axis bank"],
+    "KOTAKBANK": ["kotak mahindra bank", "kotak bank"],
+    "INDUSINDBK": ["indusind bank"],
+    "BAJFINANCE": ["bajaj finance"],
+    "BAJAJFINSV": ["bajaj finserv"],
+    "LT": ["larsen & toubro", "larsen and toubro"],
+    "BHARTIARTL": ["bharti airtel", "airtel"],
+    "ITC": ["itc limited", "itc"],
+    "HINDUNILVR": ["hindustan unilever", "hul"],
+    "MARUTI": ["maruti suzuki", "maruti"],
+    "M&M": ["mahindra & mahindra", "mahindra and mahindra"],
+    "TATAMOTORS": ["tata motors"],
+    "SUNPHARMA": ["sun pharma", "sun pharmaceutical"],
+    "DRREDDY": ["dr reddy", "dr. reddy"],
+    "CIPLA": ["cipla"],
+    "DIVISLAB": ["divi's laboratories", "divis laboratories"],
+    "APOLLOHOSP": ["apollo hospitals", "apollo hospital"],
+    "WIPRO": ["wipro"],
+    "HCLTECH": ["hcl technologies", "hcltech"],
+    "TECHM": ["tech mahindra"],
+    "LTIM": ["ltimindtree", "lti mindtree"],
+    "TITAN": ["titan company", "titan"],
+    "ASIANPAINT": ["asian paints"],
+    "ULTRACEMCO": ["ultratech cement", "ultratech"],
+    "TATASTEEL": ["tata steel"],
+    "JSWSTEEL": ["jsw steel"],
+    "HINDALCO": ["hindalco"],
+    "COALINDIA": ["coal india"],
+    "ONGC": ["ongc", "oil and natural gas corporation"],
+    "NTPC": ["ntpc"],
+    "POWERGRID": ["power grid corporation", "powergrid"],
+    "ADANIENT": ["adani enterprises"],
+    "ADANIPORTS": ["adani ports"],
+    "GRASIM": ["grasim industries", "grasim"],
+    "NESTLEIND": ["nestle india"],
+    "BRITANNIA": ["britannia industries", "britannia"],
+    "EICHERMOT": ["eicher motors"],
+    "HEROMOTOCO": ["hero motocorp", "hero moto"],
+}
+
 
 def _clamp(value, low=-10.0, high=10.0):
     return max(low, min(high, value))
@@ -30,51 +80,63 @@ def _headline_sentiment(title: str) -> int:
     return max(-2, min(2, bull - bear))
 
 
-async def fetch_gift_nifty():
-    """Best-effort GIFT NIFTY context from NSE India's public market page.
+def _gift_weight():
+    """GIFT has most value pre-open/overnight; live NIFTY dominates regular hours."""
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    if now.weekday() >= 5:
+        return 1.0, "WEEKEND/NEXT_SESSION"
+    if time(9, 15) <= now.time() < time(15, 15):
+        return 0.35, "REGULAR_NSE_HOURS"
+    return 1.0, "PREOPEN_OR_OVERNIGHT"
 
-    This deliberately returns UNAVAILABLE instead of fabricating a quote when
-    NSE changes markup or blocks the request.
-    """
-    url = "https://www.nseindia.com/market-data/live-equity-market"
+
+def _parse_gift_window(text: str):
+    markers = [
+        r"near\s*month\s*gift\s*nifty\s*future",
+        r"gift\s*nifty\s*futures?",
+        r"gift\s*nifty",
+    ]
+    marker = None
+    for pattern in markers:
+        marker = re.search(pattern, text, re.IGNORECASE)
+        if marker:
+            break
+    if not marker:
+        raise ValueError("GIFT NIFTY marker not found on NSE IX page")
+
+    window = text[max(0, marker.start() - 200): marker.start() + 1800]
+    # Prefer a value followed by change and percentage, e.g. 24211.00 4.1 (0.02%).
+    structured = re.search(
+        r"(?P<ltp>[0-9]{4,6}(?:\.[0-9]+)?)\s+"
+        r"(?P<change>[+-]?[0-9]+(?:\.[0-9]+)?)\s+"
+        r"\((?P<pct>[+-]?[0-9]+(?:\.[0-9]+)?)%\)",
+        window,
+    )
+    if structured:
+        return float(structured.group("ltp")), float(structured.group("change")), float(structured.group("pct"))
+
+    pct_match = re.search(r"\(?([+-]?[0-9]+(?:\.[0-9]+)?)%\)?", window)
+    nums = [float(x) for x in re.findall(r"\b[0-9]{4,6}(?:\.[0-9]+)?\b", window)]
+    plausible = [x for x in nums if 5000 <= x <= 50000]
+    if not pct_match or not plausible:
+        raise ValueError("GIFT NIFTY quote could not be parsed from NSE IX page")
+    return plausible[0], None, float(pct_match.group(1))
+
+
+async def fetch_gift_nifty():
+    """Best-effort GIFT NIFTY context from the official NSE IX website."""
+    url = "https://www.nseix.com/"
     headers = {
-        "User-Agent": "Mozilla/5.0 AlphaPilot/0.9",
+        "User-Agent": "Mozilla/5.0 (compatible; AlphaPilot/0.9; +https://github.com/kaushalrahul88-bot/AlphaPilot)",
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-IN,en;q=0.9",
     }
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
             response = await client.get(url)
         response.raise_for_status()
-        text = re.sub(r"\s+", " ", response.text)
-
-        # NSE public market page includes text similar to:
-        # GiftNiftyFutures 30-Jun-2026 24065.50 198.00 (0.83%)
-        pattern = re.compile(
-            r"Gift\s*Nifty\s*Futures[^0-9]{0,80}"
-            r"(?P<ltp>[0-9]{4,6}(?:\.[0-9]+)?)\s+"
-            r"(?P<change>[+-]?[0-9]+(?:\.[0-9]+)?)\s+"
-            r"\((?P<pct>[+-]?[0-9]+(?:\.[0-9]+)?)%\)",
-            re.IGNORECASE,
-        )
-        match = pattern.search(text)
-        if not match:
-            # Fallback: find the percentage near the GiftNiftyFutures marker.
-            marker = re.search(r"Gift\s*Nifty\s*Futures", text, re.IGNORECASE)
-            if not marker:
-                raise ValueError("GIFT NIFTY marker not found on NSE page")
-            window = text[marker.start(): marker.start() + 500]
-            pct_match = re.search(r"\(([+-]?[0-9]+(?:\.[0-9]+)?)%\)", window)
-            nums = re.findall(r"\b[0-9]{4,6}(?:\.[0-9]+)?\b", window)
-            if not pct_match or not nums:
-                raise ValueError("GIFT NIFTY quote could not be parsed")
-            pct = float(pct_match.group(1))
-            ltp = float(nums[0])
-            change = None
-        else:
-            ltp = float(match.group("ltp"))
-            change = float(match.group("change"))
-            pct = float(match.group("pct"))
+        text = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", response.text)))
+        ltp, change, pct = _parse_gift_window(text)
 
         if pct >= 0.35:
             bias = "BULLISH"
@@ -83,21 +145,28 @@ async def fetch_gift_nifty():
         else:
             bias = "NEUTRAL"
 
+        raw_score = _clamp(pct * 4.0, -6.0, 6.0)
+        weight, regime = _gift_weight()
+        effective = round(raw_score * weight, 1)
+
         return {
             "status": "AVAILABLE",
-            "source": "NSE India public market page",
+            "source": "NSE IX official website",
             "ltp": ltp,
             "change": change,
             "change_pct": round(pct, 2),
             "bias": bias,
-            "context_score": round(_clamp(pct * 4.0, -6.0, 6.0), 1),
+            "raw_context_score": round(raw_score, 1),
+            "weight_applied": weight,
+            "weight_regime": regime,
+            "context_score": effective,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "warning": "Best-effort public-page context; not an exchange execution feed.",
+            "warning": "Official public-web context, not an execution-grade licensed market feed.",
         }
     except Exception as exc:
         return {
             "status": "UNAVAILABLE",
-            "source": "NSE India public market page",
+            "source": "NSE IX official website",
             "bias": "UNKNOWN",
             "context_score": 0.0,
             "error": str(exc),
@@ -105,24 +174,48 @@ async def fetch_gift_nifty():
         }
 
 
+def _news_terms(symbol: str):
+    aliases = SYMBOL_ALIASES.get(symbol, [])
+    terms = [symbol.lower()] + [a.lower() for a in aliases]
+    # Very short ticker strings (LT, ITC etc.) are noisy unless the exact company alias also matches.
+    return aliases or [symbol]
+
+
+def _headline_is_relevant(title: str, symbol: str) -> bool:
+    text = title.lower()
+    aliases = [a.lower() for a in SYMBOL_ALIASES.get(symbol, [])]
+    if any(alias in text for alias in aliases):
+        return True
+    ticker = symbol.lower()
+    return len(ticker) >= 5 and re.search(rf"\b{re.escape(ticker)}\b", text) is not None
+
+
 async def fetch_news_context(symbol: str):
-    """Fetch recent Google News RSS headlines and derive a conservative context score."""
+    """Fetch recent stock-specific headlines and ignore unrelated Google News matches."""
     symbol = symbol.upper().strip()
-    query = quote_plus(f"{symbol} NSE stock OR India market when:1d")
+    aliases = SYMBOL_ALIASES.get(symbol, [symbol])
+    primary = aliases[0]
+    query = quote_plus(f'"{primary}" stock NSE India when:1d')
     url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             response = await client.get(url, headers={"User-Agent": "Mozilla/5.0 AlphaPilot/0.9"})
         response.raise_for_status()
         root = ET.fromstring(response.text)
-        items = root.findall(".//item")[:8]
+        items = root.findall(".//item")
         headlines = []
         weighted = 0.0
         weight_total = 0.0
         now = datetime.now(timezone.utc)
+        discarded = 0
 
         for item in items:
+            if len(headlines) >= 8:
+                break
             title = (item.findtext("title") or "").strip()
+            if not _headline_is_relevant(title, symbol):
+                discarded += 1
+                continue
             source = (item.findtext("source") or "").strip()
             pub_raw = (item.findtext("pubDate") or "").strip()
             published = None
@@ -136,7 +229,7 @@ async def fetch_news_context(symbol: str):
                 pass
 
             sentiment = _headline_sentiment(title)
-            freshness = 1.0 if age_hours is None else max(0.2, 1.0 - min(age_hours, 24.0) / 30.0)
+            freshness = 1.0 if age_hours is None else max(0.15, 1.0 - min(age_hours, 24.0) / 28.0)
             weighted += sentiment * freshness
             weight_total += freshness
             headlines.append({
@@ -148,18 +241,21 @@ async def fetch_news_context(symbol: str):
             })
 
         raw = weighted / weight_total if weight_total else 0.0
-        score = round(_clamp(raw * 2.5, -5.0, 5.0), 1)
+        # Keep news secondary to technical/F&O evidence.
+        score = round(_clamp(raw * 2.0, -4.0, 4.0), 1)
         bias = "BULLISH" if score >= 1.5 else "BEARISH" if score <= -1.5 else "NEUTRAL"
         return {
-            "status": "AVAILABLE" if headlines else "NO_HEADLINES",
+            "status": "AVAILABLE" if headlines else "NO_RELEVANT_HEADLINES",
             "source": "Google News RSS",
             "symbol": symbol,
+            "query_name": primary,
             "bias": bias,
             "context_score": score,
             "headline_count": len(headlines),
+            "discarded_irrelevant": discarded,
             "headlines": headlines,
             "fetched_at": now.isoformat(),
-            "warning": "Keyword sentiment is contextual and conservative; headlines never create a trade by themselves.",
+            "warning": "Only stock-name-matched headlines are scored. News remains contextual and cannot create a trade by itself.",
         }
     except Exception as exc:
         return {
