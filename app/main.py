@@ -9,7 +9,8 @@ from .providers.factory import get_provider
 
 class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
-    allowed_origins: str = "http://localhost:5173"
+    # Comma-separated origins. Use * for public browser access.
+    allowed_origins: str = "*"
 
     class Config:
         env_file = ".env"
@@ -22,12 +23,20 @@ app = FastAPI(
     version="0.8.0",
 )
 
+parsed_origins = [
+    x.strip()
+    for x in settings.allowed_origins.split(",")
+    if x.strip()
+]
+
+# The frontend does not send cookies/HTTP auth credentials, so wildcard CORS
+# is safe for this public research API and works with Bolt preview origins.
+if "*" in parsed_origins:
+    parsed_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        x.strip()
-        for x in settings.allowed_origins.split(",")
-    ],
+    allow_origins=parsed_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
