@@ -24,54 +24,48 @@ class DynamicGrowwProvider(GrowwProvider):
             )
 
     def _market_session(self):
-        """Return a CAS-aware NSE session phase for F&O-stock execution.
-
-        Since the NSE Closing Auction Session rollout, continuous cash trading in
-        eligible F&O stocks ends at 15:15. The underlying then enters closing
-        auction price discovery until 15:35, while equity derivatives may remain
-        tradable until 15:40. AlphaPilot only allows *new* BEST TRADE entries in
-        the normal continuous session because our setup/ATM selection depends on
-        a continuously traded underlying price.
-        """
+        """Return a CAS-aware NSE session phase for F&O-stock execution."""
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         current = now.time()
         weekday = now.weekday() < 5
 
         if not weekday or current < time(9, 15) or current > time(15, 40):
             phase = "CLOSED"
-            is_open = False
             execution_allowed = False
             description = "NSE equity derivatives session is closed."
+            display_window = "MARKET CLOSED · F&O closes 15:40 IST"
         elif current < time(15, 15):
             phase = "CONTINUOUS"
-            is_open = True
             execution_allowed = True
             description = "Normal cash + F&O continuous market session."
+            display_window = "CONTINUOUS MARKET · 09:15-15:15 IST"
         elif current <= time(15, 35):
             phase = "CLOSING_AUCTION"
-            is_open = True
             execution_allowed = False
             description = (
                 "Underlying F&O stocks are in the NSE Closing Auction Session; "
                 "cash price discovery is not treated as a normal continuous LTP."
             )
+            display_window = "CLOSING AUCTION · 15:15-15:35 IST"
         else:
             phase = "FNO_ONLY"
-            is_open = True
             execution_allowed = False
             description = (
                 "Cash closing auction has ended while equity derivatives remain "
                 "tradable until 15:40; fresh AlphaPilot entries are blocked."
             )
+            display_window = "F&O-ONLY WINDOW · 15:35-15:40 IST"
 
         return {
             "timezone": "Asia/Kolkata",
             "checked_at": now.isoformat(),
-            "is_open": is_open,
+            # Existing frontend interprets is_open as whether fresh execution is allowed.
+            "is_open": execution_allowed,
             "status": phase,
             "phase": phase,
             "execution_allowed": execution_allowed,
             "description": description,
+            "regular_hours": display_window,
             "continuous_cash_hours": "09:15-15:15 IST, Monday-Friday",
             "closing_auction_window": "15:15-15:35 IST",
             "fno_only_window": "15:35-15:40 IST",
@@ -173,8 +167,6 @@ class DynamicGrowwProvider(GrowwProvider):
 
             result["execution_ready"] = not result["execution_blockers"]
 
-            # Preserve the complete research analysis while preventing the UI
-            # from promoting a non-executable setup to BEST TRADE.
             if not result["execution_ready"]:
                 result["status"] = "NO_TRADE"
         else:
