@@ -24,16 +24,58 @@ class DynamicGrowwProvider(GrowwProvider):
             )
 
     def _market_session(self):
+        """Return a CAS-aware NSE session phase for F&O-stock execution.
+
+        Since the NSE Closing Auction Session rollout, continuous cash trading in
+        eligible F&O stocks ends at 15:15. The underlying then enters closing
+        auction price discovery until 15:35, while equity derivatives may remain
+        tradable until 15:40. AlphaPilot only allows *new* BEST TRADE entries in
+        the normal continuous session because our setup/ATM selection depends on
+        a continuously traded underlying price.
+        """
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        weekday_open = now.weekday() < 5
-        session_open = time(9, 15) <= now.time() <= time(15, 30)
-        is_open = weekday_open and session_open
+        current = now.time()
+        weekday = now.weekday() < 5
+
+        if not weekday or current < time(9, 15) or current > time(15, 40):
+            phase = "CLOSED"
+            is_open = False
+            execution_allowed = False
+            description = "NSE equity derivatives session is closed."
+        elif current < time(15, 15):
+            phase = "CONTINUOUS"
+            is_open = True
+            execution_allowed = True
+            description = "Normal cash + F&O continuous market session."
+        elif current <= time(15, 35):
+            phase = "CLOSING_AUCTION"
+            is_open = True
+            execution_allowed = False
+            description = (
+                "Underlying F&O stocks are in the NSE Closing Auction Session; "
+                "cash price discovery is not treated as a normal continuous LTP."
+            )
+        else:
+            phase = "FNO_ONLY"
+            is_open = True
+            execution_allowed = False
+            description = (
+                "Cash closing auction has ended while equity derivatives remain "
+                "tradable until 15:40; fresh AlphaPilot entries are blocked."
+            )
+
         return {
             "timezone": "Asia/Kolkata",
             "checked_at": now.isoformat(),
             "is_open": is_open,
-            "status": "OPEN" if is_open else "CLOSED",
-            "regular_hours": "09:15-15:30 IST, Monday-Friday",
+            "status": phase,
+            "phase": phase,
+            "execution_allowed": execution_allowed,
+            "description": description,
+            "continuous_cash_hours": "09:15-15:15 IST, Monday-Friday",
+            "closing_auction_window": "15:15-15:35 IST",
+            "fno_only_window": "15:35-15:40 IST",
+            "derivatives_close": "15:40 IST",
         }
 
     def _recommended_option(self, symbol, expiry, raw_chain, technical):
@@ -106,10 +148,20 @@ class DynamicGrowwProvider(GrowwProvider):
             )
             result["recommended_option"] = option
 
-            if not session["is_open"]:
-                result["execution_blockers"].append(
-                    "NSE regular market is closed; underlying and option premiums may be stale."
-                )
+            if not session["execution_allowed"]:
+                if session["phase"] == "CLOSING_AUCTION":
+                    result["execution_blockers"].append(
+                        "NSE Closing Auction Session is active (15:15-15:35 IST); the underlying cash price is in auction price discovery, so fresh BEST TRADE entries are blocked."
+                    )
+                elif session["phase"] == "FNO_ONLY":
+                    result["execution_blockers"].append(
+                        "F&O-only closing window is active (15:35-15:40 IST); the underlying cash market is no longer continuously trading, so fresh BEST TRADE entries are blocked."
+                    )
+                else:
+                    result["execution_blockers"].append(
+                        "NSE equity derivatives market is closed; underlying and option premiums may be stale."
+                    )
+
             if not option or not isinstance(option.get("premium"), (int, float)) or option.get("premium", 0) <= 0:
                 result["execution_blockers"].append(
                     "No valid positive option premium is available for the recommended contract."
@@ -121,9 +173,8 @@ class DynamicGrowwProvider(GrowwProvider):
 
             result["execution_ready"] = not result["execution_blockers"]
 
-            # Keep technical/F&O analytics intact, but prevent the frontend from
-            # presenting an executable BEST TRADE when the live execution gate
-            # cannot be satisfied (for example outside market hours).
+            # Preserve the complete research analysis while preventing the UI
+            # from promoting a non-executable setup to BEST TRADE.
             if not result["execution_ready"]:
                 result["status"] = "NO_TRADE"
         else:
