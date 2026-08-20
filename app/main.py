@@ -26,6 +26,14 @@ class ScanRequest(BaseModel):
     timeframe: Literal["5m", "15m", "1h", "1d"] = "15m"
     min_risk_reward: float = 1.5
 
+@app.get("/")
+async def root():
+    return {
+        "ok": True,
+        "service": "alphapilot-api",
+        "message": "AlphaPilot API is running"
+    }
+    
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "alphapilot-api", "provider": settings.market_data_provider.upper()}
