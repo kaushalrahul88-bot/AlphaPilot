@@ -8,9 +8,9 @@ class GrowwProvider:
     BASE_URL = "https://api.groww.in"
 
     def __init__(self, settings):
-        self.api_key = os.getenv("GROWW_API_KEY", "")
-        self.api_secret = os.getenv("GROWW_API_SECRET", "")
-        self.access_token = os.getenv("GROWW_ACCESS_TOKEN", "")
+        self.api_key = os.getenv("GROWW_API_KEY", "").strip()
+self.api_secret = os.getenv("GROWW_API_SECRET", "").strip()
+self.access_token = os.getenv("GROWW_ACCESS_TOKEN", "").strip()
 
         if not self.access_token and (not self.api_key or not self.api_secret):
             raise RuntimeError(
@@ -49,7 +49,7 @@ class GrowwProvider:
         response.raise_for_status()
         data = response.json()
 
-        token = data.get("token")
+        token = str(data.get("token", "")).strip()
         if not token:
             raise RuntimeError(
                 f"Groww token generation failed: {data}"
