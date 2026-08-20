@@ -1,6 +1,7 @@
 from .mock import MockProvider
 from .upstox import UpstoxProvider
-from .groww import GrowwProvider
+from .groww_dynamic import DynamicGrowwProvider
+
 
 def get_provider(settings):
     provider = settings.market_data_provider.upper()
@@ -9,6 +10,6 @@ def get_provider(settings):
         return UpstoxProvider(settings)
 
     if provider == "GROWW":
-        return GrowwProvider(settings)
+        return DynamicGrowwProvider(settings)
 
     return MockProvider()
