@@ -1,9 +1,14 @@
 from .mock import MockProvider
 from .upstox import UpstoxProvider
+from .groww import GrowwProvider
 
 def get_provider(settings):
     provider = settings.market_data_provider.upper()
+
     if provider == "UPSTOX":
         return UpstoxProvider(settings)
-    # Zerodha integration is intentionally server-side only; add after credentials/session flow are configured.
+
+    if provider == "GROWW":
+        return GrowwProvider(settings)
+
     return MockProvider()
