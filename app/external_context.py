@@ -20,7 +20,6 @@ BEARISH_WORDS = {
     "probe", "penalty", "default", "war", "sanction", "tariff", "lawsuit",
 }
 
-# Human-readable names improve both the Google News query and relevance filter.
 SYMBOL_ALIASES = {
     "RELIANCE": ["reliance industries", "reliance"],
     "TCS": ["tata consultancy services", "tcs"],
@@ -81,7 +80,6 @@ def _headline_sentiment(title: str) -> int:
 
 
 def _gift_weight():
-    """GIFT has most value pre-open/overnight; live NIFTY dominates regular hours."""
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     if now.weekday() >= 5:
         return 1.0, "WEEKEND/NEXT_SESSION"
@@ -90,95 +88,107 @@ def _gift_weight():
     return 1.0, "PREOPEN_OR_OVERNIGHT"
 
 
-def _parse_gift_window(text: str):
-    markers = [
-        r"near\s*month\s*gift\s*nifty\s*future",
-        r"gift\s*nifty\s*futures?",
-        r"gift\s*nifty",
-    ]
-    marker = None
-    for pattern in markers:
-        marker = re.search(pattern, text, re.IGNORECASE)
-        if marker:
-            break
-    if not marker:
-        raise ValueError("GIFT NIFTY marker not found on NSE IX page")
+def _clean_web_text(raw: str) -> str:
+    return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)))
 
-    window = text[max(0, marker.start() - 200): marker.start() + 1800]
-    # Prefer a value followed by change and percentage, e.g. 24211.00 4.1 (0.02%).
-    structured = re.search(
-        r"(?P<ltp>[0-9]{4,6}(?:\.[0-9]+)?)\s+"
-        r"(?P<change>[+-]?[0-9]+(?:\.[0-9]+)?)\s+"
-        r"\((?P<pct>[+-]?[0-9]+(?:\.[0-9]+)?)%\)",
-        window,
+
+def _parse_gift_derivatives_watch(text: str):
+    """Parse nearest GIFT NIFTY future from NSE IX Derivatives Watch text.
+
+    The official page exposes rows in this order:
+    Index Futures | NIFTY | expiry | - | - | LTP | change | %change | volume ...
+    """
+    row = re.search(
+        r"Index\s+Futures\s+NIFTY\s+"
+        r"(?P<expiry>\d{1,2}-[A-Za-z]{3}-\d{4})\s+"
+        r"-\s+-\s+"
+        r"(?P<ltp>[0-9,]+(?:\.[0-9]+)?)\s+"
+        r"(?P<change>[+-]?[0-9,]+(?:\.[0-9]+)?)\s+"
+        r"(?P<pct>[+-]?[0-9]+(?:\.[0-9]+)?)",
+        text,
+        re.IGNORECASE,
     )
-    if structured:
-        return float(structured.group("ltp")), float(structured.group("change")), float(structured.group("pct"))
+    if row:
+        return {
+            "ltp": float(row.group("ltp").replace(",", "")),
+            "change": float(row.group("change").replace(",", "")),
+            "pct": float(row.group("pct")),
+            "expiry": row.group("expiry"),
+        }
 
-    pct_match = re.search(r"\(?([+-]?[0-9]+(?:\.[0-9]+)?)%\)?", window)
-    nums = [float(x) for x in re.findall(r"\b[0-9]{4,6}(?:\.[0-9]+)?\b", window)]
-    plausible = [x for x in nums if 5000 <= x <= 50000]
+    marker = re.search(r"Index\s+Futures\s+NIFTY", text, re.IGNORECASE)
+    if not marker:
+        raise ValueError("NIFTY futures row not found on NSE IX Derivatives Watch")
+    window = text[marker.start(): marker.start() + 700]
+    expiry = re.search(r"\d{1,2}-[A-Za-z]{3}-\d{4}", window)
+    pct_match = re.search(r"([+-]?[0-9]+(?:\.[0-9]+)?)\s*%", window)
+    nums = [x.replace(",", "") for x in re.findall(r"[+-]?[0-9]{2,6}(?:,[0-9]{3})*(?:\.[0-9]+)?", window)]
+    plausible = [float(x) for x in nums if 5000 <= abs(float(x)) <= 50000]
     if not pct_match or not plausible:
-        raise ValueError("GIFT NIFTY quote could not be parsed from NSE IX page")
-    return plausible[0], None, float(pct_match.group(1))
+        raise ValueError("GIFT NIFTY row found but quote could not be parsed")
+    return {
+        "ltp": plausible[0],
+        "change": None,
+        "pct": float(pct_match.group(1)),
+        "expiry": expiry.group(0) if expiry else None,
+    }
 
 
 async def fetch_gift_nifty():
-    """Best-effort GIFT NIFTY context from the official NSE IX website."""
-    url = "https://www.nseix.com/"
+    """Best-effort GIFT NIFTY context from official NSE IX Derivatives Watch."""
+    urls = [
+        "https://www.nseix.com/markets/derivatives-watch",
+        "https://www1.nseix.com/markets/derivatives-watch",
+    ]
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; AlphaPilot/0.9; +https://github.com/kaushalrahul88-bot/AlphaPilot)",
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-IN,en;q=0.9",
     }
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
-            response = await client.get(url)
-        response.raise_for_status()
-        text = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", response.text)))
-        ltp, change, pct = _parse_gift_window(text)
+    last_error = None
+    for url in urls:
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+            response.raise_for_status()
+            parsed = _parse_gift_derivatives_watch(_clean_web_text(response.text))
+            pct = parsed["pct"]
+            if pct >= 0.35:
+                bias = "BULLISH"
+            elif pct <= -0.35:
+                bias = "BEARISH"
+            else:
+                bias = "NEUTRAL"
 
-        if pct >= 0.35:
-            bias = "BULLISH"
-        elif pct <= -0.35:
-            bias = "BEARISH"
-        else:
-            bias = "NEUTRAL"
+            raw_score = _clamp(pct * 4.0, -6.0, 6.0)
+            weight, regime = _gift_weight()
+            return {
+                "status": "AVAILABLE",
+                "source": "NSE IX Derivatives Watch",
+                "source_url": url,
+                "ltp": parsed["ltp"],
+                "change": parsed["change"],
+                "change_pct": round(pct, 2),
+                "expiry": parsed["expiry"],
+                "bias": bias,
+                "raw_context_score": round(raw_score, 1),
+                "weight_applied": weight,
+                "weight_regime": regime,
+                "context_score": round(raw_score * weight, 1),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "warning": "Official public-web context, not an execution-grade licensed market feed.",
+            }
+        except Exception as exc:
+            last_error = exc
 
-        raw_score = _clamp(pct * 4.0, -6.0, 6.0)
-        weight, regime = _gift_weight()
-        effective = round(raw_score * weight, 1)
-
-        return {
-            "status": "AVAILABLE",
-            "source": "NSE IX official website",
-            "ltp": ltp,
-            "change": change,
-            "change_pct": round(pct, 2),
-            "bias": bias,
-            "raw_context_score": round(raw_score, 1),
-            "weight_applied": weight,
-            "weight_regime": regime,
-            "context_score": effective,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "warning": "Official public-web context, not an execution-grade licensed market feed.",
-        }
-    except Exception as exc:
-        return {
-            "status": "UNAVAILABLE",
-            "source": "NSE IX official website",
-            "bias": "UNKNOWN",
-            "context_score": 0.0,
-            "error": str(exc),
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-
-def _news_terms(symbol: str):
-    aliases = SYMBOL_ALIASES.get(symbol, [])
-    terms = [symbol.lower()] + [a.lower() for a in aliases]
-    # Very short ticker strings (LT, ITC etc.) are noisy unless the exact company alias also matches.
-    return aliases or [symbol]
+    return {
+        "status": "UNAVAILABLE",
+        "source": "NSE IX Derivatives Watch",
+        "bias": "UNKNOWN",
+        "context_score": 0.0,
+        "error": str(last_error or "Unable to fetch GIFT NIFTY"),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _headline_is_relevant(title: str, symbol: str) -> bool:
@@ -191,7 +201,6 @@ def _headline_is_relevant(title: str, symbol: str) -> bool:
 
 
 async def fetch_news_context(symbol: str):
-    """Fetch recent stock-specific headlines and ignore unrelated Google News matches."""
     symbol = symbol.upper().strip()
     aliases = SYMBOL_ALIASES.get(symbol, [symbol])
     primary = aliases[0]
@@ -241,7 +250,6 @@ async def fetch_news_context(symbol: str):
             })
 
         raw = weighted / weight_total if weight_total else 0.0
-        # Keep news secondary to technical/F&O evidence.
         score = round(_clamp(raw * 2.0, -4.0, 4.0), 1)
         bias = "BULLISH" if score >= 1.5 else "BEARISH" if score <= -1.5 else "NEUTRAL"
         return {
