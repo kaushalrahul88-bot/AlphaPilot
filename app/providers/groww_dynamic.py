@@ -1,3 +1,6 @@
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
 from .groww import GrowwProvider
 
 
@@ -19,6 +22,19 @@ class DynamicGrowwProvider(GrowwProvider):
                 symbol,
                 f"NSE-{symbol}",
             )
+
+    def _market_session(self):
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        weekday_open = now.weekday() < 5
+        session_open = time(9, 15) <= now.time() <= time(15, 30)
+        is_open = weekday_open and session_open
+        return {
+            "timezone": "Asia/Kolkata",
+            "checked_at": now.isoformat(),
+            "is_open": is_open,
+            "status": "OPEN" if is_open else "CLOSED",
+            "regular_hours": "09:15-15:30 IST, Monday-Friday",
+        }
 
     def _recommended_option(self, symbol, expiry, raw_chain, technical):
         if technical.get("status") != "SETUP":
@@ -54,7 +70,7 @@ class DynamicGrowwProvider(GrowwProvider):
             "volume": int(volume or 0),
             "underlying_ltp": spot,
             "selection_method": "ATM contract aligned with confirmed technical direction",
-            "warning": "Research contract suggestion only. Verify live bid/ask spread, lot size, liquidity and slippage before execution.",
+            "warning": "Research contract suggestion only. Groww option-chain volume may be unavailable or zero; verify live bid/ask spread, lot size, liquidity and slippage before execution.",
         }
 
     async def fno_confirm(
@@ -75,14 +91,41 @@ class DynamicGrowwProvider(GrowwProvider):
             take_snapshot=take_snapshot,
         )
 
+        session = self._market_session()
+        result["market_session"] = session
+        result["execution_ready"] = False
+        result["execution_blockers"] = []
+
         if result.get("status") == "SETUP":
             chain = await self.option_chain(symbol, result.get("expiry"))
-            result["recommended_option"] = self._recommended_option(
+            option = self._recommended_option(
                 symbol,
                 chain["expiry"],
                 chain["data"],
                 result.get("technical", {}),
             )
+            result["recommended_option"] = option
+
+            if not session["is_open"]:
+                result["execution_blockers"].append(
+                    "NSE regular market is closed; underlying and option premiums may be stale."
+                )
+            if not option or not isinstance(option.get("premium"), (int, float)) or option.get("premium", 0) <= 0:
+                result["execution_blockers"].append(
+                    "No valid positive option premium is available for the recommended contract."
+                )
+            if not option or option.get("open_interest", 0) <= 0:
+                result["execution_blockers"].append(
+                    "Recommended contract has no reported open interest."
+                )
+
+            result["execution_ready"] = not result["execution_blockers"]
+
+            # Keep technical/F&O analytics intact, but prevent the frontend from
+            # presenting an executable BEST TRADE when the live execution gate
+            # cannot be satisfied (for example outside market hours).
+            if not result["execution_ready"]:
+                result["status"] = "NO_TRADE"
         else:
             result["recommended_option"] = None
 
