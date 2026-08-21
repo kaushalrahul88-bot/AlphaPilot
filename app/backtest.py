@@ -19,6 +19,18 @@ def _ts(value):
         return None
 
 
+def _parse_entry_before(value):
+    if not value:
+        return None
+    try:
+        hour, minute = [int(x) for x in str(value).split(":", 1)]
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        return hour * 60 + minute
+    except Exception as exc:
+        raise ValueError("entry_before must be HH:MM, for example 10:30 or 12:00") from exc
+
+
 def _directional_mtf(tf):
     valid = [v for v in tf.values() if v.get("status") != "ERROR"]
     if not valid:
@@ -96,13 +108,14 @@ def _simulate(plan, future):
     return "NO_EXIT", entry, 0.0
 
 
-async def run_backtest(provider, symbols, start_date, end_date, min_rr=1.5):
+async def run_backtest(provider, symbols, start_date, end_date, min_rr=1.5, entry_before=None):
     start = datetime.fromisoformat(start_date).replace(tzinfo=IST)
     end = datetime.fromisoformat(end_date).replace(tzinfo=IST) + timedelta(hours=23, minutes=59)
     if end < start:
         raise ValueError("end_date must be on or after start_date")
     if (end - start).days > 31:
         raise ValueError("Backtest range is limited to 31 days per run")
+    entry_before_minutes = _parse_entry_before(entry_before)
     warmup = start - timedelta(days=20)
     trades = []
     errors = []
@@ -116,6 +129,8 @@ async def run_backtest(provider, symbols, start_date, end_date, min_rr=1.5):
             for cp in checkpoints:
                 when = _ts(cp[0])
                 if not when or when.hour < 9 or (when.hour == 9 and when.minute < 30) or when.hour >= 15:
+                    continue
+                if entry_before_minutes is not None and (when.hour * 60 + when.minute) >= entry_before_minutes:
                     continue
                 day = when.date().isoformat()
                 if last_trade_day == day:
@@ -173,6 +188,7 @@ async def run_backtest(provider, symbols, start_date, end_date, min_rr=1.5):
         "start_date": start_date,
         "end_date": end_date,
         "min_risk_reward": min_rr,
+        "entry_before": entry_before,
         "summary": {
             "trades": len(trades),
             "wins": wins,
