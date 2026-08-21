@@ -13,6 +13,19 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
     MAX_CANDLES_FOR_ANALYSIS = 260
     MAX_OPTION_SNAPSHOTS = 12
 
+    async def _get_access_token(self):
+        """Use an explicitly configured daily access token before dynamic auth.
+
+        When GROWW_ACCESS_TOKEN is present, it is already a valid bearer token
+        for the current Groww session. Avoid calling the token-generation
+        endpoint first because repeated auth attempts can trigger HTTP 429 even
+        though market-data requests themselves are succeeding with the configured
+        token.
+        """
+        if self.access_token:
+            return self.access_token
+        return await super()._get_access_token()
+
     async def candles(self, symbol, timeframe="15m"):
         candles = await super().candles(symbol, timeframe)
         if isinstance(candles, list) and len(candles) > self.MAX_CANDLES_FOR_ANALYSIS:
@@ -82,8 +95,6 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
                         "error": str(exc),
                     }
                 finally:
-                    # Do not retain historical candle arrays or full indicator
-                    # dictionaries after the compact timeframe result is built.
                     candles = None
                     analyzed = None
 
