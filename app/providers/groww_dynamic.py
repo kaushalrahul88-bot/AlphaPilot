@@ -1,3 +1,7 @@
+import hashlib
+import time as time_module
+
+import httpx
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -6,6 +10,50 @@ from .groww import GrowwProvider
 
 
 class DynamicGrowwProvider(GrowwProvider):
+    async def _get_access_token(self):
+        """Prefer API key/secret flow so the backend is not stuck on a token that expires daily."""
+        if self._cached_token:
+            return self._cached_token
+
+        if self.api_key and self.api_secret:
+            ts = str(int(time_module.time()))
+            checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            payload = {
+                "key_type": "approval",
+                "checksum": checksum,
+                "timestamp": ts,
+            }
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    f"{self.BASE_URL}/v1/token/api/access",
+                    headers=headers,
+                    json=payload,
+                )
+            if response.status_code == 200:
+                data = response.json()
+                token = "".join(str(data.get("token", "")).split())
+                if token:
+                    self._cached_token = token
+                    return token
+            detail = response.text[:500]
+            if self.access_token:
+                # Keep legacy static-token deployments usable, but make failures diagnosable.
+                return self.access_token
+            raise RuntimeError(
+                f"Groww daily authentication failed ({response.status_code}). "
+                f"Approve the API key for today in Groww Trading APIs. {detail}"
+            )
+
+        if self.access_token:
+            return self.access_token
+
+        raise RuntimeError("No Groww authentication credentials are configured")
+
     def _instrument(self, symbol):
         symbol=symbol.upper().strip()
         try:return super()._instrument(symbol)
