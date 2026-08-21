@@ -3,9 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from typing import Literal
+import logging
+import traceback
 
 from .external_context import external_market_context
 from .providers.factory import get_provider
+
+logger = logging.getLogger("alphapilot.scan")
 
 
 class Settings(BaseSettings):
@@ -17,7 +21,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.9.1")
+app = FastAPI(title="AlphaPilot API", version="0.9.2")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -55,7 +59,7 @@ class SnapshotRequest(BaseModel):
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.9.1","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.9.2","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
@@ -72,7 +76,26 @@ async def options(symbol:str,expiry:str|None=None): return await get_provider(se
 async def scan(request:ScanRequest): return await get_provider(settings).scan(request.symbols,request.timeframe,request.min_risk_reward)
 
 @app.post("/v1/scan/mtf")
-async def mtf(request:MTFRequest): return await get_provider(settings).multi_timeframe_scan(request.symbols,request.timeframes,request.min_risk_reward)
+async def mtf(request:MTFRequest):
+    symbols=[s.upper() for s in request.symbols]
+    try:
+        result=await get_provider(settings).multi_timeframe_scan(symbols,request.timeframes,request.min_risk_reward)
+        # The provider may intentionally convert per-symbol exceptions into
+        # result objects. Log those too so HTTP 200 does not hide the cause.
+        if isinstance(result,list):
+            for item in result:
+                if isinstance(item,dict) and (item.get("error") or item.get("status") in {"ERROR","FAILED"}):
+                    logger.error("MTF symbol failure symbol=%s status=%s error=%s",item.get("symbol"),item.get("status"),item.get("error"))
+        elif isinstance(result,dict):
+            rows=result.get("results") or result.get("items") or []
+            if isinstance(rows,list):
+                for item in rows:
+                    if isinstance(item,dict) and (item.get("error") or item.get("status") in {"ERROR","FAILED"}):
+                        logger.error("MTF symbol failure symbol=%s status=%s error=%s",item.get("symbol"),item.get("status"),item.get("error"))
+        return result
+    except Exception as exc:
+        logger.error("MTF request crashed symbols=%s timeframes=%s error=%s\n%s",symbols,request.timeframes,repr(exc),traceback.format_exc())
+        raise
 
 @app.get("/v1/market/context")
 async def market_context(timeframes:str="5m,15m,1h"):
