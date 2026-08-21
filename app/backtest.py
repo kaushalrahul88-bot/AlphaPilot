@@ -10,6 +10,7 @@ from app.engine import analyze_candles, clean_candles
 IST = ZoneInfo("Asia/Kolkata")
 WEIGHTS = {"5m": 0.20, "15m": 0.35, "1h": 0.30}
 INTERVALS = {"5m": "5minute", "15m": "15minute", "1h": "1hour"}
+HISTORICAL_CHUNK_DAYS = 20
 
 
 def _ts(value):
@@ -58,20 +59,38 @@ def _directional_mtf(tf):
 
 
 async def _historical(provider, symbol, timeframe, start, end):
+    """Fetch historical candles in small windows to stay inside Groww range limits."""
     exchange, segment, _, groww_symbol = provider._instrument(symbol)
-    params = {
-        "exchange": exchange,
-        "segment": segment,
-        "groww_symbol": groww_symbol,
-        "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
-        "candle_interval": INTERVALS[timeframe],
-    }
+    rows = []
+    cursor = start
+    headers = await provider._headers()
+
     async with httpx.AsyncClient(timeout=40) as client:
-        response = await client.get(f"{provider.BASE_URL}/v1/historical/candles", headers=await provider._headers(), params=params)
-    response.raise_for_status()
-    payload = response.json().get("payload", response.json())
-    return clean_candles(payload.get("candles", []))
+        while cursor <= end:
+            chunk_end = min(cursor + timedelta(days=HISTORICAL_CHUNK_DAYS) - timedelta(seconds=1), end)
+            params = {
+                "exchange": exchange,
+                "segment": segment,
+                "groww_symbol": groww_symbol,
+                "start_time": cursor.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_time": chunk_end.strftime("%Y-%m-%d %H:%M:%S"),
+                "candle_interval": INTERVALS[timeframe],
+            }
+            response = await client.get(
+                f"{provider.BASE_URL}/v1/historical/candles",
+                headers=headers,
+                params=params,
+            )
+            response.raise_for_status()
+            body = response.json()
+            payload = body.get("payload", body)
+            rows.extend(clean_candles(payload.get("candles", [])))
+            cursor = chunk_end + timedelta(seconds=1)
+
+    # Chunk boundaries can occasionally return the same candle twice. Keep the
+    # latest copy per timestamp and return chronological data to the engine.
+    deduped = {str(row[0]): row for row in rows if row}
+    return [deduped[key] for key in sorted(deduped)]
 
 
 def _simulate(plan, future):
