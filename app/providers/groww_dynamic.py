@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import time as time_module
@@ -13,36 +14,84 @@ logger = logging.getLogger("alphapilot.groww")
 
 
 class DynamicGrowwProvider(GrowwProvider):
+    # Scanner requests may construct many provider instances. Keep one token cache
+    # and one authentication lock for the whole Render process so a 44-symbol scan
+    # does not generate a fresh Groww token for every symbol/timeframe.
+    _shared_access_token = None
+    _shared_token_generated_at = 0.0
+    _shared_auth_lock = None
+    _shared_token_ttl_seconds = 12 * 60 * 60
+
+    @classmethod
+    def _auth_lock(cls):
+        if cls._shared_auth_lock is None:
+            cls._shared_auth_lock = asyncio.Lock()
+        return cls._shared_auth_lock
+
     async def _get_access_token(self):
-        """Prefer API key/secret flow so the backend is not stuck on a token that expires daily."""
+        """Reuse one Groww access token across all provider instances in this process."""
+        now = time_module.time()
+
+        if (
+            self.__class__._shared_access_token
+            and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds
+        ):
+            return self.__class__._shared_access_token
+
         if self._cached_token:
+            self.__class__._shared_access_token = self._cached_token
+            self.__class__._shared_token_generated_at = now
             return self._cached_token
 
-        if self.api_key and self.api_secret:
-            ts = str(int(time_module.time()))
-            checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-            payload = {"key_type": "approval", "checksum": checksum, "timestamp": ts}
-            async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.post(f"{self.BASE_URL}/v1/token/api/access", headers=headers, json=payload)
-            if response.status_code == 200:
-                data = response.json()
-                token = "".join(str(data.get("token", "")).split())
-                if token:
-                    self._cached_token = token
-                    return token
-            detail = response.text[:500]
+        async with self.__class__._auth_lock():
+            now = time_module.time()
+            if (
+                self.__class__._shared_access_token
+                and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds
+            ):
+                return self.__class__._shared_access_token
+
+            if self.api_key and self.api_secret:
+                ts = str(int(now))
+                checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+                payload = {"key_type": "approval", "checksum": checksum, "timestamp": ts}
+                async with httpx.AsyncClient(timeout=20) as client:
+                    response = await client.post(
+                        f"{self.BASE_URL}/v1/token/api/access",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    token = "".join(str(data.get("token", "")).split())
+                    if token:
+                        self._cached_token = token
+                        self.__class__._shared_access_token = token
+                        self.__class__._shared_token_generated_at = now
+                        logger.info("GROWW_AUTH token generated once and cached process-wide")
+                        return token
+
+                detail = response.text[:500]
+                if self.access_token:
+                    logger.warning(
+                        "GROWW_AUTH dynamic token failed status=%s; using configured access token",
+                        response.status_code,
+                    )
+                    return self.access_token
+                raise RuntimeError(
+                    f"Groww daily authentication failed ({response.status_code}). "
+                    f"Approve the API key for today in Groww Trading APIs. {detail}"
+                )
+
             if self.access_token:
                 return self.access_token
-            raise RuntimeError(f"Groww daily authentication failed ({response.status_code}). Approve the API key for today in Groww Trading APIs. {detail}")
-
-        if self.access_token:
-            return self.access_token
-        raise RuntimeError("No Groww authentication credentials are configured")
+            raise RuntimeError("No Groww authentication credentials are configured")
 
     def _instrument(self, symbol):
         symbol=symbol.upper().strip()
