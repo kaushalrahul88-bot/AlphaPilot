@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.10.0")
+app = FastAPI(title="AlphaPilot API", version="0.10.1")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -61,12 +61,13 @@ class BacktestRequest(BaseModel):
     start_date:str
     end_date:str
     min_risk_reward:float=1.5
+    entry_before:str|None=None
 
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.10.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.10.1","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
@@ -107,7 +108,14 @@ async def backtest(request:BacktestRequest):
     symbols=[s.upper() for s in request.symbols if s.strip()]
     if not symbols:
         symbols=["RELIANCE"]
-    return await run_backtest(get_provider(settings),symbols,request.start_date,request.end_date,request.min_risk_reward)
+    return await run_backtest(
+        get_provider(settings),
+        symbols,
+        request.start_date,
+        request.end_date,
+        request.min_risk_reward,
+        request.entry_before,
+    )
 
 @app.get("/v1/market/context")
 async def market_context(timeframes:str="5m,15m,1h"):
