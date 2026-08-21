@@ -1,6 +1,6 @@
 from .mock import MockProvider
 from .upstox import UpstoxProvider
-from .groww_memory_safe import MemorySafeGrowwProvider
+from .groww_amount import AmountAwareGrowwProvider
 
 
 def get_provider(settings):
@@ -10,6 +10,6 @@ def get_provider(settings):
         return UpstoxProvider(settings)
 
     if provider == "GROWW":
-        return MemorySafeGrowwProvider(settings)
+        return AmountAwareGrowwProvider(settings)
 
     return MockProvider()
