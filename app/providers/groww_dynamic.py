@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import time as time_module
 
 import httpx
@@ -7,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from app.external_context import external_market_context
 from .groww import GrowwProvider
+
+logger = logging.getLogger("alphapilot.groww")
 
 
 class DynamicGrowwProvider(GrowwProvider):
@@ -23,17 +26,9 @@ class DynamicGrowwProvider(GrowwProvider):
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
-            payload = {
-                "key_type": "approval",
-                "checksum": checksum,
-                "timestamp": ts,
-            }
+            payload = {"key_type": "approval", "checksum": checksum, "timestamp": ts}
             async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.post(
-                    f"{self.BASE_URL}/v1/token/api/access",
-                    headers=headers,
-                    json=payload,
-                )
+                response = await client.post(f"{self.BASE_URL}/v1/token/api/access", headers=headers, json=payload)
             if response.status_code == 200:
                 data = response.json()
                 token = "".join(str(data.get("token", "")).split())
@@ -42,16 +37,11 @@ class DynamicGrowwProvider(GrowwProvider):
                     return token
             detail = response.text[:500]
             if self.access_token:
-                # Keep legacy static-token deployments usable, but make failures diagnosable.
                 return self.access_token
-            raise RuntimeError(
-                f"Groww daily authentication failed ({response.status_code}). "
-                f"Approve the API key for today in Groww Trading APIs. {detail}"
-            )
+            raise RuntimeError(f"Groww daily authentication failed ({response.status_code}). Approve the API key for today in Groww Trading APIs. {detail}")
 
         if self.access_token:
             return self.access_token
-
         raise RuntimeError("No Groww authentication credentials are configured")
 
     def _instrument(self, symbol):
@@ -60,6 +50,25 @@ class DynamicGrowwProvider(GrowwProvider):
         except ValueError:
             if not symbol or not symbol.replace("&","").replace("-","").isalnum():raise ValueError(f"Invalid NSE symbol: {symbol!r}")
             return ("NSE","CASH",symbol,f"NSE-{symbol}")
+
+    async def candles(self, symbol, timeframe="15m"):
+        """Call the normal Groww candle path, but emit useful Render diagnostics."""
+        try:
+            candles = await super().candles(symbol, timeframe)
+            count = len(candles) if isinstance(candles, list) else -1
+            sample = candles[-1] if isinstance(candles, list) and candles else None
+            logger.warning(
+                "GROWW_CANDLES symbol=%s timeframe=%s type=%s count=%s sample=%r",
+                symbol, timeframe, type(candles).__name__, count, sample,
+            )
+            if not isinstance(candles, list):
+                logger.error("GROWW_CANDLES_INVALID symbol=%s timeframe=%s value=%r", symbol, timeframe, candles)
+            elif not candles:
+                logger.error("GROWW_CANDLES_EMPTY symbol=%s timeframe=%s", symbol, timeframe)
+            return candles
+        except Exception as exc:
+            logger.exception("GROWW_CANDLES_ERROR symbol=%s timeframe=%s error=%s", symbol, timeframe, exc)
+            raise
 
     def _market_session(self):
         now=datetime.now(ZoneInfo("Asia/Kolkata")); current=now.time(); weekday=now.weekday()<5
