@@ -14,14 +14,7 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
     MAX_OPTION_SNAPSHOTS = 12
 
     async def _get_access_token(self):
-        """Use an explicitly configured daily access token before dynamic auth.
-
-        When GROWW_ACCESS_TOKEN is present, it is already a valid bearer token
-        for the current Groww session. Avoid calling the token-generation
-        endpoint first because repeated auth attempts can trigger HTTP 429 even
-        though market-data requests themselves are succeeding with the configured
-        token.
-        """
+        """Use an explicitly configured daily access token before dynamic auth."""
         if self.access_token:
             return self.access_token
         return await super()._get_access_token()
@@ -33,22 +26,15 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
         return candles
 
     def _snapshot_payload(self, symbol, expiry, raw):
-        # Base implementation includes every normalized option strike in `rows`.
-        # The delta calculation only needs aggregate fields, so do not retain the
-        # full chain in process memory between scans.
         payload = super()._snapshot_payload(symbol, expiry, raw)
         payload.pop("rows", None)
         return payload
 
     async def take_option_snapshot(self, symbol, expiry=None):
         result = await super().take_option_snapshot(symbol, expiry)
-
-        # Bound process-memory persistence even if many symbols/expiries are
-        # confirmed during the day. Dict insertion order is preserved in Python.
         while len(self._option_snapshots) > self.MAX_OPTION_SNAPSHOTS:
             oldest = next(iter(self._option_snapshots))
             self._option_snapshots.pop(oldest, None)
-
         gc.collect()
         return result
 
@@ -70,6 +56,47 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
             "target1", "target2", "risk_reward", "reason",
         )
         return {k: result.get(k) for k in keys if k in result}
+
+    @staticmethod
+    def _execution_plan_complete(plan):
+        if not isinstance(plan, dict):
+            return False
+        required = ("entry", "stop_loss", "target1", "risk_reward")
+        for key in required:
+            value = plan.get(key)
+            if not isinstance(value, (int, float)) or value <= 0:
+                return False
+        return True
+
+    def _pick_execution_plan(self, tf, timeframes, valid, direction):
+        """Choose a real SETUP in the confirmed direction, preferring 15m.
+
+        The old code always copied 15m into the aggregate MTF trade plan. That
+        produced missing R:R/entry/stop fields when 15m was NO_TRADE even though
+        5m or 1h supplied the actual directional SETUP that made MTF qualify.
+        """
+        preferred = []
+        if "15m" in tf:
+            preferred.append(("15m", tf["15m"]))
+        preferred.extend((name, tf[name]) for name in timeframes if name in tf and name != "15m")
+
+        for name, plan in preferred:
+            if (
+                plan.get("status") == "SETUP"
+                and plan.get("direction") == direction
+                and self._execution_plan_complete(plan)
+            ):
+                return name, plan
+
+        # A setup should normally have at least one qualifying timeframe because
+        # setup_long/setup_short >= 1 is part of the MTF gate. Keep this fallback
+        # defensive and explicitly mark an incomplete plan rather than fabricating
+        # R:R as 0.
+        for name, plan in preferred:
+            if plan.get("status") == "SETUP" and plan.get("direction") == direction:
+                return name, plan
+
+        return None, None
 
     async def multi_timeframe_scan(self, symbols, timeframes, min_rr):
         from app.engine import analyze_candles
@@ -178,18 +205,31 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
             }
 
             if status == "SETUP":
-                execution = tf.get("15m", valid[0])
-                item.update({
-                    "direction": direction,
-                    "execution_timeframe": "15m" if "15m" in tf else timeframes[0],
-                    "entry": execution.get("entry"),
-                    "stop_loss": execution.get("stop_loss"),
-                    "target1": execution.get("target1"),
-                    "target2": execution.get("target2"),
-                    "risk_reward": execution.get("risk_reward"),
-                })
+                execution_tf, execution = self._pick_execution_plan(tf, timeframes, valid, direction)
+                if execution is None:
+                    item.update({
+                        "status": "NO_TRADE",
+                        "signal": "NO_TRADE",
+                        "reason": "DATA_INCOMPLETE: no directional timeframe supplied a usable execution plan",
+                        "trade_plan_complete": False,
+                    })
+                else:
+                    plan_complete = self._execution_plan_complete(execution)
+                    item.update({
+                        "direction": direction,
+                        "execution_timeframe": execution_tf,
+                        "entry": execution.get("entry"),
+                        "stop_loss": execution.get("stop_loss"),
+                        "target1": execution.get("target1"),
+                        "target2": execution.get("target2"),
+                        "risk_reward": execution.get("risk_reward"),
+                        "trade_plan_complete": plan_complete,
+                    })
+                    if not plan_complete:
+                        item["reason"] = "DATA_INCOMPLETE: execution plan is missing entry/stop/target/R:R"
             else:
                 item["reason"] = "Multi-timeframe alignment threshold not met"
+                item["trade_plan_complete"] = False
 
             results.append(item)
             valid = None
