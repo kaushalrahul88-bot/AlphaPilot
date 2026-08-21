@@ -14,9 +14,6 @@ logger = logging.getLogger("alphapilot.groww")
 
 
 class DynamicGrowwProvider(GrowwProvider):
-    # Scanner requests may construct many provider instances. Keep one token cache
-    # and one authentication lock for the whole Render process so a 44-symbol scan
-    # does not generate a fresh Groww token for every symbol/timeframe.
     _shared_access_token = None
     _shared_token_generated_at = 0.0
     _shared_auth_lock = None
@@ -29,44 +26,24 @@ class DynamicGrowwProvider(GrowwProvider):
         return cls._shared_auth_lock
 
     async def _get_access_token(self):
-        """Reuse one Groww access token across all provider instances in this process."""
         now = time_module.time()
-
-        if (
-            self.__class__._shared_access_token
-            and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds
-        ):
+        if self.__class__._shared_access_token and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds:
             return self.__class__._shared_access_token
-
         if self._cached_token:
             self.__class__._shared_access_token = self._cached_token
             self.__class__._shared_token_generated_at = now
             return self._cached_token
-
         async with self.__class__._auth_lock():
             now = time_module.time()
-            if (
-                self.__class__._shared_access_token
-                and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds
-            ):
+            if self.__class__._shared_access_token and now - self.__class__._shared_token_generated_at < self.__class__._shared_token_ttl_seconds:
                 return self.__class__._shared_access_token
-
             if self.api_key and self.api_secret:
                 ts = str(int(now))
                 checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
+                headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json", "Accept": "application/json"}
                 payload = {"key_type": "approval", "checksum": checksum, "timestamp": ts}
                 async with httpx.AsyncClient(timeout=20) as client:
-                    response = await client.post(
-                        f"{self.BASE_URL}/v1/token/api/access",
-                        headers=headers,
-                        json=payload,
-                    )
-
+                    response = await client.post(f"{self.BASE_URL}/v1/token/api/access", headers=headers, json=payload)
                 if response.status_code == 200:
                     data = response.json()
                     token = "".join(str(data.get("token", "")).split())
@@ -76,19 +53,11 @@ class DynamicGrowwProvider(GrowwProvider):
                         self.__class__._shared_token_generated_at = now
                         logger.info("GROWW_AUTH token generated once and cached process-wide")
                         return token
-
                 detail = response.text[:500]
                 if self.access_token:
-                    logger.warning(
-                        "GROWW_AUTH dynamic token failed status=%s; using configured access token",
-                        response.status_code,
-                    )
+                    logger.warning("GROWW_AUTH dynamic token failed status=%s; using configured access token", response.status_code)
                     return self.access_token
-                raise RuntimeError(
-                    f"Groww daily authentication failed ({response.status_code}). "
-                    f"Approve the API key for today in Groww Trading APIs. {detail}"
-                )
-
+                raise RuntimeError(f"Groww daily authentication failed ({response.status_code}). Approve the API key for today in Groww Trading APIs. {detail}")
             if self.access_token:
                 return self.access_token
             raise RuntimeError("No Groww authentication credentials are configured")
@@ -101,19 +70,13 @@ class DynamicGrowwProvider(GrowwProvider):
             return ("NSE","CASH",symbol,f"NSE-{symbol}")
 
     async def candles(self, symbol, timeframe="15m"):
-        """Call the normal Groww candle path, but emit useful Render diagnostics."""
         try:
             candles = await super().candles(symbol, timeframe)
             count = len(candles) if isinstance(candles, list) else -1
             sample = candles[-1] if isinstance(candles, list) and candles else None
-            logger.warning(
-                "GROWW_CANDLES symbol=%s timeframe=%s type=%s count=%s sample=%r",
-                symbol, timeframe, type(candles).__name__, count, sample,
-            )
-            if not isinstance(candles, list):
-                logger.error("GROWW_CANDLES_INVALID symbol=%s timeframe=%s value=%r", symbol, timeframe, candles)
-            elif not candles:
-                logger.error("GROWW_CANDLES_EMPTY symbol=%s timeframe=%s", symbol, timeframe)
+            logger.warning("GROWW_CANDLES symbol=%s timeframe=%s type=%s count=%s sample=%r", symbol, timeframe, type(candles).__name__, count, sample)
+            if not isinstance(candles, list): logger.error("GROWW_CANDLES_INVALID symbol=%s timeframe=%s value=%r", symbol, timeframe, candles)
+            elif not candles: logger.error("GROWW_CANDLES_EMPTY symbol=%s timeframe=%s", symbol, timeframe)
             return candles
         except Exception as exc:
             logger.exception("GROWW_CANDLES_ERROR symbol=%s timeframe=%s error=%s", symbol, timeframe, exc)
@@ -146,12 +109,23 @@ class DynamicGrowwProvider(GrowwProvider):
         if gift.get("status")=="AVAILABLE" and abs(float(gift.get("context_score") or 0))>=.5:reasons.append(f"GIFT NIFTY {gift.get('bias','UNKNOWN')} ({'MANUAL' if gift.get('manual') else 'AUTO'}): {gift.get('change_pct')}%")
         if news.get("status") in ("AVAILABLE","NO_RELEVANT_HEADLINES") and abs(float(news.get("context_score") or 0))>=.5:reasons.append(f"Recent news context {news.get('bias','NEUTRAL')}: {float(news.get('context_score') or 0):+.1f}")
 
+    @staticmethod
+    def _trade_plan_complete(technical):
+        if not isinstance(technical, dict): return False
+        if technical.get("trade_plan_complete") is False: return False
+        for key in ("entry", "stop_loss", "target1", "risk_reward"):
+            value = technical.get(key)
+            if not isinstance(value, (int, float)) or value <= 0: return False
+        return True
+
     async def fno_confirm(self,symbol,timeframes,min_rr,expiry=None,include_market=True,take_snapshot=True,manual_gift=None):
         result=await super().fno_confirm(symbol,timeframes,min_rr,expiry=expiry,include_market=include_market,take_snapshot=take_snapshot)
         external=await external_market_context(symbol,manual_gift=manual_gift);self._apply_external_context(result,external)
         session=self._market_session();result["market_session"]=session;result["execution_ready"]=False;result["execution_blockers"]=[]
         if result.get("status")=="SETUP":
-            chain=await self.option_chain(symbol,result.get("expiry"));option=self._recommended_option(symbol,chain["expiry"],chain["data"],result.get("technical",{}));result["recommended_option"]=option
+            technical=result.get("technical",{})
+            chain=await self.option_chain(symbol,result.get("expiry"));option=self._recommended_option(symbol,chain["expiry"],chain["data"],technical);result["recommended_option"]=option
+            if not self._trade_plan_complete(technical): result["execution_blockers"].append("DATA_INCOMPLETE: underlying entry/stop/target/R:R trade plan is missing or invalid.")
             if not session["execution_allowed"]:
                 if session["phase"]=="CLOSING_AUCTION":result["execution_blockers"].append("NSE Closing Auction Session is active (15:15-15:35 IST); fresh BEST TRADE entries are blocked.")
                 elif session["phase"]=="FNO_ONLY":result["execution_blockers"].append("F&O-only closing window is active (15:35-15:40 IST); fresh BEST TRADE entries are blocked.")
