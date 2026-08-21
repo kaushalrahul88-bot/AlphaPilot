@@ -90,12 +90,51 @@ class DynamicGrowwProvider(GrowwProvider):
         else:phase="FNO_ONLY";allowed=False;desc="Cash auction ended while F&O remains tradable until 15:40; fresh entries blocked.";window="F&O-ONLY WINDOW · 15:35-15:40 IST"
         return {"timezone":"Asia/Kolkata","checked_at":now.isoformat(),"is_open":allowed,"status":phase,"phase":phase,"execution_allowed":allowed,"description":desc,"regular_hours":window,"continuous_cash_hours":"09:15-15:15 IST, Monday-Friday","closing_auction_window":"15:15-15:35 IST","fno_only_window":"15:35-15:40 IST","derivatives_close":"15:40 IST"}
 
+    @staticmethod
+    def _as_float(value):
+        try:
+            number = float(value)
+            return number if number == number else None
+        except (TypeError, ValueError):
+            return None
+
+    def _option_greeks_for_strike(self, raw_chain, strike, option_type):
+        payload = raw_chain.get("payload", raw_chain) if isinstance(raw_chain, dict) else {}
+        strikes = payload.get("strikes", {}) if isinstance(payload, dict) else {}
+        candidate = strikes.get(str(int(strike))) or strikes.get(str(strike)) or {}
+        leg = candidate.get(option_type) or {}
+        greeks = leg.get("greeks") or {}
+        return {
+            "delta": self._as_float(greeks.get("delta")),
+            "gamma": self._as_float(greeks.get("gamma")),
+            "theta": self._as_float(greeks.get("theta")),
+            "vega": self._as_float(greeks.get("vega")),
+        }
+
+    @staticmethod
+    def _project_option_premium(premium, spot, underlying_level, delta, gamma):
+        if not all(isinstance(v, (int, float)) for v in (premium, spot, underlying_level, delta)):
+            return None
+        move = underlying_level - spot
+        projected = premium + delta * move
+        if isinstance(gamma, (int, float)):
+            projected += 0.5 * gamma * move * move
+        return round(max(0.05, projected), 2)
+
     def _recommended_option(self,symbol,expiry,raw_chain,technical):
         if technical.get("status")!="SETUP" or technical.get("direction") not in ("LONG","SHORT"):return None
         spot,rows=self._normalize_option_chain(raw_chain)
         if not spot or not rows:return None
         atm=min(rows,key=lambda r:abs(r["strike"]-spot)); direction=technical["direction"]; option_type="CE" if direction=="LONG" else "PE"; prefix="ce" if option_type=="CE" else "pe"
-        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":atm.get(f"{prefix}_ltp"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Research contract suggestion only. Verify live spread, lot size, liquidity and slippage before execution."}
+        premium=self._as_float(atm.get(f"{prefix}_ltp")); greeks=self._option_greeks_for_strike(raw_chain,atm["strike"],option_type); delta=greeks.get("delta"); gamma=greeks.get("gamma")
+        option_entry=self._project_option_premium(premium,spot,self._as_float(technical.get("entry")),delta,gamma)
+        option_stop=self._project_option_premium(premium,spot,self._as_float(technical.get("stop_loss")),delta,gamma)
+        option_target1=self._project_option_premium(premium,spot,self._as_float(technical.get("target1")),delta,gamma)
+        option_target2=self._project_option_premium(premium,spot,self._as_float(technical.get("target2")),delta,gamma)
+        projection_ready=all(isinstance(v,(int,float)) and v>0 for v in (option_entry,option_stop,option_target1))
+        if projection_ready:
+            projection_ready = option_stop < option_entry and option_target1 > option_entry
+        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":premium,"option_entry":option_entry,"option_stop_loss":option_stop,"option_target1":option_target1,"option_target2":option_target2,"option_plan_ready":projection_ready,"projection_method":"Live option premium projected to the underlying entry/SL/targets using current delta and gamma. Theta/IV changes are not forecast.","delta":delta,"gamma":gamma,"theta":greeks.get("theta"),"vega":greeks.get("vega"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"underlying_entry":technical.get("entry"),"underlying_stop_loss":technical.get("stop_loss"),"underlying_target1":technical.get("target1"),"underlying_target2":technical.get("target2"),"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Option entry/SL/targets are Greek-based estimates, not guaranteed future premiums. Verify the live option price and spread before execution."}
 
     def _apply_external_context(self,result,external):
         technical=result.get("technical",{}); direction=technical.get("direction")
@@ -131,6 +170,7 @@ class DynamicGrowwProvider(GrowwProvider):
                 elif session["phase"]=="FNO_ONLY":result["execution_blockers"].append("F&O-only closing window is active (15:35-15:40 IST); fresh BEST TRADE entries are blocked.")
                 else:result["execution_blockers"].append("NSE equity derivatives market is closed; underlying and option premiums may be stale.")
             if not option or not isinstance(option.get("premium"),(int,float)) or option.get("premium",0)<=0:result["execution_blockers"].append("No valid positive option premium is available for the recommended contract.")
+            if option and option.get("option_plan_ready") is False: result["execution_blockers"].append("OPTION_PLAN_INCOMPLETE: live Greeks could not produce a valid option-premium entry/SL/target plan.")
             if not option or option.get("open_interest",0)<=0:result["execution_blockers"].append("Recommended contract has no reported open interest.")
             result["execution_ready"]=not result["execution_blockers"]
             if not result["execution_ready"]:result["status"]="NO_TRADE"
