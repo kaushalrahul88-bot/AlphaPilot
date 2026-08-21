@@ -10,7 +10,6 @@ from .providers.factory import get_provider
 
 class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
-    # Comma-separated origins. Use * for public browser access.
     allowed_origins: str = "*"
 
     class Config:
@@ -18,140 +17,75 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-app = FastAPI(
-    title="AlphaPilot API",
-    version="0.9.0",
-)
-
-parsed_origins = [
-    x.strip()
-    for x in settings.allowed_origins.split(",")
-    if x.strip()
-]
-
-if "*" in parsed_origins:
-    parsed_origins = ["*"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=parsed_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-TF = Literal["5m", "15m", "1h", "1d"]
-
+app = FastAPI(title="AlphaPilot API", version="0.9.1")
+parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
+if "*" in parsed_origins: parsed_origins = ["*"]
+app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+TF = Literal["5m","15m","1h","1d"]
 
 class ScanRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: ["RELIANCE"])
-    timeframe: TF = "15m"
-    min_risk_reward: float = 1.5
-
+    symbols:list[str]=Field(default_factory=lambda:["RELIANCE"])
+    timeframe:TF="15m"
+    min_risk_reward:float=1.5
 
 class MTFRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: ["RELIANCE"])
-    timeframes: list[TF] = Field(default_factory=lambda: ["5m", "15m", "1h"])
-    min_risk_reward: float = 1.5
+    symbols:list[str]=Field(default_factory=lambda:["RELIANCE"])
+    timeframes:list[TF]=Field(default_factory=lambda:["5m","15m","1h"])
+    min_risk_reward:float=1.5
 
+class ManualGift(BaseModel):
+    ltp: float
+    change_pct: float
+    entered_at: str | None = None
 
 class FNORequest(BaseModel):
-    symbol: str = "RELIANCE"
-    timeframes: list[TF] = Field(default_factory=lambda: ["5m", "15m", "1h"])
-    min_risk_reward: float = 1.5
-    expiry: str | None = None
-    include_market: bool = True
-    take_snapshot: bool = True
-
+    symbol:str="RELIANCE"
+    timeframes:list[TF]=Field(default_factory=lambda:["5m","15m","1h"])
+    min_risk_reward:float=1.5
+    expiry:str|None=None
+    include_market:bool=True
+    take_snapshot:bool=True
+    manual_gift:ManualGift|None=None
 
 class SnapshotRequest(BaseModel):
-    symbol: str = "RELIANCE"
-    expiry: str | None = None
-
+    symbol:str="RELIANCE"
+    expiry:str|None=None
 
 @app.get("/")
-async def root():
-    return {"ok": True, "service": "alphapilot-api"}
-
+async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health():
-    return {
-        "ok": True,
-        "service": "alphapilot-api",
-        "version": "0.9.0",
-        "provider": settings.market_data_provider.upper(),
-    }
-
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.9.1","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
-async def quote(symbol: str):
-    return await get_provider(settings).quote(symbol.upper())
-
+async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
 
 @app.get("/v1/candles/{symbol}")
-async def candles(symbol: str, timeframe: TF = "15m"):
-    data = await get_provider(settings).candles(symbol.upper(), timeframe)
-    return {"symbol": symbol.upper(), "timeframe": timeframe, "candles": data}
-
+async def candles(symbol:str,timeframe:TF="15m"):
+    data=await get_provider(settings).candles(symbol.upper(),timeframe)
+    return {"symbol":symbol.upper(),"timeframe":timeframe,"candles":data}
 
 @app.get("/v1/options/{symbol}")
-async def options(symbol: str, expiry: str | None = None):
-    return await get_provider(settings).option_chain(symbol.upper(), expiry)
-
+async def options(symbol:str,expiry:str|None=None): return await get_provider(settings).option_chain(symbol.upper(),expiry)
 
 @app.post("/v1/scan")
-async def scan(request: ScanRequest):
-    return await get_provider(settings).scan(
-        request.symbols,
-        request.timeframe,
-        request.min_risk_reward,
-    )
-
+async def scan(request:ScanRequest): return await get_provider(settings).scan(request.symbols,request.timeframe,request.min_risk_reward)
 
 @app.post("/v1/scan/mtf")
-async def mtf(request: MTFRequest):
-    return await get_provider(settings).multi_timeframe_scan(
-        request.symbols,
-        request.timeframes,
-        request.min_risk_reward,
-    )
-
+async def mtf(request:MTFRequest): return await get_provider(settings).multi_timeframe_scan(request.symbols,request.timeframes,request.min_risk_reward)
 
 @app.get("/v1/market/context")
-async def market_context(timeframes: str = "5m,15m,1h"):
-    parsed = [
-        x.strip()
-        for x in timeframes.split(",")
-        if x.strip() in {"5m", "15m", "1h", "1d"}
-    ]
-    if not parsed:
-        parsed = ["5m", "15m", "1h"]
+async def market_context(timeframes:str="5m,15m,1h"):
+    parsed=[x.strip() for x in timeframes.split(",") if x.strip() in {"5m","15m","1h","1d"}] or ["5m","15m","1h"]
     return await get_provider(settings).market_context(parsed)
 
-
 @app.get("/v1/context/external/{symbol}")
-async def external_context(symbol: str):
-    """GIFT NIFTY + recent news context for inspection/debugging."""
-    return await external_market_context(symbol.upper())
-
+async def external_context(symbol:str): return await external_market_context(symbol.upper())
 
 @app.post("/v1/fno/snapshot")
-async def fno_snapshot(request: SnapshotRequest):
-    return await get_provider(settings).take_option_snapshot(
-        request.symbol.upper(),
-        request.expiry,
-    )
-
+async def fno_snapshot(request:SnapshotRequest): return await get_provider(settings).take_option_snapshot(request.symbol.upper(),request.expiry)
 
 @app.post("/v1/scan/fno")
-async def fno(request: FNORequest):
-    return await get_provider(settings).fno_confirm(
-        request.symbol.upper(),
-        request.timeframes,
-        request.min_risk_reward,
-        request.expiry,
-        request.include_market,
-        request.take_snapshot,
-    )
+async def fno(request:FNORequest):
+    manual = request.manual_gift.model_dump() if request.manual_gift else None
+    return await get_provider(settings).fno_confirm(request.symbol.upper(),request.timeframes,request.min_risk_reward,request.expiry,request.include_market,request.take_snapshot,manual)
