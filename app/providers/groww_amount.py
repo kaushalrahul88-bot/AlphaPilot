@@ -1,6 +1,8 @@
 import csv
 import io
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -18,6 +20,7 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
     _lot_cache = {}
     _lot_cache_loaded_at = 0.0
     _lot_cache_ttl = 6 * 60 * 60
+    _freshness_limits_minutes = {"5m": 15, "15m": 35, "1h": 100}
 
     @classmethod
     async def _ensure_lot_cache(cls):
@@ -88,6 +91,44 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
         return reward / risk
 
     @classmethod
+    def _apply_market_data_freshness_gate(cls, result):
+        if not isinstance(result, dict):
+            return
+        session = result.get("market_session") or {}
+        if session.get("execution_allowed") is not True:
+            return
+
+        technical = result.get("technical") or {}
+        frames = technical.get("timeframes") or {}
+        blockers = result.setdefault("execution_blockers", [])
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+
+        for timeframe, limit in cls._freshness_limits_minutes.items():
+            row = frames.get(timeframe)
+            if not isinstance(row, dict):
+                continue
+            raw = row.get("latest_candle_at")
+            if not raw:
+                blockers.append(f"MARKET_DATA_STALE: {timeframe} latest candle timestamp is unavailable.")
+                continue
+            try:
+                candle_time = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if candle_time.tzinfo is None:
+                    candle_time = candle_time.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+                else:
+                    candle_time = candle_time.astimezone(ZoneInfo("Asia/Kolkata"))
+                age_minutes = max(0.0, (now - candle_time).total_seconds() / 60.0)
+            except Exception:
+                blockers.append(f"MARKET_DATA_STALE: {timeframe} candle timestamp could not be validated.")
+                continue
+            if age_minutes > limit:
+                blockers.append(
+                    f"MARKET_DATA_STALE: latest {timeframe} candle is {age_minutes:.0f} minutes old; live limit is {limit} minutes."
+                )
+
+        result["execution_blockers"] = list(dict.fromkeys(blockers))
+
+    @classmethod
     def _apply_option_quality_gate(cls, result, option, min_rr):
         if not isinstance(result, dict) or not isinstance(option, dict):
             return
@@ -115,7 +156,6 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
         if not isinstance(amount, (int, float)) or amount <= 0:
             blockers.append("CAPITAL_UNKNOWN: one-lot capital requirement could not be validated from the current Groww instrument master.")
 
-        # Preserve blocker order but prevent duplicate messages when providers are layered.
         result["execution_blockers"] = list(dict.fromkeys(blockers))
         result["execution_ready"] = not result["execution_blockers"]
         if not result["execution_ready"] and result.get("status") == "SETUP":
@@ -154,5 +194,6 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
         except (TypeError, ValueError):
             min_rr = 1.5
 
+        self._apply_market_data_freshness_gate(result)
         self._apply_option_quality_gate(result, option, min_rr)
         return result
