@@ -56,6 +56,15 @@ def _published_iso(value: str | None) -> str | None:
         return None
 
 
+def _published_epoch(value: str | None) -> float:
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
 def _source_rank(source: str) -> int:
     key = source.lower().strip()
     for preferred, rank in SOURCE_RANK.items():
@@ -97,7 +106,7 @@ async def _fetch_symbol_news(symbol: str, limit: int = 3) -> list[dict]:
                 "preferred_source": _source_rank(source) < len(PREFERRED_SOURCES),
             })
 
-        items.sort(key=lambda row: (_source_rank(row["source"]), row.get("published_at") or ""))
+        items.sort(key=lambda row: (_source_rank(row["source"]), -_published_epoch(row.get("published_at"))))
         preferred = [row for row in items if row["preferred_source"]]
         fallback = [row for row in items if not row["preferred_source"]]
         selected = (preferred + fallback)[:limit]
