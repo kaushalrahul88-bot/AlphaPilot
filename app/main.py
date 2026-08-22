@@ -8,6 +8,7 @@ import traceback
 
 from .backtest import run_backtest
 from .external_context import external_market_context
+from .news import latest_market_news
 from .providers.factory import get_provider
 
 logger = logging.getLogger("alphapilot.scan")
@@ -22,7 +23,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.10.1")
+app = FastAPI(title="AlphaPilot API", version="0.11.0")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -67,7 +68,7 @@ class BacktestRequest(BaseModel):
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.10.1","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.11.0","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
@@ -79,6 +80,12 @@ async def candles(symbol:str,timeframe:TF="15m"):
 
 @app.get("/v1/options/{symbol}")
 async def options(symbol:str,expiry:str|None=None): return await get_provider(settings).option_chain(symbol.upper(),expiry)
+
+@app.get("/v1/news")
+async def news(symbols:str,limit:int=3):
+    parsed=[x.strip().upper() for x in symbols.split(",") if x.strip()]
+    safe_limit=max(1,min(int(limit),5))
+    return await latest_market_news(parsed,safe_limit)
 
 @app.post("/v1/scan")
 async def scan(request:ScanRequest): return await get_provider(settings).scan(request.symbols,request.timeframe,request.min_risk_reward)
