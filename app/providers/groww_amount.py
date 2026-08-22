@@ -71,6 +71,56 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
             return None
         return cls._lot_cache.get((underlying, expiry, strike, option_type))
 
+    @staticmethod
+    def _option_risk_reward(option):
+        if not isinstance(option, dict):
+            return None
+        try:
+            entry = float(option.get("option_entry") or option.get("premium") or 0)
+            stop = float(option.get("option_stop_loss") or 0)
+            target = float(option.get("option_target1") or 0)
+        except (TypeError, ValueError):
+            return None
+        risk = entry - stop
+        reward = target - entry
+        if entry <= 0 or stop <= 0 or target <= 0 or risk <= 0 or reward <= 0:
+            return None
+        return reward / risk
+
+    @classmethod
+    def _apply_option_quality_gate(cls, result, option, min_rr):
+        if not isinstance(result, dict) or not isinstance(option, dict):
+            return
+
+        blockers = result.setdefault("execution_blockers", [])
+        option_rr = cls._option_risk_reward(option)
+        option["option_risk_reward"] = round(option_rr, 2) if option_rr is not None else None
+
+        if option_rr is None:
+            blockers.append("OPTION_RR_INVALID: option entry/stop/target do not form a valid positive-risk trade plan.")
+        elif option_rr < float(min_rr):
+            blockers.append(
+                f"OPTION_RR_LOW: projected option R:R {option_rr:.2f}:1 is below the required {float(min_rr):.2f}:1."
+            )
+
+        volume = option.get("volume")
+        if isinstance(volume, (int, float)) and volume <= 0:
+            blockers.append("OPTION_LIQUIDITY: recommended contract has no reported traded volume.")
+
+        iv = option.get("iv")
+        if isinstance(iv, (int, float)) and (iv <= 0 or iv > 200):
+            blockers.append("OPTION_IV_INVALID: reported implied volatility is outside a usable sanity range.")
+
+        amount = option.get("amount_required_1_lot")
+        if not isinstance(amount, (int, float)) or amount <= 0:
+            blockers.append("CAPITAL_UNKNOWN: one-lot capital requirement could not be validated from the current Groww instrument master.")
+
+        # Preserve blocker order but prevent duplicate messages when providers are layered.
+        result["execution_blockers"] = list(dict.fromkeys(blockers))
+        result["execution_ready"] = not result["execution_blockers"]
+        if not result["execution_ready"] and result.get("status") == "SETUP":
+            result["status"] = "NO_TRADE"
+
     async def fno_confirm(self, *args, **kwargs):
         result = await super().fno_confirm(*args, **kwargs)
         option = result.get("recommended_option") if isinstance(result, dict) else None
@@ -96,4 +146,13 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
                 f"{base_label} · 1 lot: {lot_size} qty · ₹{option['amount_required_1_lot']:,.2f} required"
             )
 
+        min_rr = kwargs.get("min_rr")
+        if min_rr is None and len(args) >= 3:
+            min_rr = args[2]
+        try:
+            min_rr = float(min_rr)
+        except (TypeError, ValueError):
+            min_rr = 1.5
+
+        self._apply_option_quality_gate(result, option, min_rr)
         return result
