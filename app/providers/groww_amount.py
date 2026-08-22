@@ -161,10 +161,79 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
         if not result["execution_ready"] and result.get("status") == "SETUP":
             result["status"] = "NO_TRADE"
 
+    @classmethod
+    def _execution_quality(cls, result, option, min_rr):
+        session = result.get("market_session") or {}
+        blockers = [str(x) for x in (result.get("execution_blockers") or [])]
+        prefixes = {b.split(":", 1)[0] for b in blockers if ":" in b}
+        option = option if isinstance(option, dict) else {}
+        option_rr = cls._option_risk_reward(option)
+        volume = option.get("volume")
+        iv = option.get("iv")
+        amount = option.get("amount_required_1_lot")
+        oi = option.get("open_interest")
+
+        checks = {
+            "market_session": {
+                "pass": session.get("execution_allowed") is True,
+                "value": session.get("phase") or session.get("status") or "UNKNOWN",
+            },
+            "market_data_fresh": {
+                "pass": "MARKET_DATA_STALE" not in prefixes,
+                "limits_minutes": dict(cls._freshness_limits_minutes),
+            },
+            "underlying_plan": {
+                "pass": "DATA_INCOMPLETE" not in prefixes,
+            },
+            "option_plan": {
+                "pass": bool(option.get("option_plan_ready")) and "OPTION_PLAN_INCOMPLETE" not in prefixes,
+            },
+            "option_risk_reward": {
+                "pass": option_rr is not None and option_rr >= float(min_rr),
+                "value": round(option_rr, 2) if option_rr is not None else None,
+                "minimum": round(float(min_rr), 2),
+            },
+            "open_interest": {
+                "pass": isinstance(oi, (int, float)) and oi > 0,
+                "value": oi,
+            },
+            "volume": {
+                "pass": isinstance(volume, (int, float)) and volume > 0,
+                "value": volume,
+            },
+            "iv_sanity": {
+                "pass": not isinstance(iv, (int, float)) or 0 < iv <= 200,
+                "value": iv,
+            },
+            "one_lot_capital": {
+                "pass": isinstance(amount, (int, float)) and amount > 0,
+                "value": amount,
+            },
+        }
+        passed = sum(1 for check in checks.values() if check.get("pass") is True)
+        return {
+            "ready": result.get("execution_ready") is True,
+            "checks_passed": passed,
+            "checks_total": len(checks),
+            "checks": checks,
+            "blockers": blockers,
+        }
+
     async def fno_confirm(self, *args, **kwargs):
         result = await super().fno_confirm(*args, **kwargs)
         option = result.get("recommended_option") if isinstance(result, dict) else None
+
+        min_rr = kwargs.get("min_rr")
+        if min_rr is None and len(args) >= 3:
+            min_rr = args[2]
+        try:
+            min_rr = float(min_rr)
+        except (TypeError, ValueError):
+            min_rr = 1.5
+
         if not isinstance(option, dict):
+            if isinstance(result, dict):
+                result["execution_quality"] = self._execution_quality(result, None, min_rr)
             return result
 
         lot_size = await self._lot_size_for_option(option)
@@ -186,14 +255,7 @@ class AmountAwareGrowwProvider(MemorySafeGrowwProvider):
                 f"{base_label} · 1 lot: {lot_size} qty · ₹{option['amount_required_1_lot']:,.2f} required"
             )
 
-        min_rr = kwargs.get("min_rr")
-        if min_rr is None and len(args) >= 3:
-            min_rr = args[2]
-        try:
-            min_rr = float(min_rr)
-        except (TypeError, ValueError):
-            min_rr = 1.5
-
         self._apply_market_data_freshness_gate(result)
         self._apply_option_quality_gate(result, option, min_rr)
+        result["execution_quality"] = self._execution_quality(result, option, min_rr)
         return result
