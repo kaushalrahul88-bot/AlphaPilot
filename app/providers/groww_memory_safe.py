@@ -53,7 +53,7 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
         keys = (
             "symbol", "status", "signal", "direction", "alpha_score",
             "price", "rsi14", "market_structure", "entry", "stop_loss",
-            "target1", "target2", "risk_reward", "reason",
+            "target1", "target2", "risk_reward", "reason", "latest_candle_at",
         )
         return {k: result.get(k) for k in keys if k in result}
 
@@ -69,33 +69,18 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
         return True
 
     def _pick_execution_plan(self, tf, timeframes, valid, direction):
-        """Choose a real SETUP in the confirmed direction, preferring 15m.
-
-        The old code always copied 15m into the aggregate MTF trade plan. That
-        produced missing R:R/entry/stop fields when 15m was NO_TRADE even though
-        5m or 1h supplied the actual directional SETUP that made MTF qualify.
-        """
+        """Choose a real SETUP in the confirmed direction, preferring 15m."""
         preferred = []
         if "15m" in tf:
             preferred.append(("15m", tf["15m"]))
         preferred.extend((name, tf[name]) for name in timeframes if name in tf and name != "15m")
 
         for name, plan in preferred:
-            if (
-                plan.get("status") == "SETUP"
-                and plan.get("direction") == direction
-                and self._execution_plan_complete(plan)
-            ):
+            if plan.get("status") == "SETUP" and plan.get("direction") == direction and self._execution_plan_complete(plan):
                 return name, plan
-
-        # A setup should normally have at least one qualifying timeframe because
-        # setup_long/setup_short >= 1 is part of the MTF gate. Keep this fallback
-        # defensive and explicitly mark an incomplete plan rather than fabricating
-        # R:R as 0.
         for name, plan in preferred:
             if plan.get("status") == "SETUP" and plan.get("direction") == direction:
                 return name, plan
-
         return None, None
 
     async def multi_timeframe_scan(self, symbols, timeframes, min_rr):
@@ -116,64 +101,28 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
                     analyzed = analyze_candles(symbol, candles, min_rr)
                     tf[timeframe] = self._compact_tf(analyzed)
                 except Exception as exc:
-                    tf[timeframe] = {
-                        "symbol": symbol,
-                        "status": "ERROR",
-                        "error": str(exc),
-                    }
+                    tf[timeframe] = {"symbol": symbol, "status": "ERROR", "error": str(exc)}
                 finally:
                     candles = None
                     analyzed = None
 
             valid = [v for v in tf.values() if v.get("status") != "ERROR"]
             if not valid:
-                results.append({
-                    "symbol": symbol,
-                    "status": "ERROR",
-                    "signal": "ERROR",
-                    "timeframes": tf,
-                    "error": "No usable timeframe data",
-                })
+                results.append({"symbol": symbol,"status": "ERROR","signal": "ERROR","timeframes": tf,"error": "No usable timeframe data"})
                 gc.collect()
                 continue
 
-            weighted_sum = sum(
-                tf[t].get("alpha_score", 50) * weights.get(t, 0.25)
-                for t in tf if tf[t].get("status") != "ERROR"
-            )
-            weight_used = sum(
-                weights.get(t, 0.25)
-                for t in tf if tf[t].get("status") != "ERROR"
-            )
+            weighted_sum = sum(tf[t].get("alpha_score", 50) * weights.get(t, 0.25) for t in tf if tf[t].get("status") != "ERROR")
+            weight_used = sum(weights.get(t, 0.25) for t in tf if tf[t].get("status") != "ERROR")
             score = weighted_sum / weight_used if weight_used else 50
 
-            long_votes = sum(
-                1 for v in valid
-                if v.get("signal") in ("LONG", "STRONG_LONG", "WATCH_LONG")
-                and v.get("alpha_score", 0) >= 58
-            )
-            short_votes = sum(
-                1 for v in valid
-                if v.get("signal") in ("SHORT", "STRONG_SHORT", "WATCH_SHORT")
-                and v.get("alpha_score", 100) <= 42
-            )
-            setup_long = sum(
-                1 for v in valid
-                if v.get("status") == "SETUP" and v.get("direction") == "LONG"
-            )
-            setup_short = sum(
-                1 for v in valid
-                if v.get("status") == "SETUP" and v.get("direction") == "SHORT"
-            )
+            long_votes = sum(1 for v in valid if v.get("signal") in ("LONG", "STRONG_LONG", "WATCH_LONG") and v.get("alpha_score", 0) >= 58)
+            short_votes = sum(1 for v in valid if v.get("signal") in ("SHORT", "STRONG_SHORT", "WATCH_SHORT") and v.get("alpha_score", 100) <= 42)
+            setup_long = sum(1 for v in valid if v.get("status") == "SETUP" and v.get("direction") == "LONG")
+            setup_short = sum(1 for v in valid if v.get("status") == "SETUP" and v.get("direction") == "SHORT")
 
-            higher_bull = any(
-                tf.get(t, {}).get("alpha_score", 50) >= 55
-                for t in ("1h", "1d") if t in tf
-            )
-            higher_bear = any(
-                tf.get(t, {}).get("alpha_score", 50) <= 45
-                for t in ("1h", "1d") if t in tf
-            )
+            higher_bull = any(tf.get(t, {}).get("alpha_score", 50) >= 55 for t in ("1h", "1d") if t in tf)
+            higher_bear = any(tf.get(t, {}).get("alpha_score", 50) <= 45 for t in ("1h", "1d") if t in tf)
             n = len(valid)
 
             if score >= 68 and long_votes >= max(2, n - 1) and setup_long >= 1 and not higher_bear:
@@ -207,24 +156,10 @@ class MemorySafeGrowwProvider(DynamicGrowwProvider):
             if status == "SETUP":
                 execution_tf, execution = self._pick_execution_plan(tf, timeframes, valid, direction)
                 if execution is None:
-                    item.update({
-                        "status": "NO_TRADE",
-                        "signal": "NO_TRADE",
-                        "reason": "DATA_INCOMPLETE: no directional timeframe supplied a usable execution plan",
-                        "trade_plan_complete": False,
-                    })
+                    item.update({"status": "NO_TRADE","signal": "NO_TRADE","reason": "DATA_INCOMPLETE: no directional timeframe supplied a usable execution plan","trade_plan_complete": False})
                 else:
                     plan_complete = self._execution_plan_complete(execution)
-                    item.update({
-                        "direction": direction,
-                        "execution_timeframe": execution_tf,
-                        "entry": execution.get("entry"),
-                        "stop_loss": execution.get("stop_loss"),
-                        "target1": execution.get("target1"),
-                        "target2": execution.get("target2"),
-                        "risk_reward": execution.get("risk_reward"),
-                        "trade_plan_complete": plan_complete,
-                    })
+                    item.update({"direction": direction,"execution_timeframe": execution_tf,"entry": execution.get("entry"),"stop_loss": execution.get("stop_loss"),"target1": execution.get("target1"),"target2": execution.get("target2"),"risk_reward": execution.get("risk_reward"),"trade_plan_complete": plan_complete})
                     if not plan_complete:
                         item["reason"] = "DATA_INCOMPLETE: execution plan is missing entry/stop/target/R:R"
             else:
