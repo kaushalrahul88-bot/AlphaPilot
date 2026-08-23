@@ -1,5 +1,6 @@
 import csv
-import io
+import os
+import tempfile
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -9,7 +10,7 @@ import httpx
 INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 SUPPORTED_COMMODITIES = {"CRUDEOIL", "NATURALGAS"}
 _CACHE_TTL_SECONDS = 6 * 60 * 60
-_instrument_cache = {"loaded_at": 0.0, "rows": []}
+_contract_cache = {}
 
 
 def _as_bool(value):
@@ -26,69 +27,97 @@ def _parse_expiry(value):
         return None
 
 
-async def _load_instruments(force=False):
-    now = time.time()
-    if not force and _instrument_cache["rows"] and now - _instrument_cache["loaded_at"] < _CACHE_TTL_SECONDS:
-        return _instrument_cache["rows"]
+def _row_matches_symbol(row, symbol, today):
+    if str(row.get("exchange") or "").upper() != "MCX":
+        return None
+    if str(row.get("segment") or "").upper() != "COMMODITY":
+        return None
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(INSTRUMENT_CSV_URL)
-    response.raise_for_status()
+    underlying = str(row.get("underlying_symbol") or row.get("name") or "").upper().replace(" ", "")
+    trading_symbol = str(row.get("trading_symbol") or "").upper()
+    instrument_type = str(row.get("instrument_type") or "").upper()
 
-    rows = list(csv.DictReader(io.StringIO(response.text)))
-    _instrument_cache["rows"] = rows
-    _instrument_cache["loaded_at"] = now
-    return rows
+    if underlying != symbol and not trading_symbol.startswith(symbol):
+        return None
+    if instrument_type not in {"FUT", "FUTURE", "FUTURES"} and not trading_symbol.endswith("FUT"):
+        return None
+
+    expiry = _parse_expiry(row.get("expiry_date"))
+    if not expiry or expiry < today:
+        return None
+    if row.get("buy_allowed") not in (None, "") and not _as_bool(row.get("buy_allowed")):
+        return None
+    return expiry
 
 
-async def resolve_nearest_mcx_future(symbol):
+async def _download_instrument_master_to_tempfile():
+    fd, path = tempfile.mkstemp(prefix="alphapilot-groww-", suffix=".csv")
+    os.close(fd)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=20.0)) as client:
+            async with client.stream("GET", INSTRUMENT_CSV_URL) as response:
+                response.raise_for_status()
+                with open(path, "wb") as output:
+                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                        output.write(chunk)
+        return path
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+
+
+async def resolve_nearest_mcx_future(symbol, force=False):
     symbol = str(symbol or "").strip().upper()
     if symbol not in SUPPORTED_COMMODITIES:
         raise ValueError(f"Unsupported commodity {symbol}. Supported: {', '.join(sorted(SUPPORTED_COMMODITIES))}")
 
-    rows = await _load_instruments()
+    now_ts = time.time()
+    cached = _contract_cache.get(symbol)
+    if not force and cached and now_ts - cached["loaded_at"] < _CACHE_TTL_SECONDS:
+        return dict(cached["contract"])
+
     today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    candidates = []
+    path = await _download_instrument_master_to_tempfile()
+    best = None
 
-    for row in rows:
-        if str(row.get("exchange") or "").upper() != "MCX":
-            continue
-        if str(row.get("segment") or "").upper() != "COMMODITY":
-            continue
-        underlying = str(row.get("underlying_symbol") or row.get("name") or "").upper().replace(" ", "")
-        trading_symbol = str(row.get("trading_symbol") or "").upper()
-        instrument_type = str(row.get("instrument_type") or "").upper()
-        if symbol not in {underlying, trading_symbol.split("25")[0], trading_symbol.split("26")[0], trading_symbol.split("27")[0]} and not trading_symbol.startswith(symbol):
-            continue
-        if instrument_type not in {"FUT", "FUTURE", "FUTURES"} and not trading_symbol.endswith("FUT"):
-            continue
-        expiry = _parse_expiry(row.get("expiry_date"))
-        if not expiry or expiry < today:
-            continue
-        if row.get("buy_allowed") not in (None, "") and not _as_bool(row.get("buy_allowed")):
-            continue
-        candidates.append((expiry, row))
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                expiry = _row_matches_symbol(row, symbol, today)
+                if not expiry:
+                    continue
+                if best is None or expiry < best[0]:
+                    best = (expiry, {
+                        "underlying": symbol,
+                        "exchange": "MCX",
+                        "segment": "COMMODITY",
+                        "trading_symbol": str(row.get("trading_symbol") or ""),
+                        "groww_symbol": str(row.get("groww_symbol") or ""),
+                        "expiry_date": expiry.isoformat(),
+                        "lot_size": int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,
+                        "tick_size": float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None,
+                        "instrument_type": str(row.get("instrument_type") or "FUT"),
+                    })
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
-    if not candidates:
+    if best is None:
         raise RuntimeError(f"No active MCX future found for {symbol}")
 
-    candidates.sort(key=lambda item: item[0])
-    expiry, row = candidates[0]
-    return {
-        "underlying": symbol,
-        "exchange": "MCX",
-        "segment": "COMMODITY",
-        "trading_symbol": str(row.get("trading_symbol") or ""),
-        "groww_symbol": str(row.get("groww_symbol") or ""),
-        "expiry_date": expiry.isoformat(),
-        "lot_size": int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,
-        "tick_size": float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None,
-        "instrument_type": str(row.get("instrument_type") or "FUT"),
-    }
+    contract = best[1]
+    _contract_cache[symbol] = {"loaded_at": now_ts, "contract": contract}
+    return dict(contract)
 
 
-async def commodity_quote(provider, symbol):
-    contract = await resolve_nearest_mcx_future(symbol)
+async def commodity_quote(provider, symbol, contract=None):
+    contract = contract or await resolve_nearest_mcx_future(symbol)
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.get(
             f"{provider.BASE_URL}/v1/live-data/quote",
@@ -103,8 +132,8 @@ async def commodity_quote(provider, symbol):
     return {"provider": "GROWW", "contract": contract, "data": response.json()}
 
 
-async def commodity_candles(provider, symbol, timeframe="5m"):
-    contract = await resolve_nearest_mcx_future(symbol)
+async def commodity_candles(provider, symbol, timeframe="5m", contract=None):
+    contract = contract or await resolve_nearest_mcx_future(symbol)
     interval_map = {
         "5m": ("5minute", 7),
         "15m": ("15minute", 14),
@@ -141,12 +170,12 @@ async def commodity_probe(provider, symbol):
     errors = []
 
     try:
-        quote_result = await commodity_quote(provider, symbol)
+        quote_result = await commodity_quote(provider, symbol, contract)
     except Exception as exc:
         errors.append({"check": "quote", "error": str(exc)})
 
     try:
-        candle_result = await commodity_candles(provider, symbol, "5m")
+        candle_result = await commodity_candles(provider, symbol, "5m", contract)
     except Exception as exc:
         errors.append({"check": "candles", "error": str(exc)})
 
