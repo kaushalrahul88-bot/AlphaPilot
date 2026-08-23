@@ -7,6 +7,7 @@ import logging
 import traceback
 
 from .backtest import run_backtest
+from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .external_context import external_market_context
 from .news import latest_market_news
 from .providers.factory import get_provider
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.11.0")
+app = FastAPI(title="AlphaPilot API", version="0.12.0")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -68,7 +69,7 @@ class BacktestRequest(BaseModel):
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.11.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.12.0","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
@@ -80,6 +81,22 @@ async def candles(symbol:str,timeframe:TF="15m"):
 
 @app.get("/v1/options/{symbol}")
 async def options(symbol:str,expiry:str|None=None): return await get_provider(settings).option_chain(symbol.upper(),expiry)
+
+@app.get("/v1/commodity/contract/{symbol}")
+async def commodity_contract(symbol:str):
+    return await resolve_nearest_mcx_future(symbol.upper())
+
+@app.get("/v1/commodity/quote/{symbol}")
+async def mcx_quote(symbol:str):
+    return await commodity_quote(get_provider(settings),symbol.upper())
+
+@app.get("/v1/commodity/candles/{symbol}")
+async def mcx_candles(symbol:str,timeframe:Literal["5m","15m","1h"]="5m"):
+    return await commodity_candles(get_provider(settings),symbol.upper(),timeframe)
+
+@app.get("/v1/commodity/probe/{symbol}")
+async def mcx_probe(symbol:str):
+    return await commodity_probe(get_provider(settings),symbol.upper())
 
 @app.get("/v1/news")
 async def news(symbols:str,limit:int=3):
