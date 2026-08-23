@@ -1,6 +1,6 @@
 from .mock import MockProvider
 from .upstox import UpstoxProvider
-from .groww_amount import AmountAwareGrowwProvider
+from .groww_autoauth import AutoAuthAmountAwareGrowwProvider
 
 
 def get_provider(settings):
@@ -10,6 +10,6 @@ def get_provider(settings):
         return UpstoxProvider(settings)
 
     if provider == "GROWW":
-        return AmountAwareGrowwProvider(settings)
+        return AutoAuthAmountAwareGrowwProvider(settings)
 
     return MockProvider()
