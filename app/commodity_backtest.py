@@ -62,7 +62,6 @@ async def _fetch_range(provider, contract, interval_minutes, start, end):
 async def _fetch_chunked(provider, contract, interval_minutes, start, end):
     rows = []
     cursor = start
-    # Smaller chunks keep Groww range requests predictable on Render/free instances.
     chunk_days = 7 if interval_minutes <= 15 else 30
     while cursor < end:
         chunk_end = min(end, cursor + timedelta(days=chunk_days))
@@ -77,7 +76,6 @@ async def _fetch_chunked(provider, contract, interval_minutes, start, end):
 
 
 def _slice_until(rows, when):
-    # rows are ordered; keep enough history for EMA/RSI/structure while avoiding look-ahead.
     eligible = [row for row in rows if _ts(row[0]) <= when]
     return eligible[-260:]
 
@@ -111,9 +109,8 @@ def _resolve_trade(plan, future_rows, entry_time, slippage_bps, cost_bps):
     t2 = plan["target2"]
     risk = (entry - stop) if action == "BUY" else (stop - entry)
     if risk <= 0:
-        return {"outcome": "INVALID", "r_multiple": 0.0, "exit_time": None}
+        return {"outcome": "INVALID", "r_multiple": 0.0, "exit_time": None, "t2_touched": False}
 
-    t1_hit_ever = False
     for row in future_rows:
         when = _ts(row[0])
         if when <= entry_time or len(row) < 4:
@@ -124,31 +121,40 @@ def _resolve_trade(plan, future_rows, entry_time, slippage_bps, cost_bps):
         else:
             hit_stop, hit_t1, hit_t2 = high >= stop, low <= t1, low <= t2
 
-        if hit_stop and (hit_t1 or hit_t2):
-            return {"outcome": "AMBIGUOUS", "r_multiple": 0.0, "exit_time": when.isoformat()}
-        if hit_t2:
-            gross_r = abs(t2 - entry) / risk
-            return {"outcome": "T2_HIT", "r_multiple": round(gross_r - _cost_r(entry, risk, slippage_bps, cost_bps), 3), "exit_time": when.isoformat()}
-        if hit_t1:
-            t1_hit_ever = True
-            # Conservative baseline exits fully at T1; T2 rate is still observable only when T2 is hit first in a candle.
-            gross_r = abs(t1 - entry) / risk
-            return {"outcome": "T1_HIT", "r_multiple": round(gross_r - _cost_r(entry, risk, slippage_bps, cost_bps), 3), "exit_time": when.isoformat()}
-        if hit_stop:
-            return {"outcome": "SL_HIT", "r_multiple": round(-1.0 - _cost_r(entry, risk, slippage_bps, cost_bps), 3), "exit_time": when.isoformat()}
+        # With OHLC-only data the intrabar sequence is unknowable when stop and target
+        # are both touched in the same candle, so do not fabricate an outcome.
+        if hit_stop and hit_t1:
+            return {"outcome": "AMBIGUOUS", "r_multiple": 0.0, "exit_time": when.isoformat(), "t2_touched": bool(hit_t2)}
 
-    return {"outcome": "OPEN", "r_multiple": 0.0, "exit_time": None, "t1_seen": t1_hit_ever}
+        # Frozen baseline exits 100% at T1. Even if the same candle later reaches T2,
+        # the booked result remains T1 because the position would already be closed.
+        if hit_t1:
+            gross_r = abs(t1 - entry) / risk
+            return {
+                "outcome": "T1_HIT",
+                "r_multiple": round(gross_r - _cost_r(entry, risk, slippage_bps, cost_bps), 3),
+                "exit_time": when.isoformat(),
+                "t2_touched": bool(hit_t2),
+            }
+        if hit_stop:
+            return {
+                "outcome": "SL_HIT",
+                "r_multiple": round(-1.0 - _cost_r(entry, risk, slippage_bps, cost_bps), 3),
+                "exit_time": when.isoformat(),
+                "t2_touched": False,
+            }
+
+    return {"outcome": "OPEN", "r_multiple": 0.0, "exit_time": None, "t2_touched": False}
 
 
 def _cost_r(entry, risk, slippage_bps, cost_bps):
-    # Round-trip approximation, deliberately explicit and user-adjustable.
     round_trip_fraction = 2.0 * (max(0.0, slippage_bps) + max(0.0, cost_bps)) / 10000.0
     return (entry * round_trip_fraction) / risk if risk > 0 else 0.0
 
 
 def _summary(trades):
-    resolved = [t for t in trades if t["outcome"] in {"T1_HIT", "T2_HIT", "SL_HIT"}]
-    wins = [t for t in resolved if t["outcome"] in {"T1_HIT", "T2_HIT"}]
+    resolved = [t for t in trades if t["outcome"] in {"T1_HIT", "SL_HIT"}]
+    wins = [t for t in resolved if t["outcome"] == "T1_HIT"]
     losses = [t for t in resolved if t["outcome"] == "SL_HIT"]
     rs = [t["r_multiple"] for t in resolved]
     gross_wins = sum(max(0.0, r) for r in rs)
@@ -174,7 +180,8 @@ def _summary(trades):
         "losses": len(losses),
         "win_rate_pct": round((len(wins) / len(resolved) * 100), 2) if resolved else 0.0,
         "t1_hits": sum(t["outcome"] == "T1_HIT" for t in trades),
-        "t2_hits": sum(t["outcome"] == "T2_HIT" for t in trades),
+        "t2_hits": 0,
+        "t2_touched": sum(bool(t.get("t2_touched")) for t in trades),
         "sl_hits": sum(t["outcome"] == "SL_HIT" for t in trades),
         "ambiguous": sum(t["outcome"] == "AMBIGUOUS" for t in trades),
         "open": sum(t["outcome"] == "OPEN" for t in trades),
@@ -201,7 +208,6 @@ async def run_commodity_backtest(provider, symbol, days=30, min_rr=1.5, strength
     if not data["5m"]:
         raise RuntimeError(f"No 5m history returned for {contract['trading_symbol']}")
 
-    # Evaluate only on completed 15m bars. This is deterministic and avoids repeated intrabar entries.
     checkpoints = [_ts(row[0]) for row in data["15m"]]
     trades = []
     busy_until = None
@@ -258,6 +264,7 @@ async def run_commodity_backtest(provider, symbol, days=30, min_rr=1.5, strength
             "cost_bps_each_side": cost_bps,
             "overlapping_trades": False,
             "lookahead": False,
+            "exit_model": "100% at T1",
         },
         "summary": _summary(trades),
         "by_action": {
@@ -267,7 +274,7 @@ async def run_commodity_backtest(provider, symbol, days=30, min_rr=1.5, strength
         "trades": trades[-200:],
         "limitations": [
             "This is a single-current-contract window, not a continuous 6-12 month rolled futures series.",
-            "The baseline exits fully at T1 when T1 is touched before T2; it does not simulate partial exits.",
+            "The frozen baseline exits 100% at T1. T2 touched only records that the exit candle also extended to T2; it is not booked as a T2 profit.",
             "Brokerage, taxes and slippage are approximated using configurable basis-point costs rather than broker contract-note charges.",
         ],
     }
