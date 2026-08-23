@@ -7,7 +7,7 @@ import logging
 import traceback
 
 from .backtest import run_backtest
-from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
+from .commodities import commodity_candles, commodity_mtf_scan, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .external_context import external_market_context
 from .news import latest_market_news
 from .providers.factory import get_provider
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.12.0")
+app = FastAPI(title="AlphaPilot API", version="0.13.0")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -69,7 +69,7 @@ class BacktestRequest(BaseModel):
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.12.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.13.0","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
@@ -97,6 +97,10 @@ async def mcx_candles(symbol:str,timeframe:Literal["5m","15m","1h"]="5m"):
 @app.get("/v1/commodity/probe/{symbol}")
 async def mcx_probe(symbol:str):
     return await commodity_probe(get_provider(settings),symbol.upper())
+
+@app.get("/v1/commodity/scan/{symbol}")
+async def mcx_scan(symbol:str,min_risk_reward:float=1.5):
+    return await commodity_mtf_scan(get_provider(settings),symbol.upper(),min_risk_reward)
 
 @app.get("/v1/news")
 async def news(symbols:str,limit:int=3):
