@@ -54,6 +54,34 @@ COMMODITY_EVENT_TERMS = {
     },
 }
 
+COMMODITY_BULLISH_PHRASES = {
+    "CRUDEOIL": (
+        "oil rises", "oil prices rise", "crude rises", "crude prices rise", "brent rises", "wti rises",
+        "oil jumps", "oil surges", "crude jumps", "crude surges", "sanctions on iran", "supply disruption",
+        "supply disruptions", "output cut", "output cuts", "production cut", "production cuts", "inventory draw",
+        "inventories fall", "inventories drop", "hormuz disruption", "shipping disruption",
+    ),
+    "NATURALGAS": (
+        "natural gas futures rise", "natgas futures rise", "natural gas prices rise", "futures leap",
+        "futures jump", "futures surge", "output falls", "output drops", "production falls", "production drops",
+        "supply disruption", "supply disruptions", "hotter weather boosts", "cold weather boosts",
+        "power demand rises", "heating demand rises", "lng exports rise", "storage draw", "inventories fall",
+    ),
+}
+
+COMMODITY_BEARISH_PHRASES = {
+    "CRUDEOIL": (
+        "oil falls", "oil prices fall", "crude falls", "crude prices fall", "brent falls", "wti falls",
+        "oil drops", "oil slumps", "crude drops", "crude slumps", "output rises", "production rises",
+        "inventory build", "inventories rise", "inventories build", "demand falls", "demand declines",
+    ),
+    "NATURALGAS": (
+        "natural gas futures fall", "natgas futures fall", "natural gas prices fall", "futures drop",
+        "futures slump", "output rises", "production rises", "record output", "demand falls", "demand declines",
+        "storage build", "inventories rise", "warm weather", "warmer weather", "mild weather",
+    ),
+}
+
 
 def _sentiment(headline: str) -> str:
     text = headline.lower()
@@ -64,6 +92,17 @@ def _sentiment(headline: str) -> str:
     if negative > positive:
         return "BEARISH"
     return "NEUTRAL"
+
+
+def _commodity_sentiment(symbol: str, headline: str) -> str:
+    text = headline.lower()
+    bullish = sum(1 for phrase in COMMODITY_BULLISH_PHRASES.get(symbol, ()) if phrase in text)
+    bearish = sum(1 for phrase in COMMODITY_BEARISH_PHRASES.get(symbol, ()) if phrase in text)
+    if bullish > bearish:
+        return "BULLISH"
+    if bearish > bullish:
+        return "BEARISH"
+    return _sentiment(headline)
 
 
 def _published_iso(value: str | None) -> str | None:
@@ -131,7 +170,7 @@ async def _fetch_google_news(query: str, cache_key: str, limit: int, symbol_for_
                 "source": source,
                 "published_at": _published_iso(published_raw),
                 "url": link,
-                "sentiment": _sentiment(title),
+                "sentiment": _commodity_sentiment(symbol_for_tags, title) if symbol_for_tags else _sentiment(title),
                 "preferred_source": _source_rank(source) < len(PREFERRED_SOURCES),
             }
             if symbol_for_tags:
@@ -188,7 +227,8 @@ async def latest_commodity_news(symbol: str, limit: int = 4) -> dict:
     normalized = symbol.strip().upper()
     if normalized not in COMMODITY_QUERIES:
         raise ValueError(f"Unsupported commodity news symbol: {normalized}")
-    rows = await _fetch_google_news(COMMODITY_QUERIES[normalized], f"commodity:{normalized}", max(1, min(limit, 6)), normalized)
+    # Version the cache key so sentiment-rule changes do not serve stale classifications.
+    rows = await _fetch_google_news(COMMODITY_QUERIES[normalized], f"commodity:v2:{normalized}", max(1, min(limit, 6)), normalized)
     tagged = sorted({tag for row in rows for tag in row.get("event_tags", [])})
     return {
         "provider": "Google News RSS",
