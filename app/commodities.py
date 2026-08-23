@@ -50,6 +50,13 @@ def _row_matches_symbol(row, symbol, today):
     return expiry
 
 
+def _response_error(response):
+    body = response.text.strip()
+    if len(body) > 500:
+        body = body[:500] + "…"
+    return f"HTTP {response.status_code}: {body or response.reason_phrase}"
+
+
 async def _download_instrument_master_to_tempfile():
     fd, path = tempfile.mkstemp(prefix="alphapilot-groww-", suffix=".csv")
     os.close(fd)
@@ -135,32 +142,67 @@ async def commodity_quote(provider, symbol, contract=None):
 async def commodity_candles(provider, symbol, timeframe="5m", contract=None):
     contract = contract or await resolve_nearest_mcx_future(symbol)
     interval_map = {
-        "5m": ("5minute", 7),
-        "15m": ("15minute", 14),
-        "1h": ("1hour", 60),
+        "5m": ("5minute", 5, 7),
+        "15m": ("15minute", 15, 14),
+        "1h": ("1hour", 60, 60),
     }
-    candle_interval, days = interval_map.get(timeframe, ("5minute", 7))
+    candle_interval, legacy_minutes, days = interval_map.get(timeframe, ("5minute", 5, 7))
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     start = now - timedelta(days=days)
-    params = {
+    start_text = start.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    headers = await provider._headers()
+    attempts = []
+
+    modern_params = {
         "exchange": contract["exchange"],
         "segment": contract["segment"],
         "groww_symbol": contract["groww_symbol"],
-        "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "end_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "start_time": start_text,
+        "end_time": end_text,
         "candle_interval": candle_interval,
     }
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
+        modern = await client.get(
             f"{provider.BASE_URL}/v1/historical/candles",
-            headers=await provider._headers(),
-            params=params,
+            headers=headers,
+            params=modern_params,
         )
-    response.raise_for_status()
-    data = response.json()
-    payload = data.get("payload", data)
-    candles = payload.get("candles", []) if isinstance(payload, dict) else []
-    return {"provider": "GROWW", "contract": contract, "timeframe": timeframe, "candles": candles}
+    if modern.status_code == 200:
+        data = modern.json()
+        payload = data.get("payload", data)
+        candles = payload.get("candles", []) if isinstance(payload, dict) else []
+        if candles:
+            return {"provider": "GROWW", "contract": contract, "timeframe": timeframe, "candles": candles, "historical_source": "backtesting"}
+        attempts.append({"endpoint": "/v1/historical/candles", "error": "200 response but no candles returned"})
+    else:
+        attempts.append({"endpoint": "/v1/historical/candles", "error": _response_error(modern)})
+
+    legacy_params = {
+        "exchange": contract["exchange"],
+        "segment": contract["segment"],
+        "trading_symbol": contract["trading_symbol"],
+        "start_time": start_text,
+        "end_time": end_text,
+        "interval_in_minutes": str(legacy_minutes),
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        legacy = await client.get(
+            f"{provider.BASE_URL}/v1/historical/candle/range",
+            headers=headers,
+            params=legacy_params,
+        )
+    if legacy.status_code == 200:
+        data = legacy.json()
+        payload = data.get("payload", data)
+        candles = payload.get("candles", []) if isinstance(payload, dict) else []
+        if candles:
+            return {"provider": "GROWW", "contract": contract, "timeframe": timeframe, "candles": candles, "historical_source": "legacy-range", "attempts": attempts}
+        attempts.append({"endpoint": "/v1/historical/candle/range", "error": "200 response but no candles returned"})
+    else:
+        attempts.append({"endpoint": "/v1/historical/candle/range", "error": _response_error(legacy)})
+
+    raise RuntimeError(f"Groww returned no MCX historical candles. Attempts: {attempts}")
 
 
 async def commodity_probe(provider, symbol):
@@ -186,6 +228,7 @@ async def commodity_probe(provider, symbol):
         "quote_ok": quote_result is not None,
         "candles_ok": candle_result is not None and candle_count > 0,
         "candle_count": candle_count,
+        "historical_source": candle_result.get("historical_source") if candle_result else None,
         "quote": quote_result,
         "errors": errors,
         "ready_for_phase1": quote_result is not None and candle_result is not None and candle_count > 0,
