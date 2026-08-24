@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from statistics import mean
 
-from .backtest import _historical, _ts
+from .backtest import IST, _historical, _ts
 from .option_native_phase2 import _clean_rows, _num
 
 PATTERNS = (
@@ -128,8 +128,8 @@ def _summary(values: list[float], ambiguous: int) -> dict:
 
 
 async def run_candlestick_research(provider, symbols: list[str], start_date: str, end_date: str):
-    start = datetime.fromisoformat(start_date)
-    end = datetime.fromisoformat(end_date) + timedelta(hours=23, minutes=59)
+    start = datetime.fromisoformat(start_date).replace(tzinfo=IST)
+    end = datetime.fromisoformat(end_date).replace(tzinfo=IST) + timedelta(hours=23, minutes=59)
     if end < start:
         raise ValueError("end_date must be on or after start_date")
     if (end - start).days > 14:
