@@ -32,8 +32,6 @@ def _candidate_h_fill(rows, signal_i: int, stop: float, atr: float):
         low = float(rows[j][3])
         if low > limit:
             continue
-        # Same conservative rule used by Execution Structure v1: if the fill bar also
-        # crosses the structural stop, chronology is unknowable and the fill is excluded.
         if low <= stop:
             return {"status": "AMBIGUOUS_PREENTRY", "fill_i": j, "underlying_entry": limit}
         when = _ts(rows[j][0])
@@ -60,7 +58,6 @@ def _net_r_from_replay(replay: dict) -> float | None:
     risk_pct = replay.get("premium_risk_percent")
     if not isinstance(raw_r, (int, float)) or not isinstance(entry, (int, float)) or not isinstance(risk_pct, (int, float)) or risk_pct <= 0:
         return None
-    # round_trip_cost_bps is a total round-trip notional cost, converted to premium R.
     cost_fraction = ROUND_TRIP_COST_BPS / 10000.0
     risk_fraction = float(risk_pct) / 100.0
     cost_r = cost_fraction / risk_fraction
@@ -175,6 +172,8 @@ async def run_candidate_h_option_validator(provider, symbols: list[str], start_d
                 "premium_risk_percent": replay.get("premium_risk_percent"),
                 "gross_1r_outcome": scenario.get("outcome"),
                 "gross_r": scenario.get("r_multiple"),
+                "option_exit": scenario.get("exit_price"),
+                "option_exit_at": scenario.get("exit_at"),
                 "net_r": round(net_r, 3) if isinstance(net_r, (int, float)) else None,
                 "mfe_r": replay.get("mfe_r"),
                 "mae_r": replay.get("mae_r"),
