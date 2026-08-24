@@ -48,6 +48,24 @@ def _response_error(response):
     return f"HTTP {response.status_code}: {body or response.reason_phrase}"
 
 
+def _validate_quote_response(data):
+    if not isinstance(data, dict):
+        raise RuntimeError("Groww quote response is not a JSON object")
+    status = str(data.get("status") or "").upper()
+    if status and status != "SUCCESS":
+        raise RuntimeError(f"Groww quote status is {status}")
+    payload = data.get("payload", data)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Groww quote payload is missing")
+    try:
+        last_price = float(payload.get("last_price"))
+    except (TypeError, ValueError):
+        raise RuntimeError("Groww quote payload has no valid last_price")
+    if last_price <= 0:
+        raise RuntimeError("Groww quote last_price must be positive")
+    return payload, last_price
+
+
 async def _download_instrument_master_to_tempfile():
     fd, path = tempfile.mkstemp(prefix="alphapilot-groww-", suffix=".csv")
     os.close(fd)
@@ -89,7 +107,10 @@ async def commodity_quote(provider, symbol, contract=None):
     contract = contract or await resolve_nearest_mcx_future(symbol)
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.get(f"{provider.BASE_URL}/v1/live-data/quote",headers=await provider._headers(),params={"exchange":contract["exchange"],"segment":contract["segment"],"trading_symbol":contract["trading_symbol"]})
-    response.raise_for_status(); return {"provider":"GROWW","contract":contract,"data":response.json()}
+    response.raise_for_status()
+    data = response.json()
+    payload, last_price = _validate_quote_response(data)
+    return {"provider":"GROWW","contract":contract,"data":data,"validation":{"status":"PASS","last_price":last_price,"payload_keys":sorted(payload.keys())}}
 
 
 async def commodity_candles(provider, symbol, timeframe="5m", contract=None):
@@ -224,4 +245,6 @@ async def commodity_probe(provider, symbol):
     try: candle_result=await commodity_candles(provider,symbol,"5m",contract)
     except Exception as exc: errors.append({"check":"candles","error":str(exc)})
     candle_count=len(candle_result.get("candles",[])) if candle_result else 0
-    return {"symbol":symbol.upper(),"contract":contract,"quote_ok":quote_result is not None,"candles_ok":candle_result is not None and candle_count>0,"candle_count":candle_count,"historical_source":candle_result.get("historical_source") if candle_result else None,"quote":quote_result,"errors":errors,"ready_for_phase1":quote_result is not None and candle_result is not None and candle_count>0}
+    quote_ok=quote_result is not None and quote_result.get("validation",{}).get("status")=="PASS"
+    candles_ok=candle_result is not None and candle_count>0
+    return {"symbol":symbol.upper(),"contract":contract,"quote_ok":quote_ok,"candles_ok":candles_ok,"candle_count":candle_count,"historical_source":candle_result.get("historical_source") if candle_result else None,"quote":quote_result,"errors":errors,"ready_for_phase1":quote_ok and candles_ok}
