@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from .news import _fetch_google_news
+from .official_signals import official_signals
 
 TOPICS = {
     "INDIA_MACRO": 'India (RBI OR SEBI OR inflation OR GDP OR rupee OR budget OR government policy) markets when:2d',
@@ -110,7 +111,7 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
     all_rows: list[dict] = []
     dropped_irrelevant = 0
     for name, query in TOPICS.items():
-        raw = await _fetch_google_news(query, f"global-intelligence:v1.1:{name}", min(12, limit * 2))
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.2:{name}", min(12, limit * 2))
         enriched: list[dict] = []
         for row in raw:
             headline = str(row.get("headline", ""))
@@ -130,10 +131,11 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
         topics[name] = enriched[:limit]
         all_rows.extend(topics[name])
 
+    official = await official_signals(min(limit, 4))
     risk_state, risk_score = _risk_state(all_rows)
     high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_1",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_2",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -141,12 +143,14 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
         "risk_score": risk_score,
         "topics": topics,
         "high_impact": high_impact[:12],
+        "official_signals": official,
         "quality": {
             "accepted_items": len(all_rows),
             "dropped_irrelevant": dropped_irrelevant,
             "tier_1_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_1"),
             "tier_2_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_2"),
             "tier_3_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_3"),
+            "official_signal_items": len(official.get("items", [])),
         },
-        "method_note": "Global Intelligence v1.1 filters off-topic headlines, ranks source quality and weights risk context by source tier and impact. It remains research context only and cannot authorize or veto production trades.",
+        "method_note": "Global Intelligence v1.2 adds Official Signals & Leader Watch for speeches, official statements, policy releases and corroborated references to verified official social posts. It remains research context only and cannot authorize or veto production trades.",
     }
