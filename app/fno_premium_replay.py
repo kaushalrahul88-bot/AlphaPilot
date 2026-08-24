@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -82,21 +82,14 @@ def _simulate(candles, entry_index: int, entry: float, stop: float, t1: float, t
         when = _ts(c[0])
         if not when or when.date() != entry_day:
             break
-        high, low, close = float(c[2]), float(c[3]), float(c[4])
+        high, low = float(c[2]), float(c[3])
         max_price = max(max_price, high)
         min_price = min(min_price, low)
         hit_stop = low <= stop
         hit_t1 = high >= t1
         hit_t2 = high >= t2
         if hit_stop and (hit_t1 or hit_t2):
-            return {
-                "outcome": "AMBIGUOUS",
-                "exit_price": None,
-                "exit_at": when.isoformat(),
-                "reason": "The same 5-minute candle touched both the premium stop and a target; intrabar order is unknown.",
-                "max_price": max_price,
-                "min_price": min_price,
-            }
+            return {"outcome": "AMBIGUOUS", "exit_price": None, "exit_at": when.isoformat(), "reason": "The same 5-minute candle touched both the premium stop and a target; intrabar order is unknown.", "max_price": max_price, "min_price": min_price}
         if hit_t2:
             return {"outcome": "T2", "exit_price": t2, "exit_at": when.isoformat(), "max_price": max_price, "min_price": min_price}
         if hit_t1:
@@ -109,35 +102,17 @@ def _simulate(candles, entry_index: int, entry: float, stop: float, t1: float, t
     return {"outcome": "NO_EXIT", "exit_price": entry, "exit_at": None, "max_price": max_price, "min_price": min_price}
 
 
-async def replay_option_trade(
-    provider,
-    symbol: str,
-    expiry: str,
-    strike: float,
-    option_type: str,
-    trade_date: str,
-    entry_time: str,
-    min_rr: float = 1.5,
-):
+async def replay_option_trade(provider, symbol: str, expiry: str, strike: float, option_type: str, trade_date: str, entry_time: str, min_rr: float = 1.5, resolved_contract: dict | None = None):
     option_type = option_type.upper().strip()
     if option_type not in {"CE", "PE"}:
         raise ValueError("option_type must be CE or PE")
     signal_at = _parse_entry_at(trade_date, entry_time)
-    contract = await _resolve_option_contract(symbol, expiry, strike, option_type)
+    contract = resolved_contract or await _resolve_option_contract(symbol, expiry, strike, option_type)
     if not contract or not contract.get("groww_symbol"):
-        return {
-            "status": "CONTRACT_NOT_FOUND",
-            "symbol": symbol.upper(),
-            "expiry": expiry,
-            "strike": strike,
-            "option_type": option_type,
-            "message": "Exact option contract could not be resolved from Groww's current instrument master.",
-        }
+        return {"status": "CONTRACT_NOT_FOUND", "symbol": symbol.upper(), "expiry": expiry, "strike": strike, "option_type": option_type, "message": "Exact option contract could not be resolved from Groww's current instrument master."}
     candles = await _historical_option_day(provider, contract, trade_date, "5minute")
     if not candles:
         return {"status": "NO_CANDLES", "contract": contract, "trade_date": trade_date, "message": "No historical 5-minute premium candles were returned for the selected trade date."}
-
-    # Enter on the first completed market interval strictly after the signal timestamp.
     entry_index = next((i for i, c in enumerate(candles) if (_ts(c[0]) and _ts(c[0]) > signal_at)), None)
     if entry_index is None:
         return {"status": "NO_ENTRY_CANDLE", "contract": contract, "trade_date": trade_date, "signal_at": signal_at.isoformat()}
@@ -146,7 +121,6 @@ async def replay_option_trade(
     entry = float(entry_candle[1])
     if entry <= 0:
         return {"status": "INVALID_ENTRY", "contract": contract, "entry_candle": entry_candle}
-
     rr = max(1.0, float(min_rr))
     risk_fraction = _risk_fraction(entry)
     risk = entry * risk_fraction
@@ -155,9 +129,7 @@ async def replay_option_trade(
     t2 = entry + risk * max(2.0, rr + 0.5)
     sim = _simulate(candles, entry_index, entry, stop, t1, t2)
     exit_price = sim.get("exit_price")
-    r_multiple = None
-    if isinstance(exit_price, (int, float)) and risk > 0:
-        r_multiple = (float(exit_price) - entry) / risk
+    r_multiple = (float(exit_price) - entry) / risk if isinstance(exit_price, (int, float)) and risk > 0 else None
     mfe_r = max(0.0, (float(sim["max_price"]) - entry) / risk) if risk > 0 else None
     mae_r = max(0.0, (entry - float(sim["min_price"])) / risk) if risk > 0 else None
     return {
@@ -181,10 +153,5 @@ async def replay_option_trade(
         "mae_r": round(mae_r, 3) if mae_r is not None else None,
         "candles_available": len(candles),
         "ambiguity_reason": sim.get("reason"),
-        "limitations": [
-            "This uses actual Groww historical option-premium OHLC candles for the exact contract.",
-            "Entry is the next 5-minute candle open after the supplied signal time to avoid look-ahead.",
-            "If stop and target occur in the same 5-minute candle, the trade is marked AMBIGUOUS rather than assuming an intrabar order.",
-            "Historical bid/ask spread, brokerage, taxes and slippage are not yet deducted.",
-        ],
+        "limitations": ["This uses actual Groww historical option-premium OHLC candles for the exact contract.", "Entry is the next 5-minute candle open after the supplied signal time to avoid look-ahead.", "If stop and target occur in the same 5-minute candle, the trade is marked AMBIGUOUS rather than assuming an intrabar order.", "Historical bid/ask spread, brokerage, taxes and slippage are not yet deducted."],
     }
