@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .candidate_validator import run_candidate_validator
+from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .main import app, settings, _safe_upstream_error
 from .market_regime_research import run_market_regime_research
@@ -44,6 +45,16 @@ class CandlestickResearchRequest(BaseModel):
     end_date: str
 
 
+class CandidateHOptionRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: [
+        "RELIANCE", "HDFCBANK", "ICICIBANK", "SBIN", "TCS", "INFY",
+        "TATASTEEL", "MARUTI", "AXISBANK", "KOTAKBANK", "LT", "HINDALCO",
+    ])
+    start_date: str
+    end_date: str
+    max_signals: int = 80
+
+
 @app.post("/v1/research/market-regime")
 async def market_regime_research(request: MarketRegimeResearchRequest):
     symbols = [s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
@@ -84,3 +95,16 @@ async def candlestick_discovery(request: CandlestickResearchRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         _safe_upstream_error("candlestick discovery", exc)
+
+
+@app.post("/v1/research/candidate-h-option-oos")
+async def candidate_h_option_oos(request: CandidateHOptionRequest):
+    symbols = [s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:
+        return await run_candidate_h_option_validator(
+            get_provider(settings), symbols, request.start_date, request.end_date, request.max_signals,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _safe_upstream_error("Candidate H option OOS", exc)
