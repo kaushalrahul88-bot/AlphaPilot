@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from .cross_assets import cross_asset_snapshot
 from .gift_nifty_research import gift_nifty_research
+from .groww_gift_discovery import groww_gift_discovery
 from .news import _fetch_google_news
 from .official_signals import official_signals
 
@@ -106,7 +107,7 @@ def _dedupe(rows: list[dict]) -> list[dict]:
 async def global_intelligence(limit_per_topic: int = 5) -> dict:
     limit = max(2, min(int(limit_per_topic), 8)); topics: dict[str, list[dict]] = {}; all_rows: list[dict] = []; dropped_irrelevant = 0; global_seen: set[str] = set()
     for name, query in TOPICS.items():
-        raw = await _fetch_google_news(query, f"global-intelligence:v1.7:{name}", min(14, limit * 3)); enriched: list[dict] = []
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.8:{name}", min(14, limit * 3)); enriched: list[dict] = []
         for row in raw:
             headline = str(row.get("headline", "")); key = " ".join(headline.lower().split())
             if not _relevant(name, headline): dropped_irrelevant += 1; continue
@@ -121,11 +122,12 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
     official = await official_signals(min(limit, 4))
     cross_assets = await cross_asset_snapshot()
     gift_nifty = await gift_nifty_research()
+    groww_gift = await groww_gift_discovery(None)
     risk_state, risk_score = _risk_state(all_rows)
     high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
     oq = official.get("quality", {})
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_7",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_8",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -136,6 +138,7 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
         "official_signals": official,
         "cross_assets": cross_assets,
         "gift_nifty_research": gift_nifty,
+        "groww_gift_discovery": groww_gift,
         "quality": {
             "accepted_items": len(all_rows), "dropped_irrelevant": dropped_irrelevant,
             "tier_1_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_1"),
@@ -145,5 +148,5 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
             "official_dropped_irrelevant": int(oq.get("dropped_irrelevant", 0)),
             "official_dropped_non_primary": int(oq.get("dropped_non_primary", 0)),
         },
-        "method_note": "Global Intelligence v1.7 adds a fixed cross-asset agreement research state and a separate official NSE IX GIFT NIFTY research collector. Neither can authorize, veto, or modify production trades.",
+        "method_note": "Global Intelligence v1.8 adds automatic Groww instrument-master discovery for explicit GIFT/NSEIX instruments. No ordinary NSE NIFTY instrument is relabelled as GIFT NIFTY. Research only; production rules remain unchanged.",
     }
