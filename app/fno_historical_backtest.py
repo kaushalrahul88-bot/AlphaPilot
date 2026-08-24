@@ -38,7 +38,11 @@ async def _available_contracts(symbol: str, expiry: str, option_type: str):
             continue
         strike = _as_float(row.get("strike_price"))
         if strike is not None and strike > 0:
-            rows.append({"strike": float(strike), "trading_symbol": row.get("trading_symbol") or row.get("symbol")})
+            rows.append({
+                "strike": float(strike),
+                "trading_symbol": row.get("trading_symbol") or row.get("symbol"),
+                "groww_symbol": row.get("groww_symbol") or row.get("groww_ticker"),
+            })
     return rows
 
 
@@ -96,8 +100,14 @@ async def run_true_premium_backtest(
                 entry_time=when.strftime("%H:%M"),
                 min_rr=min_rr,
             )
+            replay_contract = replay.get("contract") if isinstance(replay, dict) else None
+            option_contract = None
+            if isinstance(replay_contract, dict):
+                option_contract = replay_contract.get("trading_symbol") or replay_contract.get("groww_symbol")
+            option_contract = option_contract or selected.get("trading_symbol") or selected.get("groww_symbol")
             row = {
                 "symbol": symbol,
+                "timestamp": candidate["timestamp"],
                 "signal_at": candidate["timestamp"],
                 "direction": candidate.get("direction"),
                 "action": f"BUY {option_type}",
@@ -105,9 +115,14 @@ async def run_true_premium_backtest(
                 "underlying_entry": underlying_entry,
                 "expiry": expiry,
                 "strike": float(selected["strike"]),
+                "option_type": option_type,
+                "option_contract": option_contract,
                 "strike_selection": "NEAREST_LISTED_STRIKE_TO_UNDERLYING_ENTRY",
                 **replay,
             }
+            # Keep the historical scanner timestamp as the canonical signal timestamp
+            # even though replay also returns signal_at.
+            row["timestamp"] = candidate["timestamp"]
             trades.append(row)
         except Exception as exc:
             errors.append({"symbol": symbol, "timestamp": candidate.get("timestamp"), "stage": "PREMIUM_REPLAY", "error": str(exc)})
@@ -117,7 +132,7 @@ async def run_true_premium_backtest(
     losses = sum(1 for t in resolved if float(t["r_multiple"]) < 0)
     total_r = sum(float(t["r_multiple"]) for t in resolved)
     equity = peak = max_dd = 0.0
-    for t in sorted(resolved, key=lambda x: str(x.get("signal_at", ""))):
+    for t in sorted(resolved, key=lambda x: str(x.get("timestamp", ""))):
         equity += float(t["r_multiple"])
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
@@ -131,6 +146,7 @@ async def run_true_premium_backtest(
         "entry_before": entry_before,
         "candidate_signals": len(candidates),
         "summary": {
+            "trades": len(resolved),
             "replayed": len(trades),
             "resolved": len(resolved),
             "wins": wins,
