@@ -112,6 +112,7 @@ def _target_scenario(candles, entry_index: int, entry: float, stop: float, risk:
         "target_price": round(target, 2),
         "outcome": sim.get("outcome"),
         "r_multiple": round(r_multiple, 3) if r_multiple is not None else None,
+        "exit_price": round(float(exit_price), 2) if isinstance(exit_price, (int, float)) else None,
         "exit_at": sim.get("exit_at"),
         "ambiguous": sim.get("outcome") == "AMBIGUOUS",
     }
