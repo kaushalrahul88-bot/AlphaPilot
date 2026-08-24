@@ -8,6 +8,7 @@ import traceback
 
 from .backtest import run_backtest
 from .candidate_validator import run_candidate_validator
+from .candidate_b_validator import run_candidate_b_validator
 from .commodity_backtest import run_commodity_backtest
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
@@ -57,6 +58,7 @@ class OptionNativePhase2Request(BaseModel): symbols:list[str]=Field(default_fact
 class MarketRegimeResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; premium_min_risk_reward:float=1.5; max_trades_per_model:int=30; round_trip_cost_bps:float=10.0
 class EdgeDiscoveryRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; max_observations:int=600; round_trip_cost_bps:float=10.0; sample_every_bars:int=3
 class CandidateValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["MARUTI","EICHERMOT","INDUSINDBK","JSWSTEEL","TITAN","NESTLEIND","GRASIM","BRITANNIA","LT","DRREDDY","BAJFINANCE","M&M","SUNPHARMA","ADANIPORTS","KOTAKBANK"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
+class CandidateBValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
 class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; trade_date:str; entry_time:str="09:30"; min_risk_reward:float=1.5
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
@@ -119,6 +121,12 @@ async def candidate_validator(request:CandidateValidatorRequest):
     try:return await run_candidate_validator(get_provider(settings),symbols,request.start_date,request.end_date,request.round_trip_cost_bps,request.sample_every_bars,request.max_trades)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("candidate validator",exc)
+@app.post("/v1/research/candidate-b-validator")
+async def candidate_b_validator(request:CandidateBValidatorRequest):
+    symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:return await run_candidate_b_validator(get_provider(settings),symbols,request.start_date,request.end_date,request.round_trip_cost_bps,request.sample_every_bars,request.max_trades)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("candidate B validator",exc)
 @app.post("/v1/fno/history/probe")
 async def fno_history_probe(request:FNOHistoryProbeRequest):
     try:return await probe_historical_option_candles(get_provider(settings),request.symbol.upper(),request.expiry,request.strike,request.option_type,request.interval,request.lookback_days)
