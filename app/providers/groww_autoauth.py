@@ -11,11 +11,15 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Groww provider with process-wide daily authentication reuse.
+    """Groww provider with stable token reuse and safe dynamic-auth fallback.
 
-    Groww approval resets at 06:00 IST. A generated access token is shared by all
-    provider instances in the Render process so a 44-symbol scanner run does not
-    repeatedly regenerate the same daily token for each API request/batch.
+    A configured GROWW_ACCESS_TOKEN is preferred because it is already approved
+    for the current Groww session and survives Render process restarts. API
+    key+secret generation is used only when no explicit token is configured.
+
+    When dynamic generation is required, the generated token is cached
+    process-wide for the current Groww auth session so scanner batches do not
+    repeatedly authenticate.
     """
 
     _daily_token = None
@@ -61,7 +65,7 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
                 "timestamp": ts,
             }
             try:
-                async with httpx.AsyncClient(timeout=20) as client:
+                async with httpx.AsyncClient(timeout=12) as client:
                     response = await client.post(
                         f"{self.BASE_URL}/v1/token/api/access",
                         headers=headers,
@@ -83,39 +87,34 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
                 last_error = exc
 
             if attempt < 2:
-                await asyncio.sleep(1.0 * (attempt + 1))
+                await asyncio.sleep(0.75 * (attempt + 1))
 
         if last_error:
             raise last_error
         raise RuntimeError("Groww token generation failed")
 
     async def _get_access_token(self):
-        if self.api_key and self.api_secret:
-            session_key = self._auth_session_key()
-            cls = self.__class__
+        # Prefer the already-approved token supplied to Render. This avoids a
+        # fresh approval/token-generation round trip whenever Render redeploys.
+        if self.access_token:
+            return self.access_token
 
+        if not (self.api_key and self.api_secret):
+            raise RuntimeError("No Groww authentication credentials are configured")
+
+        session_key = self._auth_session_key()
+        cls = self.__class__
+
+        if cls._daily_token and cls._daily_auth_session == session_key:
+            return cls._daily_token
+
+        async with cls._auth_lock():
             if cls._daily_token and cls._daily_auth_session == session_key:
-                self._cached_token = cls._daily_token
-                self._cached_auth_session = session_key
                 return cls._daily_token
 
-            async with cls._auth_lock():
-                if cls._daily_token and cls._daily_auth_session == session_key:
-                    self._cached_token = cls._daily_token
-                    self._cached_auth_session = session_key
-                    return cls._daily_token
-
-                try:
-                    token = await self._generate_access_token()
-                except Exception:
-                    if self.access_token:
-                        return self.access_token
-                    raise
-
-                cls._daily_token = token
-                cls._daily_auth_session = session_key
-                self._cached_token = token
-                self._cached_auth_session = session_key
-                return token
-
-        return self.access_token
+            token = await self._generate_access_token()
+            cls._daily_token = token
+            cls._daily_auth_session = session_key
+            self._cached_token = token
+            self._cached_auth_session = session_key
+            return token
