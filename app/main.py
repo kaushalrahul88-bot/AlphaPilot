@@ -12,6 +12,7 @@ from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .external_context import external_market_context
+from .fno_history_probe import probe_historical_option_candles
 from .news import latest_commodity_news, latest_market_news
 from .providers.factory import get_provider
 
@@ -27,7 +28,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="AlphaPilot API", version="0.15.0")
+app = FastAPI(title="AlphaPilot API", version="0.16.0")
 parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.strip()]
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
@@ -72,7 +73,6 @@ def _safe_upstream_error(operation: str, exc: Exception):
         operation, source, status, upstream_path, exc,
     )
 
-    # Preserve rate-limit semantics so the frontend knows not to retry a 429.
     public_status = 429 if status == 429 else 502
     raise HTTPException(status_code=public_status, detail=detail)
 
@@ -112,6 +112,14 @@ class BacktestRequest(BaseModel):
     min_risk_reward:float=1.5
     entry_before:str|None=None
 
+class FNOHistoryProbeRequest(BaseModel):
+    symbol:str="RELIANCE"
+    expiry:str
+    strike:float
+    option_type:Literal["CE","PE"]
+    interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"
+    lookback_days:int=5
+
 class CommodityBacktestRequest(BaseModel):
     symbol:Literal["CRUDEOIL","NATURALGAS"]
     days:int=30
@@ -124,7 +132,7 @@ class CommodityBacktestRequest(BaseModel):
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.15.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.16.0","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str):
@@ -147,6 +155,18 @@ async def options(symbol:str,expiry:str|None=None):
         return await get_provider(settings).option_chain(symbol.upper(),expiry)
     except Exception as exc:
         _safe_upstream_error("option chain", exc)
+
+@app.post("/v1/fno/history/probe")
+async def fno_history_probe(request:FNOHistoryProbeRequest):
+    try:
+        return await probe_historical_option_candles(
+            get_provider(settings), request.symbol.upper(), request.expiry,
+            request.strike, request.option_type, request.interval, request.lookback_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _safe_upstream_error("historical F&O option probe", exc)
 
 @app.get("/v1/commodity/contract/{symbol}")
 async def commodity_contract(symbol:str):
