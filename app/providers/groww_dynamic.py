@@ -121,20 +121,54 @@ class DynamicGrowwProvider(GrowwProvider):
             projected += 0.5 * gamma * move * move
         return round(max(0.05, projected), 2)
 
-    def _recommended_option(self,symbol,expiry,raw_chain,technical):
+    @staticmethod
+    def _premium_risk_fraction(entry):
+        if entry < 10:
+            return 0.30
+        if entry < 30:
+            return 0.25
+        return 0.20
+
+    @classmethod
+    def _realistic_option_plan(cls, entry, min_rr):
+        if not isinstance(entry, (int, float)) or entry <= 0:
+            return None
+        try:
+            rr = max(1.0, float(min_rr))
+        except (TypeError, ValueError):
+            rr = 1.5
+        risk_fraction = cls._premium_risk_fraction(entry)
+        risk = entry * risk_fraction
+        stop = max(0.05, entry - risk)
+        target1 = entry + risk * rr
+        target2 = entry + risk * max(2.0, rr + 0.5)
+        return {
+            "stop": round(stop, 2),
+            "target1": round(target1, 2),
+            "target2": round(target2, 2),
+            "risk_fraction": risk_fraction,
+            "rr": rr,
+        }
+
+    def _recommended_option(self,symbol,expiry,raw_chain,technical,min_rr=1.5):
         if technical.get("status")!="SETUP" or technical.get("direction") not in ("LONG","SHORT"):return None
         spot,rows=self._normalize_option_chain(raw_chain)
         if not spot or not rows:return None
         atm=min(rows,key=lambda r:abs(r["strike"]-spot)); direction=technical["direction"]; option_type="CE" if direction=="LONG" else "PE"; prefix="ce" if option_type=="CE" else "pe"
         premium=self._as_float(atm.get(f"{prefix}_ltp")); greeks=self._option_greeks_for_strike(raw_chain,atm["strike"],option_type); delta=greeks.get("delta"); gamma=greeks.get("gamma")
-        option_entry=self._project_option_premium(premium,spot,self._as_float(technical.get("entry")),delta,gamma)
-        option_stop=self._project_option_premium(premium,spot,self._as_float(technical.get("stop_loss")),delta,gamma)
-        option_target1=self._project_option_premium(premium,spot,self._as_float(technical.get("target1")),delta,gamma)
-        option_target2=self._project_option_premium(premium,spot,self._as_float(technical.get("target2")),delta,gamma)
+        raw_entry=self._project_option_premium(premium,spot,self._as_float(technical.get("entry")),delta,gamma)
+        raw_stop=self._project_option_premium(premium,spot,self._as_float(technical.get("stop_loss")),delta,gamma)
+        raw_target1=self._project_option_premium(premium,spot,self._as_float(technical.get("target1")),delta,gamma)
+        raw_target2=self._project_option_premium(premium,spot,self._as_float(technical.get("target2")),delta,gamma)
+        option_entry=raw_entry if isinstance(raw_entry,(int,float)) and raw_entry>0 else premium
+        plan=self._realistic_option_plan(option_entry,min_rr)
+        option_stop=plan["stop"] if plan else None
+        option_target1=plan["target1"] if plan else None
+        option_target2=plan["target2"] if plan else None
         projection_ready=all(isinstance(v,(int,float)) and v>0 for v in (option_entry,option_stop,option_target1))
         if projection_ready:
             projection_ready = option_stop < option_entry and option_target1 > option_entry
-        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":premium,"option_entry":option_entry,"option_stop_loss":option_stop,"option_target1":option_target1,"option_target2":option_target2,"option_plan_ready":projection_ready,"projection_method":"Live option premium projected to the underlying entry/SL/targets using current delta and gamma. Theta/IV changes are not forecast.","delta":delta,"gamma":gamma,"theta":greeks.get("theta"),"vega":greeks.get("vega"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"underlying_entry":technical.get("entry"),"underlying_stop_loss":technical.get("stop_loss"),"underlying_target1":technical.get("target1"),"underlying_target2":technical.get("target2"),"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Option entry/SL/targets are Greek-based estimates, not guaranteed future premiums. Verify the live option price and spread before execution."}
+        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":premium,"option_entry":option_entry,"option_stop_loss":option_stop,"option_target1":option_target1,"option_target2":option_target2,"option_plan_ready":projection_ready,"projection_method":"Execution levels use a premium-based intraday risk band: max premium loss is 30% below ₹10, 25% from ₹10-₹30, and 20% above ₹30. T1 uses the requested minimum R:R and T2 uses at least 2R. Delta/gamma projections are retained as diagnostics only.","premium_risk_fraction":plan["risk_fraction"] if plan else None,"raw_greek_stop":raw_stop,"raw_greek_target1":raw_target1,"raw_greek_target2":raw_target2,"delta":delta,"gamma":gamma,"theta":greeks.get("theta"),"vega":greeks.get("vega"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"underlying_entry":technical.get("entry"),"underlying_stop_loss":technical.get("stop_loss"),"underlying_target1":technical.get("target1"),"underlying_target2":technical.get("target2"),"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Option execution levels are premium-based risk controls, not forecasts of future premium. Greek projections are diagnostic only; verify live price and spread before execution."}
 
     def _apply_external_context(self,result,external):
         technical=result.get("technical",{}); direction=technical.get("direction")
@@ -163,14 +197,14 @@ class DynamicGrowwProvider(GrowwProvider):
         session=self._market_session();result["market_session"]=session;result["execution_ready"]=False;result["execution_blockers"]=[]
         if result.get("status")=="SETUP":
             technical=result.get("technical",{})
-            chain=await self.option_chain(symbol,result.get("expiry"));option=self._recommended_option(symbol,chain["expiry"],chain["data"],technical);result["recommended_option"]=option
+            chain=await self.option_chain(symbol,result.get("expiry"));option=self._recommended_option(symbol,chain["expiry"],chain["data"],technical,min_rr);result["recommended_option"]=option
             if not self._trade_plan_complete(technical): result["execution_blockers"].append("DATA_INCOMPLETE: underlying entry/stop/target/R:R trade plan is missing or invalid.")
             if not session["execution_allowed"]:
                 if session["phase"]=="CLOSING_AUCTION":result["execution_blockers"].append("NSE Closing Auction Session is active (15:15-15:35 IST); fresh BEST TRADE entries are blocked.")
                 elif session["phase"]=="FNO_ONLY":result["execution_blockers"].append("F&O-only closing window is active (15:35-15:40 IST); fresh BEST TRADE entries are blocked.")
                 else:result["execution_blockers"].append("NSE equity derivatives market is closed; underlying and option premiums may be stale.")
             if not option or not isinstance(option.get("premium"),(int,float)) or option.get("premium",0)<=0:result["execution_blockers"].append("No valid positive option premium is available for the recommended contract.")
-            if option and option.get("option_plan_ready") is False: result["execution_blockers"].append("OPTION_PLAN_INCOMPLETE: live Greeks could not produce a valid option-premium entry/SL/target plan.")
+            if option and option.get("option_plan_ready") is False: result["execution_blockers"].append("OPTION_PLAN_INCOMPLETE: live premium could not produce a valid risk-controlled option entry/SL/target plan.")
             if not option or option.get("open_interest",0)<=0:result["execution_blockers"].append("Recommended contract has no reported open interest.")
             result["execution_ready"]=not result["execution_blockers"]
             if not result["execution_ready"]:result["status"]="NO_TRADE"
