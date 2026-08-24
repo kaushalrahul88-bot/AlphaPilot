@@ -9,6 +9,7 @@ import traceback
 from .backtest import run_backtest
 from .candidate_validator import run_candidate_validator
 from .candidate_b_validator import run_candidate_b_validator
+from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.28.2"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.28.3"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -69,6 +70,7 @@ class MarketRegimeResearchRequest(BaseModel): symbols:list[str]=Field(default_fa
 class EdgeDiscoveryRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; max_observations:int=600; round_trip_cost_bps:float=10.0; sample_every_bars:int=3
 class CandidateValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["MARUTI","EICHERMOT","INDUSINDBK","JSWSTEEL","TITAN","NESTLEIND","GRASIM","BRITANNIA","LT","DRREDDY","BAJFINANCE","M&M","SUNPHARMA","ADANIPORTS","KOTAKBANK"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
 class CandidateBValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
+class CandidateHOptionRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","HDFCBANK","ICICIBANK","SBIN","TCS","INFY","TATASTEEL","MARUTI","AXISBANK","KOTAKBANK","LT","HINDALCO"]); start_date:str; end_date:str; max_signals:int=80
 class MarketBrainContextBlockRequest(BaseModel): start_date:str; end_date:str; min_obs:int=20
 class MarketBrainSetupExpectancyRequest(BaseModel): start_date:str; end_date:str
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
@@ -79,7 +81,7 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.28.2","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.28.3","provider":settings.market_data_provider.upper()}
 @app.get("/v1/market/global-intelligence")
 async def market_global_intelligence(limit:int=5): return await global_intelligence(limit)
 @app.get("/v1/quote/{symbol}")
@@ -171,6 +173,12 @@ async def candidate_b_validator(request:CandidateBValidatorRequest):
     try:return await run_candidate_b_validator(get_provider(settings),symbols,request.start_date,request.end_date,request.round_trip_cost_bps,request.sample_every_bars,request.max_trades)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("candidate B validator",exc)
+@app.post("/v1/research/candidate-h-option-oos")
+async def candidate_h_option_oos(request:CandidateHOptionRequest):
+    symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:return await run_candidate_h_option_validator(get_provider(settings),symbols,request.start_date,request.end_date,request.max_signals)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Candidate H option OOS",exc)
 @app.post("/v1/fno/history/probe")
 async def fno_history_probe(request:FNOHistoryProbeRequest):
     try:return await probe_historical_option_candles(get_provider(settings),request.symbol.upper(),request.expiry,request.strike,request.option_type,request.interval,request.lookback_days)
