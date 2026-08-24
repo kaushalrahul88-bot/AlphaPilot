@@ -11,6 +11,7 @@ from .commodity_backtest import run_commodity_backtest
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
+from .edge_discovery import run_edge_discovery
 from .external_context import external_market_context
 from .fno_history_probe import probe_historical_option_candles
 from .fno_historical_backtest import run_true_premium_backtest
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.24.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.25.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
     try: upstream_path=getattr(getattr(request,"url",None),"path",None)
@@ -53,6 +54,7 @@ class StrategyPremiumReplayRequest(BaseModel): symbols:list[str]=Field(default_f
 class OptionNativeResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; research_target_r:float=1.0; premium_min_risk_reward:float=1.5; max_trades_per_strategy:int=30; round_trip_cost_bps:float=10.0
 class OptionNativePhase2Request(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; premium_min_risk_reward:float=1.5; max_trades_per_model:int=30; round_trip_cost_bps:float=10.0
 class MarketRegimeResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; premium_min_risk_reward:float=1.5; max_trades_per_model:int=30; round_trip_cost_bps:float=10.0
+class EdgeDiscoveryRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; max_observations:int=600; round_trip_cost_bps:float=10.0; sample_every_bars:int=3
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
 class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; trade_date:str; entry_time:str="09:30"; min_risk_reward:float=1.5
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
@@ -60,7 +62,7 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.24.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.25.0","provider":settings.market_data_provider.upper()}
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str):
     try:return await get_provider(settings).quote(symbol.upper())
@@ -103,6 +105,12 @@ async def market_regime_research(request:MarketRegimeResearchRequest):
     try:return await run_market_regime_research(get_provider(settings),symbols,request.start_date,request.end_date,request.premium_min_risk_reward,request.max_trades_per_model,request.round_trip_cost_bps)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("market regime research",exc)
+@app.post("/v1/research/edge-discovery")
+async def edge_discovery(request:EdgeDiscoveryRequest):
+    symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:return await run_edge_discovery(get_provider(settings),symbols,request.start_date,request.end_date,request.max_observations,request.round_trip_cost_bps,request.sample_every_bars)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("edge discovery",exc)
 @app.post("/v1/fno/history/probe")
 async def fno_history_probe(request:FNOHistoryProbeRequest):
     try:return await probe_historical_option_candles(get_provider(settings),request.symbol.upper(),request.expiry,request.strike,request.option_type,request.interval,request.lookback_days)
