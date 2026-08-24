@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from .market_brain_context_research import FEATURES
+FEATURES = ("breadth","flow","niftyPhase","bankPhase","leaders","financials","it","metals")
 
 
 def _transition_label(prev: dict, cur: dict, feature: str) -> str | None:
