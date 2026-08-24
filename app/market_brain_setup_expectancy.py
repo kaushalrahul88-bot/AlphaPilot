@@ -12,6 +12,8 @@ FEATURES = ("breadth","flow","niftyPhase","bankPhase","leaders","financials","it
 MIN_GROUP_OBS = 12
 DELTA_R_GATE = 0.20
 DELTA_WIN_GATE = 8.0
+CONTEXT_WINDOW_START = "09:45"
+CONTEXT_WINDOW_END = "14:30"
 
 
 def _summary(sample):
@@ -47,6 +49,14 @@ def _minute_key(value):
         return None
 
 
+def _inside_context_window(value):
+    key = _minute_key(value)
+    if not key:
+        return False
+    hhmm = key[-5:]
+    return CONTEXT_WINDOW_START <= hhmm <= CONTEXT_WINDOW_END
+
+
 async def run_market_brain_setup_expectancy(provider, start_date: str, end_date: str):
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date) + timedelta(hours=23, minutes=59)
@@ -55,7 +65,6 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
     if (end-start).days > 16:
         raise ValueError("Market Brain v4 blocks are limited to 16 calendar days")
 
-    # Include prior sessions so previous-close/VWAP state can be reconstructed on day one.
     context_start = start - timedelta(days=5)
     context_data, context_errors = {}, []
     async def fetch_one(symbol):
@@ -87,9 +96,11 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
 
     backtest = await run_backtest(provider, SETUP_SYMBOLS, start_date, end_date, 1.5, None)
     trades = backtest.get("trades", [])
+    eligible_trades = [t for t in trades if _inside_context_window(t.get("timestamp"))]
+    outside_window_trades = [t for t in trades if not _inside_context_window(t.get("timestamp"))]
     matched = []
     unmatched = []
-    for trade in trades:
+    for trade in eligible_trades:
         key = _minute_key(trade.get("timestamp"))
         ctx = context_by_ts.get(key) if key else None
         if not ctx:
@@ -128,20 +139,24 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
         "research_only":True,"production_rules_changed":False,
         "start_date":start_date,"end_date":end_date,"setup_symbols":SETUP_SYMBOLS,
         "setup_engine":"Existing historical scanner technical/MTF/safety logic; 1 trade per symbol/day maximum",
-        "context_observations":len(context_obs),"setup_trades":len(trades),"matched_trades":len(matched),
-        "match_rate_pct":round(len(matched)/len(trades)*100.0,1) if trades else 0.0,
+        "context_observations":len(context_obs),"setup_trades":len(trades),"eligible_setup_trades":len(eligible_trades),"matched_trades":len(matched),
+        "match_rate_pct":round(len(matched)/len(eligible_trades)*100.0,1) if eligible_trades else 0.0,
         "overall":overall,"baseline_by_direction":baseline,"effects":rows,
         "boosts":sum(x["state"]=="BOOST" for x in rows),"drags":sum(x["state"]=="DRAG" for x in rows),
         "context_errors":context_errors,"backtest_errors":backtest.get("errors",[]),
         "match_diagnostics":{
             "timestamp_key":"Asia/Kolkata minute",
-            "unmatched_count":len(unmatched),
+            "eligible_context_window":f"{CONTEXT_WINDOW_START}-{CONTEXT_WINDOW_END}",
+            "outside_context_window_count":len(outside_window_trades),
+            "outside_context_window_samples":[{"symbol":t.get("symbol"),"timestamp":t.get("timestamp")} for t in outside_window_trades[:5]],
+            "unmatched_eligible_count":len(unmatched),
             "unmatched_samples":unmatched[:5],
             "context_key_samples":list(context_by_ts.keys())[:5],
         },
         "fixed_effect_rules":{"min_group_trades":MIN_GROUP_OBS,"delta_avg_r":DELTA_R_GATE,"delta_win_rate_pp":DELTA_WIN_GATE},
         "limitations":[
             "This tests whether Market Brain context changes expectancy of existing historical scanner setups; it does not predict unconditional NIFTY direction.",
+            "Only scanner setups inside the frozen Market Brain context window (09:45-14:30 IST) are eligible for context matching; early/late setups are reported separately rather than silently counted as failed matches.",
             "P&L uses the existing underlying-price R backtest, not historical option-premium execution.",
             "Context features are the same frozen Market Brain breadth/flow/index-phase/sector-state descriptors.",
             "BOOST/DRAG thresholds are fixed before results and are not production gates.",
