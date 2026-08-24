@@ -141,12 +141,16 @@ class DynamicGrowwProvider(GrowwProvider):
         risk = entry * risk_fraction
         stop = max(0.05, entry - risk)
         target1 = entry + risk * rr
-        target2 = entry + risk * max(2.0, rr + 0.5)
+        target2_multiple = max(2.0, rr + 0.5)
+        target2 = entry + risk * target2_multiple
         return {
             "stop": round(stop, 2),
             "target1": round(target1, 2),
             "target2": round(target2, 2),
             "risk_fraction": risk_fraction,
+            "risk_percent": round(risk_fraction * 100, 1),
+            "target1_percent": round(risk_fraction * rr * 100, 1),
+            "target2_percent": round(risk_fraction * target2_multiple * 100, 1),
             "rr": rr,
         }
 
@@ -168,7 +172,7 @@ class DynamicGrowwProvider(GrowwProvider):
         projection_ready=all(isinstance(v,(int,float)) and v>0 for v in (option_entry,option_stop,option_target1))
         if projection_ready:
             projection_ready = option_stop < option_entry and option_target1 > option_entry
-        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":premium,"option_entry":option_entry,"option_stop_loss":option_stop,"option_target1":option_target1,"option_target2":option_target2,"option_plan_ready":projection_ready,"projection_method":"Execution levels use a premium-based intraday risk band: max premium loss is 30% below ₹10, 25% from ₹10-₹30, and 20% above ₹30. T1 uses the requested minimum R:R and T2 uses at least 2R. Delta/gamma projections are retained as diagnostics only.","premium_risk_fraction":plan["risk_fraction"] if plan else None,"raw_greek_stop":raw_stop,"raw_greek_target1":raw_target1,"raw_greek_target2":raw_target2,"delta":delta,"gamma":gamma,"theta":greeks.get("theta"),"vega":greeks.get("vega"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"underlying_entry":technical.get("entry"),"underlying_stop_loss":technical.get("stop_loss"),"underlying_target1":technical.get("target1"),"underlying_target2":technical.get("target2"),"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Option execution levels are premium-based risk controls, not forecasts of future premium. Greek projections are diagnostic only; verify live price and spread before execution."}
+        return {"underlying":symbol,"expiry":expiry,"direction":direction,"option_type":option_type,"strike":atm["strike"],"contract_label":f"{symbol} {expiry} {int(atm['strike'])} {option_type}","premium":premium,"option_entry":option_entry,"option_stop_loss":option_stop,"option_target1":option_target1,"option_target2":option_target2,"option_plan_ready":projection_ready,"projection_method":"Execution levels use a premium-based intraday risk band: max premium loss is 30% below ₹10, 25% from ₹10-₹30, and 20% above ₹30. T1 uses the requested minimum R:R and T2 uses at least 2R. Delta/gamma projections are retained as diagnostics only.","premium_risk_fraction":plan["risk_fraction"] if plan else None,"premium_risk_percent":plan["risk_percent"] if plan else None,"option_target1_percent":plan["target1_percent"] if plan else None,"option_target2_percent":plan["target2_percent"] if plan else None,"risk_model":"PREMIUM_PERCENT_INTRADAY","raw_greek_stop":raw_stop,"raw_greek_target1":raw_target1,"raw_greek_target2":raw_target2,"delta":delta,"gamma":gamma,"theta":greeks.get("theta"),"vega":greeks.get("vega"),"iv":atm.get(f"{prefix}_iv"),"open_interest":int(atm.get(f"{prefix}_oi") or 0),"volume":int(atm.get(f"{prefix}_volume") or 0),"underlying_ltp":spot,"underlying_entry":technical.get("entry"),"underlying_stop_loss":technical.get("stop_loss"),"underlying_target1":technical.get("target1"),"underlying_target2":technical.get("target2"),"selection_method":"ATM contract aligned with confirmed technical direction","warning":"Option execution levels are premium-based risk controls, not forecasts of future premium. Greek projections are diagnostic only; verify live price and spread before execution."}
 
     def _apply_external_context(self,result,external):
         technical=result.get("technical",{}); direction=technical.get("direction")
