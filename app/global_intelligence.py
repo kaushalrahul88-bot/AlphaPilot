@@ -104,7 +104,7 @@ def _dedupe(rows: list[dict]) -> list[dict]:
 async def global_intelligence(limit_per_topic: int = 5) -> dict:
     limit = max(2, min(int(limit_per_topic), 8)); topics: dict[str, list[dict]] = {}; all_rows: list[dict] = []; dropped_irrelevant = 0; global_seen: set[str] = set()
     for name, query in TOPICS.items():
-        raw = await _fetch_google_news(query, f"global-intelligence:v1.4:{name}", min(14, limit * 3)); enriched: list[dict] = []
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.5:{name}", min(14, limit * 3)); enriched: list[dict] = []
         for row in raw:
             headline = str(row.get("headline", "")); key = " ".join(headline.lower().split())
             if not _relevant(name, headline): dropped_irrelevant += 1; continue
@@ -118,8 +118,9 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
 
     official = await official_signals(min(limit, 4)); risk_state, risk_score = _risk_state(all_rows)
     high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
+    oq = official.get("quality", {})
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_4",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_5",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -134,7 +135,8 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
             "tier_2_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_2"),
             "tier_3_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_3"),
             "official_signal_items": len(official.get("items", [])),
-            "official_dropped_irrelevant": int(official.get("quality", {}).get("dropped_irrelevant", 0)),
+            "official_dropped_irrelevant": int(oq.get("dropped_irrelevant", 0)),
+            "official_dropped_non_primary": int(oq.get("dropped_non_primary", 0)),
         },
-        "method_note": "Global Intelligence v1.4 uses stronger topic anchors, cross-topic deduplication and stricter Official Signals page filtering. It remains research context only and cannot authorize or veto production trades.",
+        "method_note": "Global Intelligence v1.5 makes Official Signals primary-source only. Media reports remain in Global News, while generic data/calendar/research pages are excluded. Research context only; it cannot authorize or veto production trades.",
     }
