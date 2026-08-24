@@ -11,7 +11,7 @@ ASSETS = {
     "USDINR": {"ticker": "INR=X", "label": "USD/INR", "direction": "risk_inverse"},
     "DXY": {"ticker": "DX-Y.NYB", "label": "US Dollar Index", "direction": "risk_inverse"},
     "US_10Y": {"ticker": "^TNX", "label": "US 10Y yield", "direction": "risk_inverse"},
-    "BRENT": {"ticker": "BZ=F", "label": "Brent crude", "direction": "context"},
+    "BRENT": {"ticker": "BZ=F", "label": "Brent crude", "direction": "india_energy_inverse"},
     "NASDAQ_FUTURES": {"ticker": "NQ=F", "label": "Nasdaq futures", "direction": "risk_positive"},
 }
 
@@ -22,9 +22,35 @@ def _bias(change_pct: float | None, direction: str) -> str:
     up = change_pct > 0
     if direction == "risk_positive":
         return "RISK_ON" if up else "RISK_OFF"
-    if direction == "risk_inverse":
+    if direction in {"risk_inverse", "india_energy_inverse"}:
         return "RISK_OFF" if up else "RISK_ON"
-    return "UP" if up else "DOWN"
+    return "NEUTRAL"
+
+
+def _agreement(assets: dict[str, dict]) -> dict:
+    usable = [x for x in assets.values() if x.get("status") == "AVAILABLE" and x.get("bias") in {"RISK_ON", "RISK_OFF", "NEUTRAL"}]
+    risk_on = sum(1 for x in usable if x.get("bias") == "RISK_ON")
+    risk_off = sum(1 for x in usable if x.get("bias") == "RISK_OFF")
+    neutral = sum(1 for x in usable if x.get("bias") == "NEUTRAL")
+    lead = risk_on - risk_off
+    if len(usable) < 4:
+        state = "INSUFFICIENT_COVERAGE"
+    elif risk_on >= 4 and lead >= 2:
+        state = "RISK_ON_AGREEMENT"
+    elif risk_off >= 4 and lead <= -2:
+        state = "RISK_OFF_AGREEMENT"
+    else:
+        state = "MIXED_CROSS_ASSET"
+    return {
+        "state": state,
+        "risk_on": risk_on,
+        "risk_off": risk_off,
+        "neutral": neutral,
+        "usable": len(usable),
+        "score": lead,
+        "research_only": True,
+        "method_note": "Agreement is a fixed descriptive research state, not a trading gate. No threshold was tuned from Candidate A/B OOS results.",
+    }
 
 
 async def _fetch_one(client: httpx.AsyncClient, key: str, spec: dict) -> tuple[str, dict]:
@@ -79,5 +105,6 @@ async def cross_asset_snapshot() -> dict:
         "available": available,
         "total": len(assets),
         "assets": assets,
-        "method_note": "Public cross-asset snapshot for research context only. Values are never execution-grade and do not authorize or veto production trades.",
+        "agreement": _agreement(assets),
+        "method_note": "Public cross-asset snapshot for research context only. Values and agreement states are never execution-grade and do not authorize or veto production trades.",
     }
