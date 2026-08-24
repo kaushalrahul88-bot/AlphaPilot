@@ -102,6 +102,21 @@ def _simulate(candles, entry_index: int, entry: float, stop: float, t1: float, t
     return {"outcome": "NO_EXIT", "exit_price": entry, "exit_at": None, "max_price": max_price, "min_price": min_price}
 
 
+def _target_scenario(candles, entry_index: int, entry: float, stop: float, risk: float, target_r: float):
+    target = entry + risk * target_r
+    sim = _simulate(candles, entry_index, entry, stop, target, target)
+    exit_price = sim.get("exit_price")
+    r_multiple = (float(exit_price) - entry) / risk if isinstance(exit_price, (int, float)) and risk > 0 else None
+    return {
+        "target_r": target_r,
+        "target_price": round(target, 2),
+        "outcome": sim.get("outcome"),
+        "r_multiple": round(r_multiple, 3) if r_multiple is not None else None,
+        "exit_at": sim.get("exit_at"),
+        "ambiguous": sim.get("outcome") == "AMBIGUOUS",
+    }
+
+
 async def replay_option_trade(provider, symbol: str, expiry: str, strike: float, option_type: str, trade_date: str, entry_time: str, min_rr: float = 1.5, resolved_contract: dict | None = None):
     option_type = option_type.upper().strip()
     if option_type not in {"CE", "PE"}:
@@ -132,6 +147,12 @@ async def replay_option_trade(provider, symbol: str, expiry: str, strike: float,
     r_multiple = (float(exit_price) - entry) / risk if isinstance(exit_price, (int, float)) and risk > 0 else None
     mfe_r = max(0.0, (float(sim["max_price"]) - entry) / risk) if risk > 0 else None
     mae_r = max(0.0, (entry - float(sim["min_price"])) / risk) if risk > 0 else None
+    target_scenarios = {
+        "0.5R": _target_scenario(candles, entry_index, entry, stop, risk, 0.5),
+        "1.0R": _target_scenario(candles, entry_index, entry, stop, risk, 1.0),
+        "1.5R": _target_scenario(candles, entry_index, entry, stop, risk, 1.5),
+        "2.0R": _target_scenario(candles, entry_index, entry, stop, risk, 2.0),
+    }
     return {
         "status": "REPLAY_COMPLETE" if sim["outcome"] != "AMBIGUOUS" else "AMBIGUOUS",
         "mode": "TRUE_OPTION_PREMIUM_REPLAY",
@@ -151,7 +172,8 @@ async def replay_option_trade(provider, symbol: str, expiry: str, strike: float,
         "r_multiple": round(r_multiple, 3) if r_multiple is not None else None,
         "mfe_r": round(mfe_r, 3) if mfe_r is not None else None,
         "mae_r": round(mae_r, 3) if mae_r is not None else None,
+        "target_scenarios": target_scenarios,
         "candles_available": len(candles),
         "ambiguity_reason": sim.get("reason"),
-        "limitations": ["This uses actual Groww historical option-premium OHLC candles for the exact contract.", "Entry is the next 5-minute candle open after the supplied signal time to avoid look-ahead.", "If stop and target occur in the same 5-minute candle, the trade is marked AMBIGUOUS rather than assuming an intrabar order.", "Historical bid/ask spread, brokerage, taxes and slippage are not yet deducted."],
+        "limitations": ["This uses actual Groww historical option-premium OHLC candles for the exact contract.", "Entry is the next 5-minute candle open after the supplied signal time to avoid look-ahead.", "Target research scenarios (0.5R/1R/1.5R/2R) are replayed on the same exact 5-minute OHLC path; same-candle stop/target collisions are marked AMBIGUOUS rather than guessed.", "Historical bid/ask spread, brokerage, taxes and slippage are not yet deducted."],
     }
