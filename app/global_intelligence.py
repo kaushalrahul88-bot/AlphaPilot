@@ -15,14 +15,19 @@ TOPICS = {
     "GLOBAL_RISK": '(S&P 500 OR Nasdaq OR VIX OR Wall Street OR US stocks) when:2d',
 }
 
-RELEVANCE_TERMS = {
-    "INDIA_MACRO": ("rbi", "sebi", "india", "inflation", "gdp", "rupee", "budget", "government", "g-sec", "bond"),
-    "GLOBAL_MACRO": ("federal reserve", "fed", "ecb", "boj", "inflation", "rates", "yield", "dollar", "treasury"),
-    "GEOPOLITICS": ("iran", "israel", "russia", "ukraine", "china", "taiwan", "sanction", "ceasefire", "tariff", "war", "attack"),
-    "ENERGY": ("oil", "brent", "wti", "opec", "hormuz", "lng", "natural gas", "energy"),
+TOPIC_ANCHORS = {
+    "INDIA_MACRO": ("rbi", "sebi", "india", "indian", "rupee", "sbi", "government of india", "g-sec"),
+    "GLOBAL_MACRO": ("federal reserve", "fed ", "ecb", "boj", "treasury", "dollar index", "bond yield", "pce", "us inflation"),
+    "GEOPOLITICS": ("iran", "israel", "russia", "ukraine", "taiwan", "sanction", "ceasefire", "tariff", "trade war", "attack", "war"),
+    "ENERGY": ("oil", "brent", "wti", "opec", "hormuz", "lng", "natural gas", "petroleum"),
     "COMMODITIES": ("gold", "silver", "copper", "commodity", "commodities", "metal"),
-    "CHINA_ASIA": ("china", "chinese", "japan", "boj", "asia", "asian", "pmi", "stimulus"),
-    "GLOBAL_RISK": ("s&p", "nasdaq", "dow", "wall street", "vix", "us stock", "stocks", "equities"),
+    "CHINA_ASIA": ("china", "chinese", "japan", "boj", "nikkei", "hang seng", "asia markets", "asian markets", "china pmi", "china stimulus"),
+    "GLOBAL_RISK": ("s&p 500", "nasdaq", "dow", "wall street", "vix", "us stock", "us market", "us futures"),
+}
+
+TOPIC_NOISE = {
+    "INDIA_MACRO": ("gold rally", "gold prices", "silver", "jackson hole"),
+    "CHINA_ASIA": ("expo", "lululemon", "sporting goods", "investment in india"),
 }
 
 TIER_1_SOURCES = (
@@ -60,12 +65,12 @@ def _source_tier(source: str) -> str:
 
 def _relevant(topic: str, headline: str) -> bool:
     text = headline.lower()
-    return any(term in text for term in RELEVANCE_TERMS.get(topic, ()))
+    if any(term in text for term in TOPIC_NOISE.get(topic, ())): return False
+    return any(term in text for term in TOPIC_ANCHORS.get(topic, ()))
 
 
 def _impact(headline: str, source_tier: str) -> str:
-    text = headline.lower()
-    hits = sum(1 for term in HIGH_IMPACT_TERMS if term in text)
+    text = headline.lower(); hits = sum(1 for term in HIGH_IMPACT_TERMS if term in text)
     if hits >= 2 and source_tier != "TIER_3": return "HIGH"
     if hits >= 1: return "MEDIUM"
     return "LOW"
@@ -88,8 +93,7 @@ def _risk_state(rows: list[dict]) -> tuple[str, float]:
 
 
 def _dedupe(rows: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    seen: set[str] = set()
+    out: list[dict] = []; seen: set[str] = set()
     for row in rows:
         key = " ".join(str(row.get("headline", "")).lower().split())
         if not key or key in seen: continue
@@ -98,25 +102,24 @@ def _dedupe(rows: list[dict]) -> list[dict]:
 
 
 async def global_intelligence(limit_per_topic: int = 5) -> dict:
-    limit = max(2, min(int(limit_per_topic), 8))
-    topics: dict[str, list[dict]] = {}; all_rows: list[dict] = []; dropped_irrelevant = 0
+    limit = max(2, min(int(limit_per_topic), 8)); topics: dict[str, list[dict]] = {}; all_rows: list[dict] = []; dropped_irrelevant = 0; global_seen: set[str] = set()
     for name, query in TOPICS.items():
-        raw = await _fetch_google_news(query, f"global-intelligence:v1.3:{name}", min(12, limit * 2))
-        enriched: list[dict] = []
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.4:{name}", min(14, limit * 3)); enriched: list[dict] = []
         for row in raw:
-            headline = str(row.get("headline", ""))
+            headline = str(row.get("headline", "")); key = " ".join(headline.lower().split())
             if not _relevant(name, headline): dropped_irrelevant += 1; continue
+            if key in global_seen: continue
             tier = _source_tier(str(row.get("source", "")))
             enriched.append({**row, "topic": name, "source_tier": tier, "impact": _impact(headline, tier), "affected": AFFECTED.get(name, [])})
+            global_seen.add(key)
         enriched = _dedupe(enriched)
         enriched.sort(key=lambda r: ({"TIER_1": 0, "TIER_2": 1, "TIER_3": 2}.get(str(r.get("source_tier")), 3), {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(str(r.get("impact")), 3)))
         topics[name] = enriched[:limit]; all_rows.extend(topics[name])
 
-    official = await official_signals(min(limit, 4))
-    risk_state, risk_score = _risk_state(all_rows)
+    official = await official_signals(min(limit, 4)); risk_state, risk_score = _risk_state(all_rows)
     high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_3",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_4",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -133,5 +136,5 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
             "official_signal_items": len(official.get("items", [])),
             "official_dropped_irrelevant": int(official.get("quality", {}).get("dropped_irrelevant", 0)),
         },
-        "method_note": "Global Intelligence v1.3 keeps Official Signals market-relevant, ranks event impact and affected assets more precisely, and preserves news as research context only. It cannot authorize or veto production trades.",
+        "method_note": "Global Intelligence v1.4 uses stronger topic anchors, cross-topic deduplication and stricter Official Signals page filtering. It remains research context only and cannot authorize or veto production trades.",
     }
