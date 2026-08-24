@@ -5,54 +5,148 @@ from datetime import datetime, timezone
 from .news import _fetch_google_news
 
 TOPICS = {
-    "INDIA_MACRO": 'India RBI SEBI government economy inflation policy markets when:2d',
-    "GLOBAL_MACRO": 'Federal Reserve ECB BOJ inflation interest rates bond yields dollar global markets when:2d',
-    "GEOPOLITICS": 'geopolitics war sanctions ceasefire tariffs trade dispute Iran Israel Russia Ukraine China Taiwan when:2d',
-    "ENERGY": 'crude oil Brent WTI OPEC Hormuz LNG natural gas energy supply disruption when:2d',
-    "COMMODITIES": 'gold silver copper commodities prices global markets when:2d',
-    "CHINA_ASIA": 'China economy stimulus PMI Japan BOJ Asia markets when:2d',
-    "GLOBAL_RISK": 'S&P 500 Nasdaq VIX US stocks global risk markets when:2d',
+    "INDIA_MACRO": 'India (RBI OR SEBI OR inflation OR GDP OR rupee OR budget OR government policy) markets when:2d',
+    "GLOBAL_MACRO": '(Federal Reserve OR Fed OR ECB OR BOJ OR inflation OR interest rates OR bond yields OR dollar) markets when:2d',
+    "GEOPOLITICS": '(Iran OR Israel OR Russia OR Ukraine OR China OR Taiwan OR sanctions OR ceasefire OR tariffs OR war) markets when:2d',
+    "ENERGY": '(crude oil OR Brent OR WTI OR OPEC OR Hormuz OR LNG OR natural gas) when:2d',
+    "COMMODITIES": '(gold OR silver OR copper OR commodities) prices markets when:2d',
+    "CHINA_ASIA": '(China economy OR China stimulus OR China PMI OR Japan BOJ OR Asia markets) when:2d',
+    "GLOBAL_RISK": '(S&P 500 OR Nasdaq OR VIX OR Wall Street OR US stocks) when:2d',
 }
+
+RELEVANCE_TERMS = {
+    "INDIA_MACRO": ("rbi", "sebi", "india", "inflation", "gdp", "rupee", "budget", "government", "g-sec", "bond"),
+    "GLOBAL_MACRO": ("federal reserve", "fed", "ecb", "boj", "inflation", "rates", "yield", "dollar", "treasury"),
+    "GEOPOLITICS": ("iran", "israel", "russia", "ukraine", "china", "taiwan", "sanction", "ceasefire", "tariff", "war", "attack"),
+    "ENERGY": ("oil", "brent", "wti", "opec", "hormuz", "lng", "natural gas", "energy"),
+    "COMMODITIES": ("gold", "silver", "copper", "commodity", "commodities", "metal"),
+    "CHINA_ASIA": ("china", "chinese", "japan", "boj", "asia", "asian", "pmi", "stimulus"),
+    "GLOBAL_RISK": ("s&p", "nasdaq", "dow", "wall street", "vix", "us stock", "stocks", "equities"),
+}
+
+TIER_1_SOURCES = (
+    "reuters", "associated press", "ap news", "bloomberg", "financial times", "wall street journal",
+    "cnbc", "bbc", "the economic times", "business standard", "mint", "moneycontrol", "pib",
+)
+TIER_2_SOURCES = (
+    "fxstreet", "investing.com", "marketwatch", "barron's", "fortune", "forbes", "business insider",
+    "the hindu", "indian express", "hindustan times", "livemint", "energy now", "energynews",
+)
 
 HIGH_IMPACT_TERMS = (
     "war", "attack", "missile", "sanction", "tariff", "emergency", "rate cut", "rate hike",
     "federal reserve", "rbi", "opec", "hormuz", "ceasefire", "default", "crisis", "inflation",
 )
 
+AFFECTED = {
+    "INDIA_MACRO": ["NIFTY", "BANKNIFTY", "INR", "INDIA_RATES"],
+    "GLOBAL_MACRO": ["NIFTY", "IT", "BANKS", "USDINR", "GLOBAL_RISK"],
+    "GEOPOLITICS": ["NIFTY", "CRUDEOIL", "DEFENCE", "AIRLINES", "METALS"],
+    "ENERGY": ["CRUDEOIL", "ONGC", "OIL", "RELIANCE", "AIRLINES", "PAINTS"],
+    "COMMODITIES": ["METALS", "HINDALCO", "TATASTEEL", "HINDZINC"],
+    "CHINA_ASIA": ["METALS", "IT", "NIFTY", "ASIA_RISK"],
+    "GLOBAL_RISK": ["NIFTY", "BANKNIFTY", "IT", "GLOBAL_RISK"],
+}
 
-def _impact(headline: str) -> str:
+
+def _source_tier(source: str) -> str:
+    text = source.lower()
+    if any(name in text for name in TIER_1_SOURCES):
+        return "TIER_1"
+    if any(name in text for name in TIER_2_SOURCES):
+        return "TIER_2"
+    return "TIER_3"
+
+
+def _relevant(topic: str, headline: str) -> bool:
+    text = headline.lower()
+    return any(term in text for term in RELEVANCE_TERMS.get(topic, ()))
+
+
+def _impact(headline: str, source_tier: str) -> str:
     text = headline.lower()
     hits = sum(1 for term in HIGH_IMPACT_TERMS if term in text)
-    return "HIGH" if hits >= 2 else "MEDIUM" if hits == 1 else "LOW"
+    if hits >= 2 and source_tier != "TIER_3":
+        return "HIGH"
+    if hits >= 1:
+        return "MEDIUM"
+    return "LOW"
 
 
-def _risk_state(rows: list[dict]) -> str:
-    bull = sum(1 for r in rows if r.get("sentiment") == "BULLISH")
-    bear = sum(1 for r in rows if r.get("sentiment") == "BEARISH")
-    if bear >= bull + 3:
-        return "RISK_OFF"
-    if bull >= bear + 3:
-        return "RISK_ON"
-    return "NEUTRAL"
+def _risk_score(row: dict) -> float:
+    sentiment = row.get("sentiment")
+    if sentiment not in {"BULLISH", "BEARISH"}:
+        return 0.0
+    direction = 1.0 if sentiment == "BULLISH" else -1.0
+    impact_weight = {"HIGH": 3.0, "MEDIUM": 1.5, "LOW": 0.5}.get(str(row.get("impact")), 0.5)
+    source_weight = {"TIER_1": 1.0, "TIER_2": 0.65, "TIER_3": 0.2}.get(str(row.get("source_tier")), 0.2)
+    return direction * impact_weight * source_weight
+
+
+def _risk_state(rows: list[dict]) -> tuple[str, float]:
+    score = round(sum(_risk_score(r) for r in rows), 2)
+    if score <= -3.0:
+        return "RISK_OFF", score
+    if score >= 3.0:
+        return "RISK_ON", score
+    return "NEUTRAL", score
+
+
+def _dedupe(rows: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = " ".join(str(row.get("headline", "")).lower().split())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 async def global_intelligence(limit_per_topic: int = 5) -> dict:
     limit = max(2, min(int(limit_per_topic), 8))
     topics: dict[str, list[dict]] = {}
     all_rows: list[dict] = []
+    dropped_irrelevant = 0
     for name, query in TOPICS.items():
-        rows = await _fetch_google_news(query, f"global-intelligence:v1:{name}", limit)
-        enriched = [{**row, "topic": name, "impact": _impact(str(row.get("headline", "")))} for row in rows]
-        topics[name] = enriched
-        all_rows.extend(enriched)
-    high_impact = [r for r in all_rows if r.get("impact") == "HIGH"]
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.1:{name}", min(12, limit * 2))
+        enriched: list[dict] = []
+        for row in raw:
+            headline = str(row.get("headline", ""))
+            if not _relevant(name, headline):
+                dropped_irrelevant += 1
+                continue
+            tier = _source_tier(str(row.get("source", "")))
+            enriched.append({
+                **row,
+                "topic": name,
+                "source_tier": tier,
+                "impact": _impact(headline, tier),
+                "affected": AFFECTED.get(name, []),
+            })
+        enriched = _dedupe(enriched)
+        enriched.sort(key=lambda r: ({"TIER_1": 0, "TIER_2": 1, "TIER_3": 2}.get(str(r.get("source_tier")), 3), {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(str(r.get("impact")), 3)))
+        topics[name] = enriched[:limit]
+        all_rows.extend(topics[name])
+
+    risk_state, risk_score = _risk_state(all_rows)
+    high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_1",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "risk_state": _risk_state(all_rows),
+        "risk_state": risk_state,
+        "risk_score": risk_score,
         "topics": topics,
         "high_impact": high_impact[:12],
-        "method_note": "News is Market Brain context only. Sentiment and impact are research annotations and do not authorize or veto production trades.",
+        "quality": {
+            "accepted_items": len(all_rows),
+            "dropped_irrelevant": dropped_irrelevant,
+            "tier_1_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_1"),
+            "tier_2_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_2"),
+            "tier_3_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_3"),
+        },
+        "method_note": "Global Intelligence v1.1 filters off-topic headlines, ranks source quality and weights risk context by source tier and impact. It remains research context only and cannot authorize or veto production trades.",
     }
