@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import io
 from datetime import datetime
 
 import httpx
@@ -14,30 +13,44 @@ AUTO_EXPIRY_MAX_DTE_DAYS = 35
 
 
 async def _instrument_rows(symbols: list[str] | None = None):
-    """Download Groww instrument master once, but retain only relevant NSE F&O rows.
+    """Stream Groww's instrument master and retain only relevant NSE F&O rows.
 
-    The full master can be large enough to push Render's 512 MB free instance over its
-    memory limit when combined with historical candle arrays. Filtering while parsing
-    avoids keeping thousands of unrelated equity/commodity rows in memory.
+    Render's free worker is capped at 512 MB. Calling ``response.text`` on Groww's
+    full instrument CSV briefly holds both the response bytes and a decoded copy in
+    memory; historical candle arrays can then push the process over the limit. Parse
+    the CSV line-by-line instead so peak memory scales with the requested symbols,
+    not with the full instrument master.
     """
     wanted = {str(s).upper().strip() for s in (symbols or []) if str(s).strip()}
+    rows: list[dict] = []
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(INSTRUMENT_CSV_URL)
-        response.raise_for_status()
-        text = response.text
-    rows = []
-    for row in csv.DictReader(io.StringIO(text)):
-        if str(row.get("exchange", "")).upper() != "NSE":
-            continue
-        if str(row.get("segment", "")).upper() != "FNO":
-            continue
-        underlying = str(row.get("underlying_symbol", "")).upper().strip()
-        if wanted and underlying not in wanted:
-            continue
-        if str(row.get("instrument_type", "")).upper() not in {"CE", "PE"}:
-            continue
-        rows.append(row)
-    del text
+        async with client.stream("GET", INSTRUMENT_CSV_URL) as response:
+            response.raise_for_status()
+            fieldnames: list[str] | None = None
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                values = next(csv.reader([line]))
+                if fieldnames is None:
+                    fieldnames = [str(v).lstrip("\ufeff").strip() for v in values]
+                    continue
+                if not fieldnames:
+                    continue
+                if len(values) < len(fieldnames):
+                    values += [""] * (len(fieldnames) - len(values))
+                elif len(values) > len(fieldnames):
+                    values = values[: len(fieldnames)]
+                row = dict(zip(fieldnames, values))
+                if str(row.get("exchange", "")).upper() != "NSE":
+                    continue
+                if str(row.get("segment", "")).upper() != "FNO":
+                    continue
+                underlying = str(row.get("underlying_symbol", "")).upper().strip()
+                if wanted and underlying not in wanted:
+                    continue
+                if str(row.get("instrument_type", "")).upper() not in {"CE", "PE"}:
+                    continue
+                rows.append(row)
     return rows
 
 
@@ -120,8 +133,6 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
     all_candidates = list(directional.get("trades", []))
     all_candidates.sort(key=lambda x: str(x.get("timestamp", "")))
     candidates = all_candidates[:max_trades]
-    # Keep only instrument rows needed for this test universe. This materially
-    # lowers peak memory on Render's 512 MB free worker.
     master_rows = await _instrument_rows(symbols)
     contract_cache: dict[tuple[str, str, str], list[dict]] = {}
     trades = []
