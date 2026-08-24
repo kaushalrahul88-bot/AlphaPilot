@@ -35,17 +35,46 @@ TF = Literal["5m","15m","1h","1d"]
 
 
 def _safe_upstream_error(operation: str, exc: Exception):
-    """Return a browser-readable error without leaking Groww credentials."""
-    status = getattr(getattr(exc, "response", None), "status_code", None)
+    """Return browser-readable Groww diagnostics without leaking credentials."""
+    response = getattr(exc, "response", None)
+    request = getattr(exc, "request", None) or getattr(response, "request", None)
+    status = getattr(response, "status_code", None)
     text = str(exc)
-    if status:
-        detail = f"Groww {operation} failed with upstream HTTP {status}"
-    elif "timeout" in text.lower():
-        detail = f"Groww {operation} timed out"
+
+    upstream_path = None
+    try:
+        upstream_path = getattr(getattr(request, "url", None), "path", None)
+    except Exception:
+        upstream_path = None
+
+    if upstream_path and "/v1/token/api/access" in upstream_path:
+        source = "AUTH"
+    elif upstream_path and "/live-data/" in upstream_path:
+        source = "LIVE_DATA"
+    elif upstream_path and "/historical/" in upstream_path:
+        source = "HISTORICAL"
+    elif upstream_path and "/option-chain/" in upstream_path:
+        source = "OPTION_CHAIN"
     else:
-        detail = f"Groww {operation} failed: {exc.__class__.__name__}"
-    logger.error("Groww %s error status=%s error=%r", operation, status, exc)
-    raise HTTPException(status_code=502, detail=detail)
+        source = "UPSTREAM"
+
+    if status:
+        detail = f"Groww {operation} failed: {source} HTTP {status}"
+        if upstream_path:
+            detail += f" at {upstream_path}"
+    elif "timeout" in text.lower():
+        detail = f"Groww {operation} timed out ({source})"
+    else:
+        detail = f"Groww {operation} failed: {exc.__class__.__name__} ({source})"
+
+    logger.error(
+        "Groww %s error source=%s status=%s path=%s error=%r",
+        operation, source, status, upstream_path, exc,
+    )
+
+    # Preserve rate-limit semantics so the frontend knows not to retry a 429.
+    public_status = 429 if status == 429 else 502
+    raise HTTPException(status_code=public_status, detail=detail)
 
 
 class ScanRequest(BaseModel):
