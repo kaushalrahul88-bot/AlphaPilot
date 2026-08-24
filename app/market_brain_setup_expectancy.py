@@ -4,7 +4,7 @@ import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from .backtest import _historical, run_backtest
+from .backtest import IST, _historical, run_backtest
 from .market_brain_context_research import SYMBOLS, _build
 
 SETUP_SYMBOLS = ["RELIANCE","HDFCBANK","ICICIBANK","SBIN","TCS","INFY","TATASTEEL","MARUTI"]
@@ -33,6 +33,20 @@ def _effect_state(n, delta_r, delta_win):
     return "MIXED"
 
 
+def _minute_key(value):
+    """Normalize Groww candle and scanner timestamps to the same IST minute key."""
+    try:
+        raw = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=IST)
+        else:
+            dt = dt.astimezone(IST)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return None
+
+
 async def run_market_brain_setup_expectancy(provider, start_date: str, end_date: str):
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date) + timedelta(hours=23, minutes=59)
@@ -41,10 +55,12 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
     if (end-start).days > 16:
         raise ValueError("Market Brain v4 blocks are limited to 16 calendar days")
 
+    # Include prior sessions so previous-close/VWAP state can be reconstructed on day one.
+    context_start = start - timedelta(days=5)
     context_data, context_errors = {}, []
     async def fetch_one(symbol):
         try:
-            rows = await _historical(provider, symbol, "15m", start, end)
+            rows = await _historical(provider, symbol, "15m", context_start, end)
             return symbol, rows, None
         except Exception as exc:
             return symbol, [], f"{exc.__class__.__name__}: {exc}"
@@ -57,15 +73,27 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
                 context_errors.append({"symbol":symbol,"error":error})
         await asyncio.sleep(.15)
 
-    context_obs = _build(context_data)
-    context_by_ts = {str(x.get("ts")): x for x in context_obs}
+    raw_context_obs = _build(context_data)
+    context_obs = []
+    context_by_ts = {}
+    for ctx in raw_context_obs:
+        key = _minute_key(ctx.get("ts"))
+        if not key:
+            continue
+        dt = datetime.strptime(key, "%Y-%m-%d %H:%M")
+        if start <= dt <= end:
+            context_obs.append(ctx)
+            context_by_ts[key] = ctx
 
     backtest = await run_backtest(provider, SETUP_SYMBOLS, start_date, end_date, 1.5, None)
     trades = backtest.get("trades", [])
     matched = []
+    unmatched = []
     for trade in trades:
-        ctx = context_by_ts.get(str(trade.get("timestamp")))
+        key = _minute_key(trade.get("timestamp"))
+        ctx = context_by_ts.get(key) if key else None
         if not ctx:
+            unmatched.append({"symbol":trade.get("symbol"),"timestamp":trade.get("timestamp"),"normalized_key":key})
             continue
         matched.append({**trade, "context":ctx})
 
@@ -101,9 +129,16 @@ async def run_market_brain_setup_expectancy(provider, start_date: str, end_date:
         "start_date":start_date,"end_date":end_date,"setup_symbols":SETUP_SYMBOLS,
         "setup_engine":"Existing historical scanner technical/MTF/safety logic; 1 trade per symbol/day maximum",
         "context_observations":len(context_obs),"setup_trades":len(trades),"matched_trades":len(matched),
+        "match_rate_pct":round(len(matched)/len(trades)*100.0,1) if trades else 0.0,
         "overall":overall,"baseline_by_direction":baseline,"effects":rows,
         "boosts":sum(x["state"]=="BOOST" for x in rows),"drags":sum(x["state"]=="DRAG" for x in rows),
         "context_errors":context_errors,"backtest_errors":backtest.get("errors",[]),
+        "match_diagnostics":{
+            "timestamp_key":"Asia/Kolkata minute",
+            "unmatched_count":len(unmatched),
+            "unmatched_samples":unmatched[:5],
+            "context_key_samples":list(context_by_ts.keys())[:5],
+        },
         "fixed_effect_rules":{"min_group_trades":MIN_GROUP_OBS,"delta_avg_r":DELTA_R_GATE,"delta_win_rate_pp":DELTA_WIN_GATE},
         "limitations":[
             "This tests whether Market Brain context changes expectancy of existing historical scanner setups; it does not predict unconditional NIFTY direction.",
