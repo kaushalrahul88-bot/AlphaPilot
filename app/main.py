@@ -18,6 +18,7 @@ from .external_context import external_market_context
 from .fno_history_probe import probe_historical_option_candles
 from .fno_historical_backtest import run_true_premium_backtest
 from .fno_premium_replay import replay_option_trade
+from .global_intelligence import global_intelligence
 from .market_regime_research import run_market_regime_research
 from .news import latest_commodity_news, latest_market_news
 from .option_native_research import run_option_native_research
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.25.1"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.26.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
     try: upstream_path=getattr(getattr(request,"url",None),"path",None)
@@ -66,7 +67,9 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.25.1","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.26.0","provider":settings.market_data_provider.upper()}
+@app.get("/v1/market/global-intelligence")
+async def market_global_intelligence(limit:int=5): return await global_intelligence(limit)
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str):
     try:return await get_provider(settings).quote(symbol.upper())
