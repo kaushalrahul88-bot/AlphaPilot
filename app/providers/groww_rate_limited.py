@@ -18,6 +18,23 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
     _request_times = deque()
     _rate_lock = None
 
+    # Market Brain v2.2 research breadth universe. These are ordinary NSE cash
+    # instruments and this mapping only broadens data access; it does not change
+    # any production scan, setup, risk or execution rule.
+    MARKET_BREADTH_CASH_SYMBOLS = {
+        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN",
+        "AXISBANK", "KOTAKBANK", "BAJFINANCE", "LT", "BHARTIARTL", "ITC",
+        "MARUTI", "M&M", "TATAMOTORS", "SUNPHARMA", "DRREDDY", "CIPLA",
+        "HCLTECH", "WIPRO", "TATASTEEL", "JSWSTEEL", "HINDALCO", "ONGC",
+        "NTPC", "POWERGRID", "ADANIPORTS", "TITAN", "ASIANPAINT", "ULTRACEMCO",
+    }
+
+    def _instrument(self, symbol):
+        symbol = str(symbol).upper().strip()
+        if symbol in self.MARKET_BREADTH_CASH_SYMBOLS:
+            return "NSE", "CASH", symbol, f"NSE-{symbol}"
+        return super()._instrument(symbol)
+
     @classmethod
     def _lock(cls):
         if cls._rate_lock is None:
