@@ -13,11 +13,32 @@ from .fno_premium_replay import replay_option_trade
 AUTO_EXPIRY_MAX_DTE_DAYS = 35
 
 
-async def _instrument_rows():
+async def _instrument_rows(symbols: list[str] | None = None):
+    """Download Groww instrument master once, but retain only relevant NSE F&O rows.
+
+    The full master can be large enough to push Render's 512 MB free instance over its
+    memory limit when combined with historical candle arrays. Filtering while parsing
+    avoids keeping thousands of unrelated equity/commodity rows in memory.
+    """
+    wanted = {str(s).upper().strip() for s in (symbols or []) if str(s).strip()}
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(INSTRUMENT_CSV_URL)
         response.raise_for_status()
-    return list(csv.DictReader(io.StringIO(response.text)))
+        text = response.text
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        if str(row.get("exchange", "")).upper() != "NSE":
+            continue
+        if str(row.get("segment", "")).upper() != "FNO":
+            continue
+        underlying = str(row.get("underlying_symbol", "")).upper().strip()
+        if wanted and underlying not in wanted:
+            continue
+        if str(row.get("instrument_type", "")).upper() not in {"CE", "PE"}:
+            continue
+        rows.append(row)
+    del text
+    return rows
 
 
 def _available_expiries(rows, symbol: str, option_type: str, on_date):
@@ -25,8 +46,6 @@ def _available_expiries(rows, symbol: str, option_type: str, on_date):
     target_type = option_type.upper().strip()
     found = set()
     for row in rows:
-        if str(row.get("exchange", "")).upper() != "NSE" or str(row.get("segment", "")).upper() != "FNO":
-            continue
         if str(row.get("underlying_symbol", "")).upper().strip() != target_symbol:
             continue
         if str(row.get("instrument_type", "")).upper() != target_type:
@@ -47,10 +66,6 @@ def _available_contracts(rows, symbol: str, expiry: str, option_type: str):
     target_type = option_type.upper().strip()
     out = []
     for row in rows:
-        if str(row.get("exchange", "")).upper() != "NSE":
-            continue
-        if str(row.get("segment", "")).upper() != "FNO":
-            continue
         if str(row.get("underlying_symbol", "")).upper().strip() != target_symbol:
             continue
         if _norm_expiry(row.get("expiry_date", "")) != target_expiry:
@@ -93,6 +108,7 @@ def _select_expiry(rows, symbol: str, option_type: str, trade_date, fixed_expiry
 
 
 async def run_true_premium_backtest(provider, symbols: list[str], start_date: str, end_date: str, expiry: str | None = None, min_rr: float = 1.5, entry_before: str | None = None, max_trades: int = 20):
+    symbols = [str(s).upper().strip() for s in symbols if str(s).strip()]
     fixed_expiry = _norm_expiry(expiry) if expiry else None
     if fixed_expiry:
         expiry_date = datetime.fromisoformat(fixed_expiry).date()
@@ -104,7 +120,9 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
     all_candidates = list(directional.get("trades", []))
     all_candidates.sort(key=lambda x: str(x.get("timestamp", "")))
     candidates = all_candidates[:max_trades]
-    master_rows = await _instrument_rows()
+    # Keep only instrument rows needed for this test universe. This materially
+    # lowers peak memory on Render's 512 MB free worker.
+    master_rows = await _instrument_rows(symbols)
     contract_cache: dict[tuple[str, str, str], list[dict]] = {}
     trades = []
     errors = []
