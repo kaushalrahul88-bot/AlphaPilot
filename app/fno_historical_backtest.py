@@ -10,6 +10,8 @@ from .backtest import run_backtest
 from .fno_history_probe import INSTRUMENT_CSV_URL, _as_float, _norm_expiry
 from .fno_premium_replay import replay_option_trade
 
+AUTO_EXPIRY_MAX_DTE_DAYS = 35
+
 
 async def _instrument_rows():
     async with httpx.AsyncClient(timeout=30) as client:
@@ -79,9 +81,15 @@ def _available_contracts(rows, symbol: str, expiry: str, option_type: str):
 def _select_expiry(rows, symbol: str, option_type: str, trade_date, fixed_expiry: str | None):
     if fixed_expiry:
         d = datetime.fromisoformat(_norm_expiry(fixed_expiry)).date()
-        return d if d >= trade_date else None
+        return (d, (d - trade_date).days) if d >= trade_date else (None, None)
     expiries = _available_expiries(rows, symbol, option_type, trade_date)
-    return expiries[0] if expiries else None
+    if not expiries:
+        return None, None
+    chosen = expiries[0]
+    dte = (chosen - trade_date).days
+    if dte > AUTO_EXPIRY_MAX_DTE_DAYS:
+        return None, dte
+    return chosen, dte
 
 
 async def run_true_premium_backtest(provider, symbols: list[str], start_date: str, end_date: str, expiry: str | None = None, min_rr: float = 1.5, entry_before: str | None = None, max_trades: int = 20):
@@ -106,9 +114,13 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         option_type = "CE" if candidate.get("direction") == "LONG" else "PE"
         try:
             when = datetime.fromisoformat(str(candidate["timestamp"]))
-            selected_expiry_date = _select_expiry(master_rows, symbol, option_type, when.date(), fixed_expiry)
+            selected_expiry_date, expiry_dte = _select_expiry(master_rows, symbol, option_type, when.date(), fixed_expiry)
             if selected_expiry_date is None:
-                errors.append({"symbol": symbol, "timestamp": candidate.get("timestamp"), "stage": "EXPIRY_SELECTION", "error": f"No listed {option_type} expiry on or after {when.date().isoformat()}"})
+                if not fixed_expiry and isinstance(expiry_dte, int) and expiry_dte > AUTO_EXPIRY_MAX_DTE_DAYS:
+                    error = f"Nearest listed {option_type} expiry is {expiry_dte} DTE; exceeds {AUTO_EXPIRY_MAX_DTE_DAYS}-day historical integrity limit"
+                else:
+                    error = f"No listed {option_type} expiry on or after {when.date().isoformat()}"
+                errors.append({"symbol": symbol, "timestamp": candidate.get("timestamp"), "stage": "EXPIRY_SELECTION", "error": error})
                 continue
             selected_expiry = selected_expiry_date.isoformat()
             key = (symbol, option_type, selected_expiry)
@@ -146,6 +158,7 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
                 "mtf_alpha": candidate.get("mtf_alpha"),
                 "underlying_entry": underlying_entry,
                 "expiry": selected_expiry,
+                "expiry_dte": expiry_dte,
                 "expiry_selection": "FIXED_REQUESTED_EXPIRY" if fixed_expiry else "NEAREST_LISTED_EXPIRY_ON_OR_AFTER_TRADE_DATE",
                 "strike": float(selected["strike"]),
                 "option_type": option_type,
@@ -155,6 +168,7 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
             }
             row["timestamp"] = candidate["timestamp"]
             row["expiry"] = selected_expiry
+            row["expiry_dte"] = expiry_dte
             trades.append(row)
         except Exception as exc:
             errors.append({"symbol": symbol, "timestamp": candidate.get("timestamp"), "stage": "PREMIUM_REPLAY", "error": str(exc)})
@@ -177,6 +191,7 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         "end_date": end_date,
         "expiry": fixed_expiry,
         "expiry_mode": "FIXED" if fixed_expiry else "AUTO_NEAREST_LISTED",
+        "auto_expiry_max_dte_days": AUTO_EXPIRY_MAX_DTE_DAYS,
         "expiries_used": expiries_used,
         "min_risk_reward": min_rr,
         "entry_before": entry_before,
@@ -202,7 +217,8 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         "limitations": [
             "P&L uses actual Groww historical 5-minute option-premium OHLC for exact contracts.",
             "Historical direction/timestamp comes from the existing technical MTF scanner replay.",
-            "With Auto Expiry, each candidate uses the nearest option expiry listed in Groww's current instrument master on or after that trade date.",
+            f"With Auto Expiry, each candidate uses the nearest listed option expiry on or after the trade date, but candidates are rejected if that expiry is more than {AUTO_EXPIRY_MAX_DTE_DAYS} calendar days away.",
+            "This prevents stale current-master contracts from being silently assigned to much older historical signals.",
             "Expired contracts absent from the current instrument master cannot be reconstructed by automatic selection and are reported as errors rather than fabricated.",
             "When max_trades truncates a multi-symbol sample, candidates are selected chronologically across the requested universe instead of being biased toward symbols listed first.",
             "Strike selection is nearest listed strike to the historical underlying entry; historical OI/IV-based strike ranking is not reconstructed.",
