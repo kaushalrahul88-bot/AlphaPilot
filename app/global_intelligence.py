@@ -27,11 +27,12 @@ RELEVANCE_TERMS = {
 
 TIER_1_SOURCES = (
     "reuters", "associated press", "ap news", "bloomberg", "financial times", "wall street journal",
-    "cnbc", "bbc", "the economic times", "business standard", "mint", "moneycontrol", "pib",
+    "new york times", "cnbc", "bbc", "the economic times", "business standard", "mint", "livemint",
+    "moneycontrol", "pib",
 )
 TIER_2_SOURCES = (
     "fxstreet", "investing.com", "marketwatch", "barron's", "fortune", "forbes", "business insider",
-    "the hindu", "indian express", "hindustan times", "livemint", "energy now", "energynews",
+    "the hindu", "indian express", "hindustan times", "energy now", "energynews",
 )
 
 HIGH_IMPACT_TERMS = (
@@ -52,10 +53,8 @@ AFFECTED = {
 
 def _source_tier(source: str) -> str:
     text = source.lower()
-    if any(name in text for name in TIER_1_SOURCES):
-        return "TIER_1"
-    if any(name in text for name in TIER_2_SOURCES):
-        return "TIER_2"
+    if any(name in text for name in TIER_1_SOURCES): return "TIER_1"
+    if any(name in text for name in TIER_2_SOURCES): return "TIER_2"
     return "TIER_3"
 
 
@@ -67,17 +66,14 @@ def _relevant(topic: str, headline: str) -> bool:
 def _impact(headline: str, source_tier: str) -> str:
     text = headline.lower()
     hits = sum(1 for term in HIGH_IMPACT_TERMS if term in text)
-    if hits >= 2 and source_tier != "TIER_3":
-        return "HIGH"
-    if hits >= 1:
-        return "MEDIUM"
+    if hits >= 2 and source_tier != "TIER_3": return "HIGH"
+    if hits >= 1: return "MEDIUM"
     return "LOW"
 
 
 def _risk_score(row: dict) -> float:
     sentiment = row.get("sentiment")
-    if sentiment not in {"BULLISH", "BEARISH"}:
-        return 0.0
+    if sentiment not in {"BULLISH", "BEARISH"}: return 0.0
     direction = 1.0 if sentiment == "BULLISH" else -1.0
     impact_weight = {"HIGH": 3.0, "MEDIUM": 1.5, "LOW": 0.5}.get(str(row.get("impact")), 0.5)
     source_weight = {"TIER_1": 1.0, "TIER_2": 0.65, "TIER_3": 0.2}.get(str(row.get("source_tier")), 0.2)
@@ -86,10 +82,8 @@ def _risk_score(row: dict) -> float:
 
 def _risk_state(rows: list[dict]) -> tuple[str, float]:
     score = round(sum(_risk_score(r) for r in rows), 2)
-    if score <= -3.0:
-        return "RISK_OFF", score
-    if score >= 3.0:
-        return "RISK_ON", score
+    if score <= -3.0: return "RISK_OFF", score
+    if score >= 3.0: return "RISK_ON", score
     return "NEUTRAL", score
 
 
@@ -98,44 +92,31 @@ def _dedupe(rows: list[dict]) -> list[dict]:
     seen: set[str] = set()
     for row in rows:
         key = " ".join(str(row.get("headline", "")).lower().split())
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        out.append(row)
+        if not key or key in seen: continue
+        seen.add(key); out.append(row)
     return out
 
 
 async def global_intelligence(limit_per_topic: int = 5) -> dict:
     limit = max(2, min(int(limit_per_topic), 8))
-    topics: dict[str, list[dict]] = {}
-    all_rows: list[dict] = []
-    dropped_irrelevant = 0
+    topics: dict[str, list[dict]] = {}; all_rows: list[dict] = []; dropped_irrelevant = 0
     for name, query in TOPICS.items():
-        raw = await _fetch_google_news(query, f"global-intelligence:v1.2:{name}", min(12, limit * 2))
+        raw = await _fetch_google_news(query, f"global-intelligence:v1.3:{name}", min(12, limit * 2))
         enriched: list[dict] = []
         for row in raw:
             headline = str(row.get("headline", ""))
-            if not _relevant(name, headline):
-                dropped_irrelevant += 1
-                continue
+            if not _relevant(name, headline): dropped_irrelevant += 1; continue
             tier = _source_tier(str(row.get("source", "")))
-            enriched.append({
-                **row,
-                "topic": name,
-                "source_tier": tier,
-                "impact": _impact(headline, tier),
-                "affected": AFFECTED.get(name, []),
-            })
+            enriched.append({**row, "topic": name, "source_tier": tier, "impact": _impact(headline, tier), "affected": AFFECTED.get(name, [])})
         enriched = _dedupe(enriched)
         enriched.sort(key=lambda r: ({"TIER_1": 0, "TIER_2": 1, "TIER_3": 2}.get(str(r.get("source_tier")), 3), {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(str(r.get("impact")), 3)))
-        topics[name] = enriched[:limit]
-        all_rows.extend(topics[name])
+        topics[name] = enriched[:limit]; all_rows.extend(topics[name])
 
     official = await official_signals(min(limit, 4))
     risk_state, risk_score = _risk_state(all_rows)
     high_impact = [r for r in all_rows if r.get("impact") == "HIGH" and r.get("source_tier") != "TIER_3"]
     return {
-        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_2",
+        "mode": "ALPHAPILOT_GLOBAL_INTELLIGENCE_V1_3",
         "research_only": True,
         "production_rules_changed": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -145,12 +126,12 @@ async def global_intelligence(limit_per_topic: int = 5) -> dict:
         "high_impact": high_impact[:12],
         "official_signals": official,
         "quality": {
-            "accepted_items": len(all_rows),
-            "dropped_irrelevant": dropped_irrelevant,
+            "accepted_items": len(all_rows), "dropped_irrelevant": dropped_irrelevant,
             "tier_1_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_1"),
             "tier_2_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_2"),
             "tier_3_items": sum(1 for r in all_rows if r.get("source_tier") == "TIER_3"),
             "official_signal_items": len(official.get("items", [])),
+            "official_dropped_irrelevant": int(official.get("quality", {}).get("dropped_irrelevant", 0)),
         },
-        "method_note": "Global Intelligence v1.2 adds Official Signals & Leader Watch for speeches, official statements, policy releases and corroborated references to verified official social posts. It remains research context only and cannot authorize or veto production trades.",
+        "method_note": "Global Intelligence v1.3 keeps Official Signals market-relevant, ranks event impact and affected assets more precisely, and preserves news as research context only. It cannot authorize or veto production trades.",
     }
