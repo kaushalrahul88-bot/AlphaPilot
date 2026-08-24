@@ -11,14 +11,12 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Generate Groww's approved daily token once per Render process/session.
+    """Use the configured Groww access token first, with dynamic auth as fallback.
 
-    AlphaPilot creates provider instances per API request. Therefore instance-local
-    auth caching can repeatedly call Groww's token endpoint during health checks and
-    universe scans. This class keeps the generated daily token process-wide so all
-    provider instances reuse it until Groww's 06:00 IST auth reset.
-
-    GROWW_ACCESS_TOKEN remains a fallback only when API key+secret are unavailable.
+    A manually generated GROWW_ACCESS_TOKEN is valid for the current Groww session
+    and avoids calling the rate-limited /v1/token/api/access endpoint on every
+    Render restart. API key + secret remain available as a fallback when no manual
+    token is configured.
     """
 
     _shared_token = None
@@ -77,22 +75,27 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         return token
 
     async def _get_access_token(self):
-        if self.api_key and self.api_secret:
-            session_key = self._auth_session_key()
-            cls = self.__class__
+        # Preferred path for live validation: use the manually generated current
+        # session token and completely avoid Groww's token-generation endpoint.
+        if self.access_token:
+            return self.access_token
 
+        if not (self.api_key and self.api_secret):
+            raise RuntimeError("No Groww authentication credentials are configured")
+
+        session_key = self._auth_session_key()
+        cls = self.__class__
+
+        if cls._shared_token and cls._shared_auth_session == session_key:
+            return cls._shared_token
+
+        async with cls._auth_lock():
             if cls._shared_token and cls._shared_auth_session == session_key:
                 return cls._shared_token
 
-            async with cls._auth_lock():
-                if cls._shared_token and cls._shared_auth_session == session_key:
-                    return cls._shared_token
-
-                token = await self._generate_access_token()
-                cls._shared_token = token
-                cls._shared_auth_session = session_key
-                self._cached_token = token
-                self._cached_auth_session = session_key
-                return token
-
-        return self.access_token
+            token = await self._generate_access_token()
+            cls._shared_token = token
+            cls._shared_auth_session = session_key
+            self._cached_token = token
+            self._cached_auth_session = session_key
+            return token
