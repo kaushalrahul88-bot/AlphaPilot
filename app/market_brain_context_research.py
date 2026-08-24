@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from .backtest import _historical
+from .market_brain_transition_research import transition_summaries
 
 SECTOR = {
     "NIFTY":"INDEX","BANKNIFTY":"INDEX","HDFCBANK":"FINANCIALS","ICICIBANK":"FINANCIALS","SBIN":"FINANCIALS","AXISBANK":"FINANCIALS","KOTAKBANK":"FINANCIALS","BAJFINANCE":"FINANCIALS",
@@ -135,13 +136,14 @@ async def run_market_brain_context_block(provider, start_date: str, end_date: st
             data[symbol] = rows
             if error: errors.append({"symbol":symbol,"error":error})
         await asyncio.sleep(.15)
-    obs = _build(data); summaries = _summaries(obs, max(20,min(int(min_obs),100)))
+    obs = _build(data); gate = max(20,min(int(min_obs),100)); summaries = _summaries(obs, gate); transitions = transition_summaries(obs, gate)
     return {
-        "mode":"ALPHAPILOT_MARKET_BRAIN_V3_1_BLOCK","research_only":True,"production_rules_changed":False,
+        "mode":"ALPHAPILOT_MARKET_BRAIN_V3_2_BLOCK","research_only":True,"production_rules_changed":False,
         "start_date":start_date,"end_date":end_date,"observations":len(obs),"symbols_available":sum(bool(data.get(s)) for s in SYMBOLS),"symbols_total":len(SYMBOLS),
         "baseline_avg60":round(sum(x["fwd60"] for x in obs)/len(obs),4) if obs else 0.0,
         "bullish_leans":sum(x["state"]=="BULLISH_LEAN" for x in summaries),"bearish_leans":sum(x["state"]=="BEARISH_LEAN" for x in summaries),
-        "summaries":summaries,"errors":errors,
-        "fixed_rules":{"min_group_obs":max(20,min(int(min_obs),100)),"lean_min_obs":30,"abs_avg60_pct":0.12,"directional_follow_through_pct":55.0,"directional_move_threshold_pct":0.15},
-        "limitations":["Same frozen 30-stock proxy and pairwise states as Market Brain v3.","No cross-asset/news history is injected without timestamp-aligned data.","Replication blocks do not alter production or nominate a trade by themselves."]
+        "transition_bullish_leans":sum(x["state"]=="BULLISH_LEAN" for x in transitions),"transition_bearish_leans":sum(x["state"]=="BEARISH_LEAN" for x in transitions),
+        "summaries":summaries,"transition_summaries":transitions,"errors":errors,
+        "fixed_rules":{"min_group_obs":gate,"lean_min_obs":30,"abs_avg60_pct":0.12,"directional_follow_through_pct":55.0,"directional_move_threshold_pct":0.15},
+        "limitations":["Same frozen 30-stock proxy and fixed lean thresholds as Market Brain v3/v3.1.","v3.2 tests state transitions as a new hypothesis without lowering any gate.","No cross-asset/news history is injected without timestamp-aligned data.","Transition findings must replicate across independent blocks before any candidate can be frozen.","Production remains unchanged."]
     }
