@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import time
@@ -10,15 +11,19 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Prefer Groww API key+secret and generate the daily access token automatically.
+    """Generate Groww's approved daily token once per Render process/session.
 
-    Groww's approval flow expires at 06:00 IST. The user still needs to approve the
-    API key on Groww once per trading day, but AlphaPilot no longer requires manual
-    copying of a fresh access token into Render after that approval.
+    AlphaPilot creates provider instances per API request. Therefore instance-local
+    auth caching can repeatedly call Groww's token endpoint during health checks and
+    universe scans. This class keeps the generated daily token process-wide so all
+    provider instances reuse it until Groww's 06:00 IST auth reset.
 
-    GROWW_ACCESS_TOKEN is retained only as a fallback when API key+secret are not
-    configured.
+    GROWW_ACCESS_TOKEN remains a fallback only when API key+secret are unavailable.
     """
+
+    _shared_token = None
+    _shared_auth_session = None
+    _shared_auth_lock = None
 
     def __init__(self, settings):
         self.api_key = "".join(os.getenv("GROWW_API_KEY", "").split())
@@ -32,9 +37,14 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
                 "Set both GROWW_API_KEY and GROWW_API_SECRET, or GROWW_ACCESS_TOKEN"
             )
 
+    @classmethod
+    def _auth_lock(cls):
+        if cls._shared_auth_lock is None:
+            cls._shared_auth_lock = asyncio.Lock()
+        return cls._shared_auth_lock
+
     @staticmethod
     def _auth_session_key():
-        # Groww access authorization resets daily at 06:00 Asia/Kolkata.
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         return (now - timedelta(hours=6)).date().isoformat()
 
@@ -67,17 +77,22 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         return token
 
     async def _get_access_token(self):
-        # Preferred path: API key + secret. This deliberately ignores a stale
-        # GROWW_ACCESS_TOKEN when the renewable credentials are available.
         if self.api_key and self.api_secret:
             session_key = self._auth_session_key()
-            if self._cached_token and self._cached_auth_session == session_key:
-                return self._cached_token
+            cls = self.__class__
 
-            token = await self._generate_access_token()
-            self._cached_token = token
-            self._cached_auth_session = session_key
-            return token
+            if cls._shared_token and cls._shared_auth_session == session_key:
+                return cls._shared_token
 
-        # Fallback for installations that only use a manually generated token.
+            async with cls._auth_lock():
+                if cls._shared_token and cls._shared_auth_session == session_key:
+                    return cls._shared_token
+
+                token = await self._generate_access_token()
+                cls._shared_token = token
+                cls._shared_auth_session = session_key
+                self._cached_token = token
+                self._cached_auth_session = session_key
+                return token
+
         return self.access_token
