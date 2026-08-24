@@ -19,6 +19,7 @@ from .fno_history_probe import probe_historical_option_candles
 from .fno_historical_backtest import run_true_premium_backtest
 from .fno_premium_replay import replay_option_trade
 from .global_intelligence import global_intelligence
+from .market_brain_context_research import run_market_brain_context_block
 from .market_regime_research import run_market_regime_research
 from .news import latest_commodity_news, latest_market_news
 from .option_native_research import run_option_native_research
@@ -60,6 +61,7 @@ class MarketRegimeResearchRequest(BaseModel): symbols:list[str]=Field(default_fa
 class EdgeDiscoveryRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; max_observations:int=600; round_trip_cost_bps:float=10.0; sample_every_bars:int=3
 class CandidateValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["MARUTI","EICHERMOT","INDUSINDBK","JSWSTEEL","TITAN","NESTLEIND","GRASIM","BRITANNIA","LT","DRREDDY","BAJFINANCE","M&M","SUNPHARMA","ADANIPORTS","KOTAKBANK"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
 class CandidateBValidatorRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; round_trip_cost_bps:float=10.0; sample_every_bars:int=3; max_trades:int=250
+class MarketBrainContextBlockRequest(BaseModel): start_date:str; end_date:str; min_obs:int=20
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
 class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; trade_date:str; entry_time:str="09:30"; min_risk_reward:float=1.5
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
@@ -118,6 +120,11 @@ async def edge_discovery(request:EdgeDiscoveryRequest):
     try:return await run_edge_discovery(get_provider(settings),symbols,request.start_date,request.end_date,request.max_observations,request.round_trip_cost_bps,request.sample_every_bars)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("edge discovery",exc)
+@app.post("/v1/research/market-brain-v3-block")
+async def market_brain_v3_block(request:MarketBrainContextBlockRequest):
+    try:return await run_market_brain_context_block(get_provider(settings),request.start_date,request.end_date,request.min_obs)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("market brain v3 replication",exc)
 @app.post("/v1/research/candidate-validator")
 async def candidate_validator(request:CandidateValidatorRequest):
     symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
