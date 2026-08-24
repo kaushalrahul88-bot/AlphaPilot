@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
@@ -32,6 +32,21 @@ parsed_origins = [x.strip() for x in settings.allowed_origins.split(",") if x.st
 if "*" in parsed_origins: parsed_origins = ["*"]
 app.add_middleware(CORSMiddleware, allow_origins=parsed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 TF = Literal["5m","15m","1h","1d"]
+
+
+def _safe_upstream_error(operation: str, exc: Exception):
+    """Return a browser-readable error without leaking Groww credentials."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    text = str(exc)
+    if status:
+        detail = f"Groww {operation} failed with upstream HTTP {status}"
+    elif "timeout" in text.lower():
+        detail = f"Groww {operation} timed out"
+    else:
+        detail = f"Groww {operation} failed: {exc.__class__.__name__}"
+    logger.error("Groww %s error status=%s error=%r", operation, status, exc)
+    raise HTTPException(status_code=502, detail=detail)
+
 
 class ScanRequest(BaseModel):
     symbols:list[str]=Field(default_factory=lambda:["RELIANCE"])
@@ -83,15 +98,26 @@ async def root(): return {"ok":True,"service":"alphapilot-api"}
 async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.15.0","provider":settings.market_data_provider.upper()}
 
 @app.get("/v1/quote/{symbol}")
-async def quote(symbol:str): return await get_provider(settings).quote(symbol.upper())
+async def quote(symbol:str):
+    try:
+        return await get_provider(settings).quote(symbol.upper())
+    except Exception as exc:
+        _safe_upstream_error("quote", exc)
 
 @app.get("/v1/candles/{symbol}")
 async def candles(symbol:str,timeframe:TF="15m"):
-    data=await get_provider(settings).candles(symbol.upper(),timeframe)
-    return {"symbol":symbol.upper(),"timeframe":timeframe,"candles":data}
+    try:
+        data=await get_provider(settings).candles(symbol.upper(),timeframe)
+        return {"symbol":symbol.upper(),"timeframe":timeframe,"candles":data}
+    except Exception as exc:
+        _safe_upstream_error("candles", exc)
 
 @app.get("/v1/options/{symbol}")
-async def options(symbol:str,expiry:str|None=None): return await get_provider(settings).option_chain(symbol.upper(),expiry)
+async def options(symbol:str,expiry:str|None=None):
+    try:
+        return await get_provider(settings).option_chain(symbol.upper(),expiry)
+    except Exception as exc:
+        _safe_upstream_error("option chain", exc)
 
 @app.get("/v1/commodity/contract/{symbol}")
 async def commodity_contract(symbol:str):
