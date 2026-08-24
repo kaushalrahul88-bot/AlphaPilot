@@ -11,6 +11,29 @@ from .fno_premium_replay import _historical_option_day, _risk_fraction, _simulat
 MODELS = ("CE_PREMIUM_MOMENTUM", "PE_PREMIUM_MOMENTUM", "CE_PE_RELATIVE_STRENGTH")
 
 
+def _num(value, default=None):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean_rows(rows: list[list]) -> list[list]:
+    """Keep only candles with usable timestamp/OHLC; coerce missing volume to zero."""
+    cleaned = []
+    for row in rows or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 5 or not _ts(row[0]):
+            continue
+        o, h, l, c = (_num(row[i]) for i in range(1, 5))
+        if None in (o, h, l, c) or min(o, h, l, c) <= 0:
+            continue
+        volume = _num(row[5], 0.0) if len(row) > 5 else 0.0
+        cleaned.append([row[0], o, h, l, c, max(volume or 0.0, 0.0)])
+    return cleaned
+
+
 def _ema(values: list[float], period: int) -> list[float]:
     if not values:
         return []
@@ -27,19 +50,24 @@ def _vwap(rows: list[list]) -> list[float]:
     out = []
     for row in rows:
         high, low, close = float(row[2]), float(row[3]), float(row[4])
-        volume = float(row[5]) if len(row) > 5 else 0.0
+        volume = _num(row[5], 0.0) if len(row) > 5 else 0.0
         typical = (high + low + close) / 3.0
-        total_pv += typical * max(volume, 0.0)
-        total_v += max(volume, 0.0)
+        total_pv += typical * max(volume or 0.0, 0.0)
+        total_v += max(volume or 0.0, 0.0)
         out.append(total_pv / total_v if total_v > 0 else close)
     return out
 
 
 def _volume_ratio(rows: list[list], i: int, lookback: int = 8) -> float | None:
-    if len(rows[i]) <= 5:
+    if i >= len(rows) or len(rows[i]) <= 5:
         return None
-    volume = float(rows[i][5])
-    prior = [float(rows[j][5]) for j in range(max(0, i - lookback), i) if len(rows[j]) > 5]
+    volume = _num(rows[i][5], 0.0) or 0.0
+    prior = []
+    for j in range(max(0, i - lookback), i):
+        if len(rows[j]) > 5:
+            v = _num(rows[j][5])
+            if v is not None:
+                prior.append(v)
     avg = mean(prior) if prior else 0.0
     return volume / avg if avg > 0 else None
 
@@ -50,6 +78,8 @@ def _premium_features(rows: list[list]) -> dict:
 
 
 def _momentum_signal(rows: list[list], option_type: str):
+    if len(rows) < 14:
+        return None
     f = _premium_features(rows)
     for i in range(12, len(rows) - 1):
         when = _ts(rows[i][0])
@@ -78,6 +108,8 @@ def _momentum_signal(rows: list[list], option_type: str):
 
 
 def _relative_signal(ce_rows: list[list], pe_rows: list[list]):
+    if len(ce_rows) < 5 or len(pe_rows) < 5:
+        return None
     ce_map = {_ts(r[0]): i for i, r in enumerate(ce_rows) if _ts(r[0])}
     pe_map = {_ts(r[0]): i for i, r in enumerate(pe_rows) if _ts(r[0])}
     common = sorted(set(ce_map).intersection(pe_map))
@@ -89,8 +121,12 @@ def _relative_signal(ce_rows: list[list], pe_rows: list[list]):
         ci, pi = ce_map[when], pe_map[when]
         if ci < 3 or pi < 3 or ci >= len(ce_rows) - 1 or pi >= len(pe_rows) - 1:
             continue
-        ce_ret = ce_f["closes"][ci] / ce_f["closes"][ci - 3] - 1.0
-        pe_ret = pe_f["closes"][pi] / pe_f["closes"][pi - 3] - 1.0
+        ce_prev = ce_f["closes"][ci - 3]
+        pe_prev = pe_f["closes"][pi - 3]
+        if ce_prev <= 0 or pe_prev <= 0:
+            continue
+        ce_ret = ce_f["closes"][ci] / ce_prev - 1.0
+        pe_ret = pe_f["closes"][pi] / pe_prev - 1.0
         ce_ok = ce_f["closes"][ci] > ce_f["ema5"][ci] > ce_f["ema12"][ci]
         pe_ok = pe_f["closes"][pi] > pe_f["ema5"][pi] > pe_f["ema12"][pi]
         if ce_ok and ce_ret >= 0.03 and ce_ret - pe_ret >= 0.04:
@@ -104,9 +140,9 @@ def _regime_at(rows: list[list], when: datetime) -> str:
     day = [r for r in rows if (w := _ts(r[0])) and w.date() == when.date() and w <= when]
     if not day:
         return "UNKNOWN"
-    open_price = float(day[0][1])
-    close = float(day[-1][4])
-    if open_price <= 0:
+    open_price = _num(day[0][1])
+    close = _num(day[-1][4])
+    if not open_price or close is None:
         return "UNKNOWN"
     pct = (close / open_price - 1.0) * 100.0
     if pct >= 0.35:
@@ -121,22 +157,26 @@ def _simulate_native(rows: list[list], signal: dict, rr: float, cost_bps: float)
     entry_index = i + 1
     if entry_index >= len(rows):
         return None
-    entry = float(rows[entry_index][1])
+    entry = _num(rows[entry_index][1])
     when = _ts(rows[entry_index][0])
-    if entry <= 0 or not when:
+    if entry is None or entry <= 0 or not when:
         return None
     risk_fraction = _risk_fraction(entry)
     risk = entry * risk_fraction
+    if risk <= 0:
+        return None
     stop = max(0.05, entry - risk)
     t1 = entry + risk * rr
     t2 = entry + risk * max(2.0, rr + 0.5)
-    sim = _simulate(rows, entry_index, entry, stop, t1, t2)
-    exit_price = sim.get("exit_price")
-    r = (float(exit_price) - entry) / risk if isinstance(exit_price, (int, float)) and risk > 0 else None
-    cost_r = (entry * max(cost_bps, 0.0) / 10000.0) / risk if risk > 0 else 0.0
+    sim = _simulate(rows, entry_index, entry, stop, t1, t2) or {}
+    exit_price = _num(sim.get("exit_price"))
+    r = (exit_price - entry) / risk if exit_price is not None else None
+    cost_r = (entry * max(cost_bps, 0.0) / 10000.0) / risk
     adj = r - cost_r if r is not None else None
-    mfe = max(0.0, (float(sim.get("max_price", entry)) - entry) / risk) if risk > 0 else None
-    mae = max(0.0, (entry - float(sim.get("min_price", entry))) / risk) if risk > 0 else None
+    max_price = _num(sim.get("max_price"), entry)
+    min_price = _num(sim.get("min_price"), entry)
+    mfe = max(0.0, ((max_price if max_price is not None else entry) - entry) / risk)
+    mae = max(0.0, (entry - (min_price if min_price is not None else entry)) / risk)
     return {
         "entry_at": when.isoformat(),
         "entry": round(entry, 2),
@@ -144,12 +184,12 @@ def _simulate_native(rows: list[list], signal: dict, rr: float, cost_bps: float)
         "target1": round(t1, 2),
         "target2": round(t2, 2),
         "exit_at": sim.get("exit_at"),
-        "exit_price": round(float(exit_price), 2) if isinstance(exit_price, (int, float)) else None,
+        "exit_price": round(exit_price, 2) if exit_price is not None else None,
         "outcome": sim.get("outcome"),
         "r_multiple": round(r, 3) if r is not None else None,
         "cost_adjusted_r": round(adj, 3) if adj is not None else None,
-        "mfe_r": round(mfe, 3) if mfe is not None else None,
-        "mae_r": round(mae, 3) if mae is not None else None,
+        "mfe_r": round(mfe, 3),
+        "mae_r": round(mae, 3),
         "premium_risk_percent": round(risk_fraction * 100.0, 1),
     }
 
@@ -165,15 +205,19 @@ def _summary(trades: list[dict]):
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
     avg = sum(vals) / len(vals) if vals else 0.0
-    if len(vals) >= 30 and avg >= 0.10:
-        classification = "PASS"
-    elif len(vals) >= 20 and avg > 0:
-        classification = "WATCH"
-    else:
-        classification = "FAIL"
+    classification = "PASS" if len(vals) >= 30 and avg >= 0.10 else "WATCH" if len(vals) >= 20 and avg > 0 else "FAIL"
     mfe = [float(t["mfe_r"]) for t in trades if isinstance(t.get("mfe_r"), (int, float))]
     mae = [float(t["mae_r"]) for t in trades if isinstance(t.get("mae_r"), (int, float))]
-    return {"trades": len(vals), "wins": wins, "losses": sum(1 for x in vals if x < 0), "win_rate": round(wins / len(vals) * 100.0, 1) if vals else 0.0, "average_r": round(avg, 3), "total_r": round(sum(vals), 3), "profit_factor": round(gains / losses_abs, 3) if losses_abs > 0 else None, "max_drawdown_r": round(max_dd, 3), "avg_mfe_r": round(mean(mfe), 3) if mfe else None, "avg_mae_r": round(mean(mae), 3) if mae else None, "classification": classification}
+    return {
+        "trades": len(vals), "wins": wins, "losses": sum(1 for x in vals if x < 0),
+        "win_rate": round(wins / len(vals) * 100.0, 1) if vals else 0.0,
+        "average_r": round(avg, 3), "total_r": round(sum(vals), 3),
+        "profit_factor": round(gains / losses_abs, 3) if losses_abs > 0 else None,
+        "max_drawdown_r": round(max_dd, 3),
+        "avg_mfe_r": round(mean(mfe), 3) if mfe else None,
+        "avg_mae_r": round(mean(mae), 3) if mae else None,
+        "classification": classification,
+    }
 
 
 async def run_option_native_phase2(provider, symbols: list[str], start_date: str, end_date: str, premium_min_rr: float = 1.5, max_trades_per_model: int = 30, round_trip_cost_bps: float = 10.0):
@@ -191,72 +235,124 @@ async def run_option_native_phase2(provider, symbols: list[str], start_date: str
     errors = []
 
     try:
-        nifty_rows = await _historical(provider, "NIFTY", "5m", start, end)
-    except Exception:
+        nifty_rows = _clean_rows(await _historical(provider, "NIFTY", "5m", start, end))
+    except Exception as exc:
         nifty_rows = []
+        errors.append({"symbol": "NIFTY", "stage": "REGIME_DATA", "error": f"{exc.__class__.__name__}: {exc}"})
 
     for symbol in symbols:
         if all(len(model_trades[m]) >= cap for m in MODELS):
             break
         try:
-            underlying = await _historical(provider, symbol, "5m", start, end)
+            underlying = _clean_rows(await _historical(provider, symbol, "5m", start, end))
         except Exception as exc:
-            errors.append({"symbol": symbol, "stage": "UNDERLYING", "error": str(exc)})
+            errors.append({"symbol": symbol, "stage": "UNDERLYING", "error": f"{exc.__class__.__name__}: {exc}"})
             continue
-        days = sorted({(_ts(r[0]).date().isoformat()) for r in underlying if _ts(r[0]) and start.date() <= _ts(r[0]).date() <= end.date()})
+        if not underlying:
+            errors.append({"symbol": symbol, "stage": "UNDERLYING", "error": "No valid historical candles after cleaning"})
+            continue
+
+        days = sorted({_ts(r[0]).date().isoformat() for r in underlying if _ts(r[0]) and start.date() <= _ts(r[0]).date() <= end.date()})
         for day in days:
             if all(len(model_trades[m]) >= cap for m in MODELS):
                 break
-            day_rows = [r for r in underlying if (w := _ts(r[0])) and w.date().isoformat() == day]
-            ref = next((r for r in day_rows if (w := _ts(r[0])) and w.time() >= time(9, 45)), None)
-            if not ref:
-                continue
-            spot = float(ref[4])
-            contracts = {}
-            candle_sets = {}
-            for option_type in ("CE", "PE"):
-                try:
-                    expiry, dte = _select_expiry(master, symbol, option_type, datetime.fromisoformat(day).date(), None)
-                    if expiry is None:
-                        raise ValueError("No listed expiry")
-                    expiry_s = expiry.isoformat()
-                    available = _available_contracts(master, symbol, expiry_s, option_type)
-                    if not available:
-                        raise ValueError("No contracts for selected expiry")
-                    selected = min(available, key=lambda x: abs(float(x["strike"]) - spot))
-                    candles = await _historical_option_day(provider, selected, day, "5minute")
-                    if not candles:
-                        raise ValueError("No 5-minute premium candles")
-                    contracts[option_type] = (selected, expiry_s, dte)
-                    candle_sets[option_type] = candles
-                except Exception as exc:
-                    errors.append({"symbol": symbol, "date": day, "option_type": option_type, "stage": "CONTRACT_OR_CANDLES", "error": str(exc)})
-            if "CE" not in candle_sets or "PE" not in candle_sets:
-                continue
+            try:
+                day_rows = [r for r in underlying if (w := _ts(r[0])) and w.date().isoformat() == day]
+                ref = next((r for r in day_rows if (w := _ts(r[0])) and w.time() >= time(9, 45)), None)
+                if not ref:
+                    continue
+                spot = _num(ref[4])
+                if spot is None or spot <= 0:
+                    errors.append({"symbol": symbol, "date": day, "stage": "ATM_REFERENCE", "error": "Invalid 09:45 underlying reference"})
+                    continue
 
-            signals = {
-                "CE_PREMIUM_MOMENTUM": _momentum_signal(candle_sets["CE"], "CE"),
-                "PE_PREMIUM_MOMENTUM": _momentum_signal(candle_sets["PE"], "PE"),
-                "CE_PE_RELATIVE_STRENGTH": _relative_signal(candle_sets["CE"], candle_sets["PE"]),
-            }
-            for model, signal in signals.items():
-                if not signal or len(model_trades[model]) >= cap:
+                contracts = {}
+                candle_sets = {}
+                for option_type in ("CE", "PE"):
+                    try:
+                        expiry, dte = _select_expiry(master, symbol, option_type, datetime.fromisoformat(day).date(), None)
+                        if expiry is None:
+                            raise ValueError("No listed expiry")
+                        expiry_s = expiry.isoformat()
+                        available = [x for x in _available_contracts(master, symbol, expiry_s, option_type) if _num(x.get("strike")) is not None]
+                        if not available:
+                            raise ValueError("No contracts with valid strikes for selected expiry")
+                        selected = min(available, key=lambda x: abs(float(x["strike"]) - spot))
+                        candles = _clean_rows(await _historical_option_day(provider, selected, day, "5minute"))
+                        if len(candles) < 14:
+                            raise ValueError(f"Insufficient valid 5-minute premium candles ({len(candles)})")
+                        contracts[option_type] = (selected, expiry_s, dte)
+                        candle_sets[option_type] = candles
+                    except Exception as exc:
+                        errors.append({"symbol": symbol, "date": day, "option_type": option_type, "stage": "CONTRACT_OR_CANDLES", "error": f"{exc.__class__.__name__}: {exc}"})
+
+                if "CE" not in candle_sets or "PE" not in candle_sets:
                     continue
-                option_type = signal["option_type"]
-                selected, expiry_s, dte = contracts[option_type]
-                sim = _simulate_native(candle_sets[option_type], signal, rr, round_trip_cost_bps)
-                if not sim:
+
+                try:
+                    signals = {
+                        "CE_PREMIUM_MOMENTUM": _momentum_signal(candle_sets["CE"], "CE"),
+                        "PE_PREMIUM_MOMENTUM": _momentum_signal(candle_sets["PE"], "PE"),
+                        "CE_PE_RELATIVE_STRENGTH": _relative_signal(candle_sets["CE"], candle_sets["PE"]),
+                    }
+                except Exception as exc:
+                    errors.append({"symbol": symbol, "date": day, "stage": "SIGNAL_GENERATION", "error": f"{exc.__class__.__name__}: {exc}"})
                     continue
-                regime = _regime_at(nifty_rows, signal["signal_at"]) if nifty_rows else "UNKNOWN"
-                contract_name = selected.get("trading_symbol") or selected.get("groww_symbol")
-                model_trades[model].append({"model": model, "symbol": symbol, "date": day, "signal_at": signal["signal_at"].isoformat(), "action": f"BUY {option_type}", "option_type": option_type, "contract": contract_name, "expiry": expiry_s, "expiry_dte": dte, "strike": float(selected["strike"]), "underlying_reference": round(spot, 2), "market_regime": regime, "signal_features": {k: v for k, v in signal.items() if k not in {"index", "option_type", "signal_at"}}, **sim})
+
+                for model, signal in signals.items():
+                    if not signal or len(model_trades[model]) >= cap:
+                        continue
+                    try:
+                        option_type = signal["option_type"]
+                        selected, expiry_s, dte = contracts[option_type]
+                        sim = _simulate_native(candle_sets[option_type], signal, rr, round_trip_cost_bps)
+                        if not sim:
+                            continue
+                        regime = _regime_at(nifty_rows, signal["signal_at"]) if nifty_rows else "UNKNOWN"
+                        strike = _num(selected.get("strike"))
+                        model_trades[model].append({
+                            "model": model, "symbol": symbol, "date": day,
+                            "signal_at": signal["signal_at"].isoformat(), "action": f"BUY {option_type}",
+                            "option_type": option_type,
+                            "contract": selected.get("trading_symbol") or selected.get("groww_symbol"),
+                            "expiry": expiry_s, "expiry_dte": dte, "strike": strike,
+                            "underlying_reference": round(spot, 2), "market_regime": regime,
+                            "signal_features": {k: v for k, v in signal.items() if k not in {"index", "option_type", "signal_at"}},
+                            **sim,
+                        })
+                    except Exception as exc:
+                        errors.append({"symbol": symbol, "date": day, "model": model, "stage": "MODEL_SIMULATION", "error": f"{exc.__class__.__name__}: {exc}"})
+            except Exception as exc:
+                errors.append({"symbol": symbol, "date": day, "stage": "DAY_PROCESSING", "error": f"{exc.__class__.__name__}: {exc}"})
+                continue
 
     leaderboard = []
     for model in MODELS:
         s = _summary(model_trades[model])
-        by_regime = {regime: _summary([t for t in model_trades[model] if t.get("market_regime") == regime]) for regime in ("BULLISH", "BEARISH", "SIDEWAYS", "UNKNOWN") if any(t.get("market_regime") == regime for t in model_trades[model])}
+        by_regime = {
+            regime: _summary([t for t in model_trades[model] if t.get("market_regime") == regime])
+            for regime in ("BULLISH", "BEARISH", "SIDEWAYS", "UNKNOWN")
+            if any(t.get("market_regime") == regime for t in model_trades[model])
+        }
         leaderboard.append({"model": model, **s, "by_regime": by_regime})
     leaderboard.sort(key=lambda x: (x["average_r"], x["trades"]), reverse=True)
     for i, row in enumerate(leaderboard, 1):
         row["rank"] = i
-    return {"mode": "ALPHAPILOT_OPTION_NATIVE_PHASE2_PREMIUM_SIGNAL_DISCOVERY", "research_only": True, "production_rules_changed": False, "start_date": start_date, "end_date": end_date, "premium_min_risk_reward": rr, "round_trip_cost_bps": round_trip_cost_bps, "leaderboard": leaderboard, "trades_by_model": model_trades, "errors": errors, "limitations": ["Signals in this phase are generated from the historical ATM option premium itself after 09:45; underlying strategy v2 signals are not used for entry timing.", "The underlying is used only to choose an ATM strike reference at 09:45 and to resolve a real listed contract.", "CE and PE momentum are researched separately instead of assuming symmetric rules.", "Relative Strength compares contemporaneous CE and PE premium momentum and buys only the stronger side.", "Market regime uses NIFTY 5-minute data when available; UNKNOWN is reported rather than fabricated.", "All entries use the next 5-minute option candle after the premium signal to avoid look-ahead.", "PASS/WATCH/FAIL is research-only and cannot change live AlphaPilot rules."]}
+
+    return {
+        "mode": "ALPHAPILOT_OPTION_NATIVE_PHASE2_PREMIUM_SIGNAL_DISCOVERY",
+        "research_only": True, "production_rules_changed": False,
+        "start_date": start_date, "end_date": end_date,
+        "premium_min_risk_reward": rr, "round_trip_cost_bps": round_trip_cost_bps,
+        "leaderboard": leaderboard, "trades_by_model": model_trades, "errors": errors,
+        "limitations": [
+            "Signals in this phase are generated from the historical ATM option premium itself after 09:45; underlying strategy v2 signals are not used for entry timing.",
+            "The underlying is used only to choose an ATM strike reference at 09:45 and to resolve a real listed contract.",
+            "CE and PE momentum are researched separately instead of assuming symmetric rules.",
+            "Relative Strength compares contemporaneous CE and PE premium momentum and buys only the stronger side.",
+            "Malformed or incomplete historical candles are excluded and reported instead of crashing the whole research run.",
+            "Market regime uses NIFTY 5-minute data when available; UNKNOWN is reported rather than fabricated.",
+            "All entries use the next 5-minute option candle after the premium signal to avoid look-ahead.",
+            "PASS/WATCH/FAIL is research-only and cannot change live AlphaPilot rules.",
+        ],
+    }
