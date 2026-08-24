@@ -11,21 +11,19 @@ from .fno_history_probe import INSTRUMENT_CSV_URL, _as_float, _norm_expiry
 from .fno_premium_replay import replay_option_trade
 
 
-async def _available_contracts(symbol: str, expiry: str, option_type: str):
-    """Return current-master contracts for one underlying/expiry/type.
-
-    This deliberately uses one explicit, auditable selection rule for the first
-    true-premium historical backtest: nearest listed strike to the underlying
-    scanner entry. It does not pretend to reconstruct historical OI/IV ranking.
-    """
+async def _instrument_rows():
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(INSTRUMENT_CSV_URL)
         response.raise_for_status()
+    return list(csv.DictReader(io.StringIO(response.text)))
+
+
+def _available_contracts(rows, symbol: str, expiry: str, option_type: str):
     target_symbol = symbol.upper().strip()
     target_expiry = _norm_expiry(expiry)
     target_type = option_type.upper().strip()
-    rows = []
-    for row in csv.DictReader(io.StringIO(response.text)):
+    out = []
+    for row in rows:
         if str(row.get("exchange", "")).upper() != "NSE":
             continue
         if str(row.get("segment", "")).upper() != "FNO":
@@ -37,33 +35,27 @@ async def _available_contracts(symbol: str, expiry: str, option_type: str):
         if str(row.get("instrument_type", "")).upper() != target_type:
             continue
         strike = _as_float(row.get("strike_price"))
-        if strike is not None and strike > 0:
-            rows.append({
-                "strike": float(strike),
-                "trading_symbol": row.get("trading_symbol") or row.get("symbol"),
-                "groww_symbol": row.get("groww_symbol") or row.get("groww_ticker"),
-            })
-    return rows
+        if strike is None or strike <= 0:
+            continue
+        groww_symbol = row.get("groww_symbol") or row.get("groww_ticker") or row.get("symbol") or row.get("trading_symbol")
+        if not groww_symbol:
+            continue
+        out.append({
+            "underlying": target_symbol,
+            "expiry": target_expiry,
+            "strike": float(strike),
+            "option_type": target_type,
+            "groww_symbol": groww_symbol,
+            "trading_symbol": row.get("trading_symbol") or row.get("tradingsymbol") or row.get("symbol"),
+            "lot_size": _as_float(row.get("lot_size")),
+            "instrument_type": row.get("instrument_type"),
+            "segment": row.get("segment"),
+            "exchange": row.get("exchange"),
+        })
+    return out
 
 
-async def run_true_premium_backtest(
-    provider,
-    symbols: list[str],
-    start_date: str,
-    end_date: str,
-    expiry: str,
-    min_rr: float = 1.5,
-    entry_before: str | None = None,
-    max_trades: int = 20,
-):
-    """Replay historical scanner signals through actual option-premium OHLC.
-
-    Phase 1 intentionally separates what can be reconstructed honestly from what
-    cannot. The historical scanner creates direction/timestamp candidates. For
-    each candidate we choose the nearest listed strike for the supplied expiry,
-    then replay the exact option contract with Groww 5-minute premium candles.
-    Historical option-chain OI/IV/Greeks are not fabricated.
-    """
+async def run_true_premium_backtest(provider, symbols: list[str], start_date: str, end_date: str, expiry: str, min_rr: float = 1.5, entry_before: str | None = None, max_trades: int = 20):
     expiry_date = datetime.fromisoformat(_norm_expiry(expiry)).date()
     if datetime.fromisoformat(end_date[:10]).date() > expiry_date:
         raise ValueError("end_date cannot be after the selected option expiry")
@@ -71,6 +63,7 @@ async def run_true_premium_backtest(
 
     directional = await run_backtest(provider, symbols, start_date, end_date, min_rr, entry_before)
     candidates = list(directional.get("trades", []))[:max_trades]
+    master_rows = await _instrument_rows()
     contract_cache: dict[tuple[str, str], list[dict]] = {}
     trades = []
     errors = []
@@ -82,7 +75,7 @@ async def run_true_premium_backtest(
         try:
             contracts = contract_cache.get(key)
             if contracts is None:
-                contracts = await _available_contracts(symbol, expiry, option_type)
+                contracts = _available_contracts(master_rows, symbol, expiry, option_type)
                 contract_cache[key] = contracts
             if not contracts:
                 errors.append({"symbol": symbol, "timestamp": candidate.get("timestamp"), "stage": "CONTRACT_SELECTION", "error": f"No {option_type} contracts found for {expiry}"})
@@ -99,6 +92,7 @@ async def run_true_premium_backtest(
                 trade_date=when.date().isoformat(),
                 entry_time=when.strftime("%H:%M"),
                 min_rr=min_rr,
+                resolved_contract=selected,
             )
             replay_contract = replay.get("contract") if isinstance(replay, dict) else None
             option_contract = None
@@ -120,8 +114,6 @@ async def run_true_premium_backtest(
                 "strike_selection": "NEAREST_LISTED_STRIKE_TO_UNDERLYING_ENTRY",
                 **replay,
             }
-            # Keep the historical scanner timestamp as the canonical signal timestamp
-            # even though replay also returns signal_at.
             row["timestamp"] = candidate["timestamp"]
             trades.append(row)
         except Exception as exc:
