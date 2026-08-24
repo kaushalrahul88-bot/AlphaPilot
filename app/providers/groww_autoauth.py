@@ -11,15 +11,12 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Groww provider with stable token reuse and safe dynamic-auth fallback.
+    """Groww provider with process-wide daily authentication reuse.
 
-    A configured GROWW_ACCESS_TOKEN is preferred because it is already approved
-    for the current Groww session and survives Render process restarts. API
-    key+secret generation is used only when no explicit token is configured.
-
-    When dynamic generation is required, the generated token is cached
-    process-wide for the current Groww auth session so scanner batches do not
-    repeatedly authenticate.
+    When API key + secret are configured, AlphaPilot generates the current daily
+    Groww token and caches it process-wide for the trading auth session. An
+    explicit GROWW_ACCESS_TOKEN remains a fallback only, because a stale token can
+    otherwise cause every quote/candle/option request to fail with HTTP 401.
     """
 
     _daily_token = None
@@ -94,27 +91,33 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         raise RuntimeError("Groww token generation failed")
 
     async def _get_access_token(self):
-        # Prefer the already-approved token supplied to Render. This avoids a
-        # fresh approval/token-generation round trip whenever Render redeploys.
-        if self.access_token:
-            return self.access_token
+        # Preferred path: generate the current daily token from API credentials.
+        if self.api_key and self.api_secret:
+            session_key = self._auth_session_key()
+            cls = self.__class__
 
-        if not (self.api_key and self.api_secret):
-            raise RuntimeError("No Groww authentication credentials are configured")
-
-        session_key = self._auth_session_key()
-        cls = self.__class__
-
-        if cls._daily_token and cls._daily_auth_session == session_key:
-            return cls._daily_token
-
-        async with cls._auth_lock():
             if cls._daily_token and cls._daily_auth_session == session_key:
                 return cls._daily_token
 
-            token = await self._generate_access_token()
-            cls._daily_token = token
-            cls._daily_auth_session = session_key
-            self._cached_token = token
-            self._cached_auth_session = session_key
-            return token
+            async with cls._auth_lock():
+                if cls._daily_token and cls._daily_auth_session == session_key:
+                    return cls._daily_token
+
+                try:
+                    token = await self._generate_access_token()
+                except Exception:
+                    # Retain manual token only as a compatibility fallback.
+                    if self.access_token:
+                        return self.access_token
+                    raise
+
+                cls._daily_token = token
+                cls._daily_auth_session = session_key
+                self._cached_token = token
+                self._cached_auth_session = session_key
+                return token
+
+        if self.access_token:
+            return self.access_token
+
+        raise RuntimeError("No Groww authentication credentials are configured")
