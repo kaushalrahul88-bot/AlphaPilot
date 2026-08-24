@@ -109,11 +109,9 @@ def _failed_breakout_reversal(rows, indices, atrs):
         prior_high = max(float(rows[j][2]) for j in prior)
         prior_low = min(float(rows[j][3]) for j in prior)
         high, low, close = float(rows[i][2]), float(rows[i][3]), float(rows[i][4])
-        # Long rejection: price swept the prior low by at least 0.10 ATR but closed back inside.
         if low < prior_low - 0.10 * atr and close > prior_low:
             stop = low - 0.20 * atr
             return i, "LONG", stop, {"failed_level": round(prior_low,2), "sweep_atr": round((prior_low-low)/atr,2)}
-        # Short rejection: price swept the prior high but closed back below it.
         if high > prior_high + 0.10 * atr and close < prior_high:
             stop = high + 0.20 * atr
             return i, "SHORT", stop, {"failed_level": round(prior_high,2), "sweep_atr": round((high-prior_high)/atr,2)}
@@ -144,6 +142,9 @@ def _summary(trades: list[dict]):
 
 
 async def run_setup_discovery_v2(provider, symbols: list[str], start_date: str, end_date: str):
+    # Local import avoids a module-load cycle: execution research deliberately reuses these frozen setup definitions.
+    from .execution_structure_research import _break_confirmation, _pullback_entry, _summarize as _execution_summary
+
     start = datetime.fromisoformat(start_date).replace(tzinfo=IST)
     end = datetime.fromisoformat(end_date).replace(tzinfo=IST) + timedelta(hours=23, minutes=59)
     if end < start:
@@ -152,6 +153,7 @@ async def run_setup_discovery_v2(provider, symbols: list[str], start_date: str, 
         raise ValueError("Setup Discovery v2 blocks are limited to 16 calendar days")
 
     by_setup: dict[str, list[dict]] = defaultdict(list)
+    execution_records: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     errors = []
     for raw in symbols:
         symbol = raw.upper().strip()
@@ -176,31 +178,59 @@ async def run_setup_discovery_v2(provider, symbols: list[str], start_date: str, 
                     if not signal:
                         continue
                     i, direction, stop, features = signal
-                    sim = _simulate_underlying(rows, i, direction, float(stop), 1.0)
-                    if not sim:
+                    atr = atrs[i] if i < len(atrs) else 0.0
+                    if atr <= 0:
                         continue
+                    sim = _simulate_underlying(rows, i, direction, float(stop), 1.0)
                     signal_at = _ts(rows[i][0])
-                    by_setup[setup_type].append({
+                    base = {
                         "setup_type": setup_type, "symbol": symbol, "direction": direction,
-                        "action": "BUY CE" if direction == "LONG" else "BUY PE",
-                        "signal_at": signal_at.isoformat() if signal_at else str(rows[i][0]),
-                        "features": features, **sim,
-                    })
+                        "signal_at": signal_at.isoformat() if signal_at else str(rows[i][0]), "features": features,
+                    }
+                    if sim:
+                        by_setup[setup_type].append({**base, "action": "BUY CE" if direction == "LONG" else "BUY PE", **sim})
+                    methods = {
+                        "NEXT_OPEN": sim,
+                        "BREAK_CONFIRMATION": _break_confirmation(rows, i, direction, float(stop), float(atr)),
+                        "PULLBACK_ENTRY": _pullback_entry(rows, i, direction, float(stop), float(atr)),
+                    }
+                    for method, method_sim in methods.items():
+                        rec = dict(base); rec["filled"] = method_sim is not None
+                        if method_sim:
+                            rec.update(method_sim)
+                        execution_records[(setup_type, direction, method)].append(rec)
         except Exception as exc:
             errors.append({"symbol":symbol,"error":str(exc)})
 
     rows = []
+    execution_rows = []
     for setup_type in SETUP_TYPES:
         trades = by_setup.get(setup_type, [])
         for direction in ("LONG","SHORT"):
             sample = [t for t in trades if t.get("direction") == direction]
             rows.append({"setup_type":setup_type,"direction":direction, **_summary(sample)})
+            control = _execution_summary(execution_records.get((setup_type, direction, "NEXT_OPEN"), []), "NEXT_OPEN")
+            execution_rows.append({"setup_type":setup_type,"direction":direction,"method":"NEXT_OPEN",**control})
+            for method in ("BREAK_CONFIRMATION","PULLBACK_ENTRY"):
+                alt = _execution_summary(execution_records.get((setup_type, direction, method), []), method, control["average_r_per_signal"])
+                execution_rows.append({"setup_type":setup_type,"direction":direction,"method":method,**alt})
     rows.sort(key=lambda x:(x["state"]=="PROMISING", x["average_r"], x["trades"]), reverse=True)
+    execution_rows.sort(key=lambda x:(x["state"]=="IMPROVED", x.get("delta_vs_next_open") or -99, x["signals"]), reverse=True)
     return {
         "mode":"ALPHAPILOT_SETUP_DISCOVERY_V2",
         "research_only":True,"production_rules_changed":False,
         "start_date":start_date,"end_date":end_date,"symbols":symbols,
         "observations":sum(r["trades"] for r in rows),"rows":rows,"errors":errors,
+        "execution_structure_v1": {
+            "mode":"ALPHAPILOT_EXECUTION_STRUCTURE_DISCOVERY_V1",
+            "rows":execution_rows,
+            "fixed_methods":{
+                "NEXT_OPEN":"Existing control entry at next 5m open.",
+                "BREAK_CONFIRMATION":"Wait up to 3 bars for 0.05 ATR break beyond signal high/low; gap-through uses the worse open.",
+                "PULLBACK_ENTRY":"Wait up to 3 bars for 0.25 ATR retracement from signal close; structural stop remains unchanged; stop-crossing fill bars are ambiguous/excluded.",
+            },
+            "fixed_improvement_gate":{"min_signals":12,"min_fill_rate":50.0,"delta_average_r_per_signal":0.10,"win_rate_filled":55.0,"profit_factor":1.20,"replication_blocks_required":3},
+        },
         "fixed_gates":{"min_block_trades":MIN_BLOCK_TRADES,"average_r":AVG_R_GATE,"win_rate":WIN_RATE_GATE,"profit_factor":PROFIT_FACTOR_GATE,"target_r":1.0},
         "definitions":{
             "COMPRESSION_EXPANSION":"12-bar intraday range <=2.2 ATR, then >=0.10 ATR close outside the range with >=1.10x recent volume when volume is available.",
@@ -212,6 +242,7 @@ async def run_setup_discovery_v2(provider, symbols: list[str], start_date: str, 
             "Underlying-price research only; BUY CE/BUY PE labels are directional and do not reconstruct option-premium P&L.",
             "Each setup definition is frozen before replication results and selects at most its first signal per symbol/day.",
             "A PROMISING block is not a production candidate. Exact setup type + direction must replicate across independent blocks before untouched OOS validation.",
+            "Execution Structure v1 reuses the exact same frozen signal timestamps; unfilled alternatives count as 0R in average R per signal so participation loss is visible.",
             "News, cross-assets and Market Brain are intentionally excluded from this experiment.",
         ],
     }
