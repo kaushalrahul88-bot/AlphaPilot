@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import os
 import time
@@ -11,17 +10,15 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Groww provider with process-wide daily authentication reuse.
+    """Prefer Groww API key+secret and generate the daily access token automatically.
 
-    When API key + secret are configured, AlphaPilot generates the current daily
-    Groww token and caches it process-wide for the trading auth session. An
-    explicit GROWW_ACCESS_TOKEN remains a fallback only, because a stale token can
-    otherwise cause every quote/candle/option request to fail with HTTP 401.
+    Groww's approval flow expires at 06:00 IST. The user still needs to approve the
+    API key on Groww once per trading day, but AlphaPilot no longer requires manual
+    copying of a fresh access token into Render after that approval.
+
+    GROWW_ACCESS_TOKEN is retained only as a fallback when API key+secret are not
+    configured.
     """
-
-    _daily_token = None
-    _daily_auth_session = None
-    _daily_auth_lock = None
 
     def __init__(self, settings):
         self.api_key = "".join(os.getenv("GROWW_API_KEY", "").split())
@@ -35,89 +32,52 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
                 "Set both GROWW_API_KEY and GROWW_API_SECRET, or GROWW_ACCESS_TOKEN"
             )
 
-    @classmethod
-    def _auth_lock(cls):
-        if cls._daily_auth_lock is None:
-            cls._daily_auth_lock = asyncio.Lock()
-        return cls._daily_auth_lock
-
     @staticmethod
     def _auth_session_key():
+        # Groww access authorization resets daily at 06:00 Asia/Kolkata.
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         return (now - timedelta(hours=6)).date().isoformat()
 
     async def _generate_access_token(self):
-        last_error = None
-        for attempt in range(3):
-            ts = str(int(time.time()))
-            checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-            payload = {
-                "key_type": "approval",
-                "checksum": checksum,
-                "timestamp": ts,
-            }
-            try:
-                async with httpx.AsyncClient(timeout=12) as client:
-                    response = await client.post(
-                        f"{self.BASE_URL}/v1/token/api/access",
-                        headers=headers,
-                        json=payload,
-                    )
-                if response.status_code == 200:
-                    data = response.json()
-                    token = "".join(str(data.get("token", "")).split())
-                    if token:
-                        return token
-                    last_error = RuntimeError(f"Groww token generation failed: {data}")
-                else:
-                    last_error = RuntimeError(
-                        f"Groww token generation failed ({response.status_code}): {response.text[:300]}"
-                    )
-                    if response.status_code not in (408, 429) and response.status_code < 500:
-                        break
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                last_error = exc
+        ts = str(int(time.time()))
+        checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        payload = {
+            "key_type": "approval",
+            "checksum": checksum,
+            "timestamp": ts,
+        }
 
-            if attempt < 2:
-                await asyncio.sleep(0.75 * (attempt + 1))
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                f"{self.BASE_URL}/v1/token/api/access",
+                headers=headers,
+                json=payload,
+            )
 
-        if last_error:
-            raise last_error
-        raise RuntimeError("Groww token generation failed")
+        response.raise_for_status()
+        data = response.json()
+        token = "".join(str(data.get("token", "")).split())
+        if not token:
+            raise RuntimeError(f"Groww token generation failed: {data}")
+        return token
 
     async def _get_access_token(self):
-        # Preferred path: generate the current daily token from API credentials.
+        # Preferred path: API key + secret. This deliberately ignores a stale
+        # GROWW_ACCESS_TOKEN when the renewable credentials are available.
         if self.api_key and self.api_secret:
             session_key = self._auth_session_key()
-            cls = self.__class__
+            if self._cached_token and self._cached_auth_session == session_key:
+                return self._cached_token
 
-            if cls._daily_token and cls._daily_auth_session == session_key:
-                return cls._daily_token
+            token = await self._generate_access_token()
+            self._cached_token = token
+            self._cached_auth_session = session_key
+            return token
 
-            async with cls._auth_lock():
-                if cls._daily_token and cls._daily_auth_session == session_key:
-                    return cls._daily_token
-
-                try:
-                    token = await self._generate_access_token()
-                except Exception:
-                    # Retain manual token only as a compatibility fallback.
-                    if self.access_token:
-                        return self.access_token
-                    raise
-
-                cls._daily_token = token
-                cls._daily_auth_session = session_key
-                self._cached_token = token
-                self._cached_auth_session = session_key
-                return token
-
-        if self.access_token:
-            return self.access_token
-
-        raise RuntimeError("No Groww authentication credentials are configured")
+        # Fallback for installations that only use a manually generated token.
+        return self.access_token
