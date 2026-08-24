@@ -62,7 +62,9 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
     max_trades = max(1, min(int(max_trades), 50))
 
     directional = await run_backtest(provider, symbols, start_date, end_date, min_rr, entry_before)
-    candidates = list(directional.get("trades", []))[:max_trades]
+    all_candidates = list(directional.get("trades", []))
+    all_candidates.sort(key=lambda x: str(x.get("timestamp", "")))
+    candidates = all_candidates[:max_trades]
     master_rows = await _instrument_rows()
     contract_cache: dict[tuple[str, str], list[dict]] = {}
     trades = []
@@ -129,6 +131,7 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
 
+    selected_symbols = sorted({str(x.get("symbol", "")) for x in candidates if x.get("symbol")})
     return {
         "mode": "TRUE_OPTION_PREMIUM_HISTORICAL_BACKTEST_PHASE1",
         "start_date": start_date,
@@ -136,6 +139,10 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         "expiry": _norm_expiry(expiry),
         "min_risk_reward": min_rr,
         "entry_before": entry_before,
+        "candidate_selection": "CHRONOLOGICAL_FIRST_N_ACROSS_UNIVERSE",
+        "candidate_signals_total": len(all_candidates),
+        "candidate_signals_selected": len(candidates),
+        "candidate_symbols_selected": selected_symbols,
         "candidate_signals": len(candidates),
         "summary": {
             "trades": len(resolved),
@@ -154,6 +161,7 @@ async def run_true_premium_backtest(provider, symbols: list[str], start_date: st
         "limitations": [
             "P&L uses actual Groww historical 5-minute option-premium OHLC for exact contracts.",
             "Historical direction/timestamp comes from the existing technical MTF scanner replay.",
+            "When max_trades truncates a multi-symbol sample, candidates are selected chronologically across the requested universe instead of being biased toward symbols listed first.",
             "Strike selection is nearest listed strike to the historical underlying entry for the supplied expiry; historical OI/IV-based strike ranking is not reconstructed.",
             "Historical F&O confirmation score, option-chain OI/IV/Greeks, external news and GIFT context are not reconstructed and are never fabricated.",
             "Same-candle stop/target collisions remain AMBIGUOUS and are excluded from resolved R statistics.",
