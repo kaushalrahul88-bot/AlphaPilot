@@ -11,12 +11,13 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Use the configured Groww access token first, with dynamic auth as fallback.
+    """Prefer session-aware dynamic auth, with a manual-token-only fallback.
 
-    A manually generated GROWW_ACCESS_TOKEN is valid for the current Groww session
-    and avoids calling the rate-limited /v1/token/api/access endpoint on every
-    Render restart. API key + secret remain available as a fallback when no manual
-    token is configured.
+    When API key + secret are configured, generate one shared token per Groww
+    session. ``GROWW_ACCESS_TOKEN`` remains supported for deployments that do not
+    have the key pair, but it must not override dynamic auth: a token left in
+    Render after Groww's 06:00 IST reset would otherwise force every data request
+    to fail with HTTP 401 until the environment variable was manually replaced.
     """
 
     _shared_token = None
@@ -75,13 +76,15 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         return token
 
     async def _get_access_token(self):
-        # Preferred path for live validation: use the manually generated current
-        # session token and completely avoid Groww's token-generation endpoint.
-        if self.access_token:
-            return self.access_token
-
+        # A manual token is the fallback only when a complete dynamic-auth key
+        # pair is unavailable. This prevents a stale Render environment value
+        # from shadowing credentials that can generate the current session token.
         if not (self.api_key and self.api_secret):
-            raise RuntimeError("No Groww authentication credentials are configured")
+            if not self.access_token:
+                raise RuntimeError(
+                    "No Groww authentication credentials are configured"
+                )
+            return self.access_token
 
         session_key = self._auth_session_key()
         cls = self.__class__
