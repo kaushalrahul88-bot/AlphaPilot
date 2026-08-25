@@ -1,0 +1,100 @@
+name: Run frozen Market Brain v7
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/run-market-brain-v7.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-v7:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for deployed v7 endpoint
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 30 https://alphapilot-api-pnio.onrender.com/openapi.json | grep -q "market-brain-v7-observations"; then
+              echo "Market Brain v7 endpoint is live."
+              exit 0
+            fi
+            echo "Waiting for deployment: attempt $attempt/60"
+            sleep 10
+          done
+          echo "v7 endpoint did not deploy in time."
+          exit 1
+
+      - name: Collect frozen blocks and score H-1 once
+        run: |
+          mkdir -p results
+
+          run_block() {
+            block_id="$1"
+            start_date="$2"
+            end_date="$3"
+            role="$4"
+            echo "Collecting $block_id $start_date to $end_date as $role"
+            curl -fsS --retry 2 --retry-all-errors --max-time 360               -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-observations               -H "Content-Type: application/json"               --data "{"start_date":"$start_date","end_date":"$end_date","role":"$role"}"               > "results/$block_id.json"
+            jq -e --arg block "$block_id" '.block_id == $block and (.observations | type == "array")' "results/$block_id.json" >/dev/null
+            jq '{block_id,role,setup_trades,eligible_setup_trades,matched_observations,match_rate_pct,overall,context_errors:(.context_errors|length),backtest_errors:(.backtest_errors|length)}' "results/$block_id.json"
+          }
+
+          run_block "S-0A" "2026-05-25" "2026-06-05" "DEVELOPMENT"
+          run_block "S-0B" "2026-06-08" "2026-06-19" "DEVELOPMENT"
+          run_block "S-0C" "2026-06-22" "2026-07-03" "DEVELOPMENT"
+          run_block "S-1" "2026-07-06" "2026-07-17" "DEVELOPMENT"
+          run_block "S-2" "2026-07-20" "2026-07-31" "DEVELOPMENT"
+          run_block "S-3" "2026-08-03" "2026-08-10" "DEVELOPMENT"
+          run_block "H-1" "2026-08-11" "2026-08-21" "HOLDOUT"
+
+          jq -s '[.[].observations[]]'             results/S-0A.json results/S-0B.json results/S-0C.json             results/S-1.json results/S-2.json results/S-3.json             > results/development.json
+          jq '.observations' results/H-1.json > results/holdout.json
+          jq -n             --slurpfile development results/development.json             --slurpfile holdout results/holdout.json             '{development:$development[0],holdout:$holdout[0]}'             > results/evaluation-request.json
+
+          curl -fsS --retry 2 --retry-all-errors --max-time 120             -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-evaluate             -H "Content-Type: application/json"             --data-binary @results/evaluation-request.json             > results/evaluation.json
+
+          jq -e '.decision and .probability_metrics and .probability_bands and .acceptance_gates' results/evaluation.json >/dev/null
+          jq '{
+            decision,
+            development,
+            holdout,
+            probability_metrics,
+            probability_bands,
+            economic_spreads,
+            acceptance_gates,
+            standardized_coefficients:.model.standardized_coefficients
+          }' results/evaluation.json
+
+      - name: Publish run summary
+        if: always()
+        run: |
+          if [ -f results/evaluation.json ]; then
+            {
+              echo "## Market Brain v7 frozen result"
+              echo '~~~json'
+              jq '{
+                decision,
+                development,
+                holdout,
+                probability_metrics,
+                probability_bands,
+                economic_spreads,
+                acceptance_gates,
+                standardized_coefficients:.model.standardized_coefficients
+              }' results/evaluation.json
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-brain-v7-frozen-evidence
+          path: results/
+          if-no-files-found: error
+          retention-days: 30
