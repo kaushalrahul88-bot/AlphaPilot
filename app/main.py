@@ -42,6 +42,7 @@ from .paper_trade_lifecycle import (
 )
 from .pullback_short_option_h1 import run_pullback_short_option_h1
 from .setup_discovery_v2 import run_setup_discovery_v2
+from .setup_discovery_v3 import run_setup_discovery_v3
 from .strategy_research import run_strategy_research
 from .strategy_premium_replay import run_strategy_premium_replay
 from .strategy_regime_routing import run_strategy_regime_routing
@@ -150,6 +151,12 @@ async def setup_discovery_v2(request:SetupDiscoveryV2Request):
     try:return await run_setup_discovery_v2(get_provider(settings),symbols,request.start_date,request.end_date)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("setup discovery v2",exc)
+@app.post("/v1/research/setup-discovery-v3")
+async def setup_discovery_v3(request:SetupDiscoveryV2Request):
+    symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:return await run_setup_discovery_v3(get_provider(settings),symbols,request.start_date,request.end_date)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("setup discovery v3",exc)
 @app.post("/v1/research/pullback-short-option-h1")
 async def pullback_short_option_h1():
     try:return await run_pullback_short_option_h1(get_provider(settings))
