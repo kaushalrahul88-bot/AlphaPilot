@@ -5,7 +5,7 @@ A clean paper session is a deterministic evidence result, not a user checkbox.
 ## Required evidence
 
 - Attestation after 15:35 IST for the same weekday session.
-- Passing API, Groww quote, 5-minute candle, and exact option-chain checks in all three windows:
+- Passing API, Groww quote, 5-minute candle, and option-chain checks for every paper-trade underlying and expiry in all three windows:
   - Early: 09:15–10:30 IST
   - Mid: 11:00–13:30 IST
   - Late: 14:00–15:30 IST
