@@ -11,6 +11,7 @@ from app.commodity_option_history import (
     fetch_mcx_option_day,
     premium_entry_after_click,
     probe_mcx_option_history,
+    scan_mcx_option_history_band,
     select_mcx_option_contract,
 )
 
@@ -125,6 +126,29 @@ class CommodityOptionHistoryTests(unittest.TestCase):
         self.assertEqual(result["contract"]["strike"], 8100.0)
         self.assertFalse(result["production_rules_changed"])
         self.assertFalse(result["paper_trading_permission_changed"])
+        self.assertFalse(result["live_execution_enabled"])
+
+    def test_band_scan_fetches_ce_and_pe_once_per_selected_strike(self):
+        master = []
+        for option_type in ("CE", "PE"):
+            for strike in (8000, 8050, 8100, 8150, 8200):
+                master.append(contract("CRUDEOIL", option_type, "2026-09-17", strike))
+
+        async def fake_history(provider, selected, trade_date, client=None):
+            candles = [["2026-08-25T10:00:00+05:30", 10, 11, 9, 10, 1]] if selected["strike"] == 8100 else []
+            return {"status": "AVAILABLE" if candles else "NO_CANDLES", "candles": candles}
+
+        async def run():
+            with patch("app.commodity_option_history.fetch_mcx_option_master", new=AsyncMock(return_value=master)), patch(
+                "app.commodity_option_history.fetch_mcx_option_day", new=AsyncMock(side_effect=fake_history)
+            ):
+                return await scan_mcx_option_history_band(Provider(), "CRUDEOIL", "2026-08-25", 8100, radius=2)
+
+        result = asyncio.run(run())
+        self.assertEqual(result["contracts_tested"], 10)
+        self.assertEqual(result["contracts_with_candles"], 2)
+        self.assertEqual(result["total_candles"], 2)
+        self.assertEqual(result["status"], "AVAILABLE")
         self.assertFalse(result["live_execution_enabled"])
 
 
