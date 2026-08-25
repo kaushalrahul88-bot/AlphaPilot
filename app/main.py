@@ -161,6 +161,11 @@ async def market_brain_v4_setup_expectancy(request:MarketBrainSetupExpectancyReq
     try:return await run_market_brain_setup_expectancy(get_provider(settings),request.start_date,request.end_date)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("market brain v4 setup expectancy",exc)
+@app.post("/v1/research/market-brain-v6-dynamic-context")
+async def market_brain_v6_dynamic_context(request:MarketBrainSetupExpectancyRequest):
+    try:return await run_market_brain_setup_expectancy(get_provider(settings),request.start_date,request.end_date)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("market brain v6 dynamic context",exc)
 @app.post("/v1/research/candidate-validator")
 async def candidate_validator(request:CandidateValidatorRequest):
     symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
