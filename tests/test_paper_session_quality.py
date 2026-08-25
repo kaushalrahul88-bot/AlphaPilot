@@ -29,6 +29,8 @@ def snapshot(at, **overrides):
         captured_at=at,
         symbol="RELIANCE",
         expiry=date(2026, 8, 27),
+        strike=3000,
+        option_type="CE",
         checks=CriticalHealthChecks(**checks),
     )
 
@@ -46,6 +48,8 @@ def closed_trade(**overrides):
         "trade_id": "paper-123",
         "symbol": "RELIANCE",
         "expiry": date(2026, 8, 27),
+        "strike": 3000,
+        "option_type": "CE",
         "status": "CLOSED",
         "paper_only": True,
         "live_execution_enabled": False,
@@ -181,6 +185,15 @@ class PaperSessionQualityTests(unittest.TestCase):
 
         self.assertIn("CONTRACT_HEALTH_COVERAGE_INCOMPLETE", result["blockers"])
 
+    def test_health_must_match_trade_strike_and_type(self):
+        rows = [
+            row.model_copy(update={"strike": 3020, "option_type": "PE"})
+            for row in healthy_snapshots()
+        ]
+        result = evaluate_paper_session(request(health_snapshots=rows))
+
+        self.assertIn("CONTRACT_HEALTH_COVERAGE_INCOMPLETE", result["blockers"])
+
     def test_attestation_id_is_deterministic(self):
         first = evaluate_paper_session(request())
         second = evaluate_paper_session(request())
@@ -193,6 +206,8 @@ class PaperSessionQualityTests(unittest.TestCase):
                 trade_id="paper-bad",
                 symbol="RELIANCE",
                 expiry=date(2026, 8, 27),
+                strike=3000,
+                option_type="CE",
                 status="CLOSED",
                 paper_only=True,
                 live_execution_enabled=True,

@@ -32,6 +32,8 @@ class SessionHealthSnapshot(StrictModel):
     captured_at: datetime
     symbol: str = Field(min_length=1, max_length=30)
     expiry: date
+    strike: float = Field(gt=0)
+    option_type: Literal["CE", "PE"]
     checks: CriticalHealthChecks
 
 
@@ -45,6 +47,8 @@ class SessionPaperTrade(StrictModel):
     trade_id: str = Field(min_length=1, max_length=100)
     symbol: str = Field(min_length=1, max_length=30)
     expiry: date
+    strike: float = Field(gt=0)
+    option_type: Literal["CE", "PE"]
     status: Literal["OPEN", "CLOSED"]
     paper_only: Literal[True] = True
     live_execution_enabled: Literal[False] = False
@@ -168,15 +172,17 @@ def evaluate_paper_session(request: PaperSessionAttestationRequest) -> dict:
         blockers.append("UNRESOLVED_PAPER_POSITION")
 
     contracts = {
-        (row.symbol.strip().upper(), row.expiry)
+        (row.symbol.strip().upper(), row.expiry, round(row.strike, 4), row.option_type)
         for row in session_trades
     }
     contract_coverage_complete = True
-    for symbol, expiry in contracts:
+    for symbol, expiry, strike, option_type in contracts:
         for phase_name in ("EARLY", "MID", "LATE"):
             matched = any(
                 row.symbol.strip().upper() == symbol
                 and row.expiry == expiry
+                and round(row.strike, 4) == strike
+                and row.option_type == option_type
                 for row in phases[phase_name]
             )
             if not matched:
