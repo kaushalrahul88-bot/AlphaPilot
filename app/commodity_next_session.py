@@ -10,7 +10,7 @@ from .news import latest_commodity_news
 
 
 IST = ZoneInfo("Asia/Kolkata")
-PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26"
+PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26-r2"
 SESSION_OPEN = time(9, 0)
 SESSION_CLOSE = time(23, 30)
 SYMBOLS = ("CRUDEOIL", "NATURALGAS")
@@ -327,6 +327,7 @@ async def run_commodity_next_session(provider, observation_date_text, target_dat
             "cost_bps_each_side": 2.0,
             "max_risk_per_trade_pct": 1.0,
             "news_role": "current context only; never reconstructed and not a backtest gate",
+            "provider_unit_normalization": "MCX authoritative rupee tick sizes: CRUDEOIL 1.00, NATURALGAS 0.10",
         },
         "research_only": True,
         "production_rules_changed": False,

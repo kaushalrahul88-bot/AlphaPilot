@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.commodity_next_session import build_next_session_plan, score_next_session
+from app.commodities import MCX_TICK_SIZE_RUPEES
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -25,6 +26,10 @@ def make_session(day, direction=1, start=100.0, late_boost=True):
 
 
 class CommodityNextSessionTests(unittest.TestCase):
+    def test_mcx_tick_sizes_are_normalized_to_rupees(self):
+        self.assertEqual(MCX_TICK_SIZE_RUPEES["CRUDEOIL"], 1.0)
+        self.assertEqual(MCX_TICK_SIZE_RUPEES["NATURALGAS"], 0.10)
+
     def test_completed_session_builds_next_day_buy_breakout(self):
         monday = date(2026, 8, 24)
         rows = make_session(date(2026, 8, 21), direction=1, start=95.0)
