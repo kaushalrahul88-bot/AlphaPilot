@@ -24,6 +24,7 @@ from .fno_premium_replay import replay_option_trade
 from .global_intelligence import global_intelligence
 from .market_brain_context_research import run_market_brain_context_block
 from .market_brain_setup_expectancy import run_market_brain_setup_expectancy
+from .market_brain_v7_regime_quality import evaluate_market_brain_v7, run_market_brain_v7_observations
 from .market_regime_research import run_market_regime_research
 from .news import latest_commodity_news, latest_market_news
 from .option_native_research import run_option_native_research
@@ -73,6 +74,8 @@ class CandidateBValidatorRequest(BaseModel): symbols:list[str]=Field(default_fac
 class CandidateHOptionRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","HDFCBANK","ICICIBANK","SBIN","TCS","INFY","TATASTEEL","MARUTI","AXISBANK","KOTAKBANK","LT","HINDALCO"]); start_date:str; end_date:str; max_signals:int=80
 class MarketBrainContextBlockRequest(BaseModel): start_date:str; end_date:str; min_obs:int=20
 class MarketBrainSetupExpectancyRequest(BaseModel): start_date:str; end_date:str
+class MarketBrainV7ObservationRequest(BaseModel): start_date:str; end_date:str; role:Literal["DEVELOPMENT","HOLDOUT"]
+class MarketBrainV7EvaluateRequest(BaseModel): development:list[dict]; holdout:list[dict]
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
 class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; trade_date:str; entry_time:str="09:30"; min_risk_reward:float=1.5
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
@@ -166,6 +169,16 @@ async def market_brain_v6_dynamic_context(request:MarketBrainSetupExpectancyRequ
     try:return await run_market_brain_setup_expectancy(get_provider(settings),request.start_date,request.end_date)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("market brain v6 dynamic context",exc)
+@app.post("/v1/research/market-brain-v7-observations")
+async def market_brain_v7_observations(request:MarketBrainV7ObservationRequest):
+    try:return await run_market_brain_v7_observations(get_provider(settings),request.start_date,request.end_date,request.role)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("market brain v7 observations",exc)
+@app.post("/v1/research/market-brain-v7-evaluate")
+async def market_brain_v7_evaluate(request:MarketBrainV7EvaluateRequest):
+    try:return evaluate_market_brain_v7(request.development,request.holdout)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("market brain v7 evaluation",exc)
 @app.post("/v1/research/candidate-validator")
 async def candidate_validator(request:CandidateValidatorRequest):
     symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
