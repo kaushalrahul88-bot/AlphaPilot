@@ -240,3 +240,76 @@ async def probe_mcx_option_history(provider, symbol, trade_date, underlying_pric
         "paper_trading_permission_changed": False,
         "live_execution_enabled": False,
     }
+
+
+async def scan_mcx_option_history_band(provider, symbol, trade_date, center_price, radius=5):
+    symbol = str(symbol).upper().strip()
+    when = datetime.fromisoformat(str(trade_date)[:10]).date()
+    center = float(center_price)
+    radius = max(0, min(int(radius), 8))
+    master = await fetch_mcx_option_master([symbol])
+    eligible = []
+    for row in master:
+        expiry_date = _expiry(row.get("expiry"))
+        if str(row.get("underlying") or "").upper() != symbol or expiry_date is None or expiry_date < when:
+            continue
+        dte = (expiry_date - when).days
+        if dte <= AUTO_EXPIRY_MAX_DTE_DAYS:
+            eligible.append(row)
+    if not eligible:
+        return {"status": "NO_ELIGIBLE_CONTRACTS", "symbol": symbol, "trade_date": when.isoformat(), "research_only": True}
+    selected_expiry = min(_expiry(row["expiry"]) for row in eligible)
+    expiry_rows = [row for row in eligible if _expiry(row["expiry"]) == selected_expiry]
+    strikes = sorted({float(row["strike"]) for row in expiry_rows})
+    center_index = min(range(len(strikes)), key=lambda index: (abs(strikes[index] - center), strikes[index]))
+    selected_strikes = strikes[max(0, center_index - radius): center_index + radius + 1]
+    observations = []
+    for option_type in ("CE", "PE"):
+        by_strike = {float(row["strike"]): row for row in expiry_rows if row.get("option_type") == option_type}
+        for strike in selected_strikes:
+            contract = by_strike.get(strike)
+            if contract is None:
+                observations.append({"option_type": option_type, "strike": strike, "status": "CONTRACT_NOT_LISTED", "candles_available": 0})
+                continue
+            try:
+                history = await fetch_mcx_option_day(provider, contract, when)
+                candles = history.get("candles", [])
+                observations.append({
+                    "option_type": option_type,
+                    "strike": strike,
+                    "trading_symbol": contract.get("trading_symbol"),
+                    "groww_symbol": contract.get("groww_symbol"),
+                    "status": history.get("status"),
+                    "candles_available": len(candles),
+                    "first_candle_at": candles[0][0] if candles else None,
+                    "last_candle_at": candles[-1][0] if candles else None,
+                })
+            except Exception as exc:
+                observations.append({
+                    "option_type": option_type,
+                    "strike": strike,
+                    "trading_symbol": contract.get("trading_symbol"),
+                    "status": "DATA_ERROR",
+                    "candles_available": 0,
+                    "error": f"{exc.__class__.__name__}: {str(exc)[:160]}",
+                })
+    available = [row for row in observations if row.get("candles_available", 0) > 0]
+    return {
+        "mode": "MCX_OPTION_HISTORY_BAND_SCAN_V1",
+        "status": "AVAILABLE" if available else "NO_CANDLES_IN_BAND",
+        "symbol": symbol,
+        "trade_date": when.isoformat(),
+        "center_price": center,
+        "expiry": selected_expiry.isoformat(),
+        "expiry_dte": (selected_expiry - when).days,
+        "radius": radius,
+        "strikes": selected_strikes,
+        "contracts_tested": len(observations),
+        "contracts_with_candles": len(available),
+        "total_candles": sum(row.get("candles_available", 0) for row in available),
+        "observations": observations,
+        "research_only": True,
+        "production_rules_changed": False,
+        "paper_trading_permission_changed": False,
+        "live_execution_enabled": False,
+    }
