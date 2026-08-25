@@ -14,7 +14,6 @@ from .risk_discipline import RiskDisciplineRequest, evaluate_risk_discipline
 IST = ZoneInfo("Asia/Kolkata")
 PROTOCOL_REVISION = "paper-trade-lifecycle-v1-2026-08-25"
 MAX_LIVE_DECISION_AGE_SECONDS = 120
-MAX_CLOCK_SKEW_SECONDS = 5
 
 
 class StrictModel(BaseModel):
@@ -54,12 +53,12 @@ class PaperTrade(StrictModel):
     strike: float
     option_type: Literal["CE", "PE"]
     lot_size: int
-    quantity: int
-    lots: int
+    quantity: int = Field(ge=1)
+    lots: int = Field(ge=1)
     correlation_group: str
-    entry_price: float
-    stop_price: float
-    target_price: float
+    entry_price: float = Field(gt=0)
+    stop_price: float = Field(gt=0)
+    target_price: float = Field(gt=0)
     estimated_cost_rupees: float
     initial_risk_rupees: float
     opened_at: datetime
@@ -178,8 +177,6 @@ def open_paper_trade(
         blockers.append("LIVE_GROWW_OPTION_DATA_REQUIRED")
     if observation.provider == "HISTORICAL_REPLAY" and observation.data_status != "HISTORICAL":
         blockers.append("HISTORICAL_REPLAY_STATUS_REQUIRED")
-    if observed_at > datetime.now(timezone.utc) + __import__("datetime").timedelta(seconds=MAX_CLOCK_SKEW_SECONDS):
-        blockers.append("OBSERVATION_FROM_FUTURE")
     if observation.data_status == "LIVE" and abs((observed_at - requested_at).total_seconds()) > MAX_LIVE_DECISION_AGE_SECONDS:
         blockers.append("RISK_DECISION_STALE")
     if contract.expiry < observed_at.astimezone(IST).date():
@@ -257,6 +254,30 @@ def open_paper_trade(
     }
 
 
+def _validate_open_state(trade: PaperTrade) -> None:
+    contract = ExactOptionContract(
+        symbol=trade.symbol,
+        expiry=trade.expiry,
+        strike=trade.strike,
+        option_type=trade.option_type,
+        lot_size=trade.lot_size,
+    )
+    if trade.trade_id != _trade_id(trade.risk_decision_id, contract):
+        raise ValueError("Paper trade identity check failed")
+    if trade.quantity % trade.lot_size != 0 or trade.lots != trade.quantity // trade.lot_size:
+        raise ValueError("Paper trade quantity is not a consistent whole-lot size")
+    if not trade.stop_price < trade.entry_price < trade.target_price:
+        raise ValueError("Paper trade price geometry is invalid")
+    expected_risk = _round(
+        (trade.entry_price - trade.stop_price) * trade.quantity
+        + trade.estimated_cost_rupees
+    )
+    if abs(expected_risk - trade.initial_risk_rupees) > 0.01:
+        raise ValueError("Paper trade initial risk check failed")
+    if _utc(trade.last_observed_at) < _utc(trade.opened_at):
+        raise ValueError("Paper trade observation order is invalid")
+
+
 def mark_paper_trade(
     paper_trade: PaperTrade,
     observation: PremiumObservation,
@@ -266,6 +287,7 @@ def mark_paper_trade(
 
     if paper_trade.status != "OPEN":
         raise ValueError("Only an OPEN paper trade can be marked")
+    _validate_open_state(paper_trade)
     contract = ExactOptionContract(
         symbol=paper_trade.symbol,
         expiry=paper_trade.expiry,
