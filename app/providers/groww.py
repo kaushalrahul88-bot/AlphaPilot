@@ -16,6 +16,21 @@ class GrowwProvider:
     # This intentionally avoids pretending Render's free filesystem is durable.
     _option_snapshots = {}
 
+    # Cash symbols used by AlphaPilot research/scanning. Keeping this allow-list
+    # explicit prevents arbitrary user input from becoming an upstream request,
+    # while allowing Market Brain to build its full breadth context.
+    NSE_CASH_SYMBOLS = {
+        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN",
+        "AXISBANK", "KOTAKBANK", "INDUSINDBK", "BAJFINANCE", "BAJAJFINSV",
+        "LT", "BHARTIARTL", "ITC", "HINDUNILVR", "MARUTI", "M&M",
+        "TATAMOTORS", "SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB",
+        "APOLLOHOSP", "WIPRO", "HCLTECH", "TECHM", "LTIM", "TITAN",
+        "ASIANPAINT", "ULTRACEMCO", "TATASTEEL", "JSWSTEEL", "HINDALCO",
+        "COALINDIA", "ONGC", "NTPC", "POWERGRID", "ADANIENT",
+        "ADANIPORTS", "GRASIM", "NESTLEIND", "BRITANNIA", "EICHERMOT",
+        "HEROMOTOCO",
+    }
+
     def __init__(self, settings):
         self.api_key = "".join(os.getenv("GROWW_API_KEY", "").split())
         self.api_secret = "".join(os.getenv("GROWW_API_SECRET", "").split())
@@ -86,9 +101,11 @@ class GrowwProvider:
             "ICICIBANK": ("NSE", "CASH", "ICICIBANK", "NSE-ICICIBANK"),
             "SBIN": ("NSE", "CASH", "SBIN", "NSE-SBIN"),
         }
-        if symbol not in mapping:
-            raise ValueError(f"{symbol} is not mapped yet")
-        return mapping[symbol]
+        if symbol in mapping:
+            return mapping[symbol]
+        if symbol in self.NSE_CASH_SYMBOLS:
+            return ("NSE", "CASH", symbol, f"NSE-{symbol}")
+        raise ValueError(f"{symbol} is not mapped yet")
 
     async def quote(self, symbol):
         exchange, segment, trading_symbol, _ = self._instrument(symbol)

@@ -1,6 +1,10 @@
 import unittest
 
-from app.strategy_regime_routing import evaluate_strategy_regime_router
+from app.strategy_regime_routing import (
+    _apply_data_quality_status,
+    _data_quality_gates,
+    evaluate_strategy_regime_router,
+)
 
 
 def _trade(index, timestamp, r_multiple, strategy="PRICE_ACTION_BREAKOUT", grade="CONFIRMED"):
@@ -90,6 +94,40 @@ class StrategyRegimeRoutingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "overlapping trade identities"):
             evaluate_strategy_regime_router(development, holdout, 0.0)
+
+    def test_data_pipeline_failure_is_not_reported_as_economic_rejection(self):
+        result = evaluate_strategy_regime_router(_development(), _holdout(), 0.0)
+        development_source = {
+            "option_trade_count": 0,
+            "market_context_observations": 0,
+            "context_match": {"matched_trades": 0, "match_rate_pct": 0.0},
+        }
+        holdout_source = {
+            "option_trade_count": 200,
+            "market_context_observations": 0,
+            "context_match": {"matched_trades": 0, "match_rate_pct": 0.0},
+        }
+
+        _apply_data_quality_status(result, development_source, holdout_source)
+
+        self.assertEqual(result["decision"], "INSUFFICIENT_DATA_FOR_STRATEGY_REGIME_ROUTER")
+        self.assertEqual(result["data_quality_status"], "INCOMPLETE")
+        self.assertEqual(result["economic_evaluation_status"], "NOT_EVALUABLE")
+        self.assertIn("development_option_trades_at_least_30", result["failed_gates"])
+
+    def test_complete_data_preserves_economic_decision(self):
+        source = {
+            "option_trade_count": 40,
+            "market_context_observations": 100,
+            "context_match": {"matched_trades": 35, "match_rate_pct": 87.5},
+        }
+        self.assertTrue(all(_data_quality_gates(source, source).values()))
+        result = evaluate_strategy_regime_router(_development(), _holdout(), 0.0)
+
+        _apply_data_quality_status(result, source, source)
+
+        self.assertEqual(result["decision"], "VALIDATED_STRATEGY_REGIME_ROUTER")
+        self.assertEqual(result["economic_evaluation_status"], "VALID_SAMPLE")
 
 
 if __name__ == "__main__":
