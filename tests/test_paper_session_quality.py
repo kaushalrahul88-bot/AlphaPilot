@@ -28,6 +28,7 @@ def snapshot(at, **overrides):
     return SessionHealthSnapshot(
         captured_at=at,
         symbol="RELIANCE",
+        expiry=date(2026, 8, 27),
         checks=CriticalHealthChecks(**checks),
     )
 
@@ -43,6 +44,8 @@ def healthy_snapshots():
 def closed_trade(**overrides):
     values = {
         "trade_id": "paper-123",
+        "symbol": "RELIANCE",
+        "expiry": date(2026, 8, 27),
         "status": "CLOSED",
         "paper_only": True,
         "live_execution_enabled": False,
@@ -160,7 +163,7 @@ class PaperSessionQualityTests(unittest.TestCase):
 
     def test_coverage_span_must_be_sufficient(self):
         rows = [
-            snapshot(datetime(2026, 8, 25, 5, 0, tzinfo=timezone.utc)),
+            snapshot(datetime(2026, 8, 25, 5, 31, tzinfo=timezone.utc)),
             snapshot(datetime(2026, 8, 25, 6, 0, tzinfo=timezone.utc)),
             snapshot(datetime(2026, 8, 25, 8, 30, tzinfo=timezone.utc)),
         ]
@@ -168,6 +171,15 @@ class PaperSessionQualityTests(unittest.TestCase):
 
         self.assertIn("MISSING_EARLY_HEALTH_COVERAGE", result["blockers"])
         self.assertIn("INSUFFICIENT_SESSION_COVERAGE", result["blockers"])
+
+    def test_health_must_match_trade_contract_expiry(self):
+        rows = [
+            row.model_copy(update={"expiry": date(2026, 9, 3)})
+            for row in healthy_snapshots()
+        ]
+        result = evaluate_paper_session(request(health_snapshots=rows))
+
+        self.assertIn("CONTRACT_HEALTH_COVERAGE_INCOMPLETE", result["blockers"])
 
     def test_attestation_id_is_deterministic(self):
         first = evaluate_paper_session(request())
@@ -179,6 +191,8 @@ class PaperSessionQualityTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             SessionPaperTrade(
                 trade_id="paper-bad",
+                symbol="RELIANCE",
+                expiry=date(2026, 8, 27),
                 status="CLOSED",
                 paper_only=True,
                 live_execution_enabled=True,
