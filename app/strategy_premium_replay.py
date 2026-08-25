@@ -23,8 +23,8 @@ async def run_strategy_premium_replay(
     max_trades: int = 30,
 ):
     strategy = str(strategy).upper().strip()
-    if strategy not in {"VWAP_TREND", "ORB_30", "BREAKOUT_20"}:
-        raise ValueError("strategy must be VWAP_TREND, ORB_30 or BREAKOUT_20")
+    if strategy not in {"VWAP_TREND", "ORB_30", "BREAKOUT_20", "PRICE_ACTION_BREAKOUT"}:
+        raise ValueError("strategy must be VWAP_TREND, ORB_30, BREAKOUT_20 or PRICE_ACTION_BREAKOUT")
 
     symbols = [str(s).upper().strip() for s in symbols if str(s).strip()]
     max_trades = max(1, min(int(max_trades), 50))
