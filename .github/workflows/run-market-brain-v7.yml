@@ -38,7 +38,8 @@ jobs:
             end_date="$3"
             role="$4"
             echo "Collecting $block_id $start_date to $end_date as $role"
-            curl -fsS --retry 2 --retry-all-errors --max-time 360               -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-observations               -H "Content-Type: application/json"               --data "{"start_date":"$start_date","end_date":"$end_date","role":"$role"}"               > "results/$block_id.json"
+            request_body=$(jq -n --arg start_date "$start_date" --arg end_date "$end_date" --arg role "$role" '{start_date:$start_date,end_date:$end_date,role:$role}')
+            curl -fsS --retry 2 --retry-all-errors --max-time 360 -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-observations -H "Content-Type: application/json" --data-binary "$request_body" > "results/$block_id.json"
             jq -e --arg block "$block_id" '.block_id == $block and (.observations | type == "array")' "results/$block_id.json" >/dev/null
             jq '{block_id,role,setup_trades,eligible_setup_trades,matched_observations,match_rate_pct,overall,context_errors:(.context_errors|length),backtest_errors:(.backtest_errors|length)}' "results/$block_id.json"
           }
@@ -51,23 +52,12 @@ jobs:
           run_block "S-3" "2026-08-03" "2026-08-10" "DEVELOPMENT"
           run_block "H-1" "2026-08-11" "2026-08-21" "HOLDOUT"
 
-          jq -s '[.[].observations[]]'             results/S-0A.json results/S-0B.json results/S-0C.json             results/S-1.json results/S-2.json results/S-3.json             > results/development.json
+          jq -s '[.[].observations[]]' results/S-0A.json results/S-0B.json results/S-0C.json results/S-1.json results/S-2.json results/S-3.json > results/development.json
           jq '.observations' results/H-1.json > results/holdout.json
-          jq -n             --slurpfile development results/development.json             --slurpfile holdout results/holdout.json             '{development:$development[0],holdout:$holdout[0]}'             > results/evaluation-request.json
-
-          curl -fsS --retry 2 --retry-all-errors --max-time 120             -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-evaluate             -H "Content-Type: application/json"             --data-binary @results/evaluation-request.json             > results/evaluation.json
-
+          jq -n --slurpfile development results/development.json --slurpfile holdout results/holdout.json '{development:$development[0],holdout:$holdout[0]}' > results/evaluation-request.json
+          curl -fsS --retry 2 --retry-all-errors --max-time 120 -X POST https://alphapilot-api-pnio.onrender.com/v1/research/market-brain-v7-evaluate -H "Content-Type: application/json" --data-binary @results/evaluation-request.json > results/evaluation.json
           jq -e '.decision and .probability_metrics and .probability_bands and .acceptance_gates' results/evaluation.json >/dev/null
-          jq '{
-            decision,
-            development,
-            holdout,
-            probability_metrics,
-            probability_bands,
-            economic_spreads,
-            acceptance_gates,
-            standardized_coefficients:.model.standardized_coefficients
-          }' results/evaluation.json
+          jq '{decision,development,holdout,probability_metrics,probability_bands,economic_spreads,acceptance_gates,standardized_coefficients:.model.standardized_coefficients}' results/evaluation.json
 
       - name: Publish run summary
         if: always()
@@ -76,16 +66,7 @@ jobs:
             {
               echo "## Market Brain v7 frozen result"
               echo '~~~json'
-              jq '{
-                decision,
-                development,
-                holdout,
-                probability_metrics,
-                probability_bands,
-                economic_spreads,
-                acceptance_gates,
-                standardized_coefficients:.model.standardized_coefficients
-              }' results/evaluation.json
+              jq '{decision,development,holdout,probability_metrics,probability_bands,economic_spreads,acceptance_gates,standardized_coefficients:.model.standardized_coefficients}' results/evaluation.json
               echo '~~~'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
