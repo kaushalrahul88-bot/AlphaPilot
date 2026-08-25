@@ -182,6 +182,7 @@ def _build_dynamic_effects(matched):
     rows.sort(key=lambda row:(abs(row["delta_avg_r"]),abs(row["delta_win_rate_pp"]),row["trades"]), reverse=True)
     eligible = [row for row in rows if row["trades"] >= MIN_GROUP_OBS]
     return {
+        "overall":_summary(matched),
         "baseline_by_direction":baseline,
         "effects":rows,
         "hypotheses_tested":len(rows),
