@@ -43,13 +43,14 @@ from .paper_trade_lifecycle import (
 from .setup_discovery_v2 import run_setup_discovery_v2
 from .strategy_research import run_strategy_research
 from .strategy_premium_replay import run_strategy_premium_replay
+from .strategy_regime_routing import run_strategy_regime_routing
 
 logger = logging.getLogger("alphapilot.scan")
 class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.31.1"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.32.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -74,8 +75,9 @@ class BacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda
 class StrategyResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK"]); start_date:str; end_date:str; target_r:float=1.0
 class SetupDiscoveryV2Request(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","HDFCBANK","ICICIBANK","SBIN","TCS","INFY","TATASTEEL","MARUTI"]); start_date:str; end_date:str
 class CandlestickDiscoveryV1Request(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","HDFCBANK","ICICIBANK","SBIN","TCS","INFY","TATASTEEL","MARUTI"]); start_date:str; end_date:str
-class StrategyPremiumReplayRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK"]); start_date:str; end_date:str; strategy:Literal["VWAP_TREND","ORB_30","BREAKOUT_20"]="VWAP_TREND"; research_target_r:float=1.0; premium_min_risk_reward:float=1.5; max_trades:int=30
+class StrategyPremiumReplayRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK"]); start_date:str; end_date:str; strategy:Literal["VWAP_TREND","ORB_30","BREAKOUT_20","PRICE_ACTION_BREAKOUT"]="VWAP_TREND"; research_target_r:float=1.0; premium_min_risk_reward:float=1.5; max_trades:int=30
 class OptionNativeResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; research_target_r:float=1.0; premium_min_risk_reward:float=1.5; max_trades_per_strategy:int=30; round_trip_cost_bps:float=10.0
+class StrategyRegimeRoutingRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); development_start:str; development_end:str; holdout_start:str; holdout_end:str; research_target_r:float=1.0; premium_min_risk_reward:float=1.5; max_trades_per_strategy:int=50; round_trip_cost_bps:float=10.0
 class OptionNativePhase2Request(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; premium_min_risk_reward:float=1.5; max_trades_per_model:int=30; round_trip_cost_bps:float=10.0
 class MarketRegimeResearchRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; premium_min_risk_reward:float=1.5; max_trades_per_model:int=30; round_trip_cost_bps:float=10.0
 class EdgeDiscoveryRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE","SBIN","AXISBANK","HDFCBANK","ICICIBANK","TATASTEEL","HINDALCO","ONGC","INFY","TCS"]); start_date:str; end_date:str; max_observations:int=600; round_trip_cost_bps:float=10.0; sample_every_bars:int=3
@@ -94,7 +96,7 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.31.1","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.32.0","provider":settings.market_data_provider.upper()}
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
@@ -172,6 +174,12 @@ async def option_native_research(request:OptionNativeResearchRequest):
     try:return await run_option_native_research(get_provider(settings),symbols,request.start_date,request.end_date,request.research_target_r,request.premium_min_risk_reward,request.max_trades_per_strategy,request.round_trip_cost_bps)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("option-native research",exc)
+@app.post("/v1/research/strategy-regime-routing-v1")
+async def strategy_regime_routing_v1(request:StrategyRegimeRoutingRequest):
+    symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
+    try:return await run_strategy_regime_routing(get_provider(settings),symbols,request.development_start,request.development_end,request.holdout_start,request.holdout_end,request.research_target_r,request.premium_min_risk_reward,request.max_trades_per_strategy,request.round_trip_cost_bps)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("strategy regime routing v1",exc)
 @app.post("/v1/research/option-native/phase2")
 async def option_native_phase2(request:OptionNativePhase2Request):
     symbols=[s.upper() for s in request.symbols if s.strip()] or ["RELIANCE"]
