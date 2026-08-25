@@ -39,6 +39,12 @@ MIN_HOLDOUT_MONTHS = 2
 MIN_HOLDOUT_PROFIT_FACTOR = 1.20
 MAX_HOLDOUT_DRAWDOWN_R = 6.0
 
+MIN_DATA_DEVELOPMENT_OPTION_TRADES = 30
+MIN_DATA_HOLDOUT_OPTION_TRADES = 20
+MIN_DATA_DEVELOPMENT_MATCHED_TRADES = 30
+MIN_DATA_HOLDOUT_MATCHED_TRADES = 20
+MIN_CONTEXT_MATCH_RATE_PCT = 70.0
+
 
 def _number(value, default: float = 0.0) -> float:
     try:
@@ -350,10 +356,15 @@ async def _context_for_split(provider, start_date: str, end_date: str):
     errors = []
 
     async def fetch_one(symbol):
-        try:
-            return symbol, await _historical(provider, symbol, "15m", context_start, end), None
-        except Exception as exc:
-            return symbol, [], f"{exc.__class__.__name__}: {exc}"
+        last_error = None
+        for attempt in range(3):
+            try:
+                return symbol, await _historical(provider, symbol, "15m", context_start, end), None
+            except Exception as exc:
+                last_error = f"{exc.__class__.__name__}: {exc}"
+                if attempt < 2:
+                    await asyncio.sleep(0.75 * (attempt + 1))
+        return symbol, [], last_error
 
     for offset in range(0, len(SYMBOLS), 4):
         batch = await asyncio.gather(*(fetch_one(symbol) for symbol in SYMBOLS[offset:offset + 4]))
@@ -361,7 +372,7 @@ async def _context_for_split(provider, start_date: str, end_date: str):
             all_rows[symbol] = rows
             if error:
                 errors.append({"symbol": symbol, "error": error})
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.35)
     contexts = [
         row for row in _build_continuous_context(all_rows)
         if start_date <= str(row.get("ts", ""))[:10] <= end_date
@@ -413,6 +424,58 @@ def _flatten_option_research(payload: dict) -> list[dict]:
     for result in payload.get("leaderboard") or []:
         trades.extend(result.get("trades") or [])
     return trades
+
+
+def _data_quality_gates(development_source: dict, holdout_source: dict) -> dict:
+    development_match = development_source.get("context_match") or {}
+    holdout_match = holdout_source.get("context_match") or {}
+    return {
+        "development_option_trades_at_least_30": (
+            int(development_source.get("option_trade_count") or 0)
+            >= MIN_DATA_DEVELOPMENT_OPTION_TRADES
+        ),
+        "holdout_option_trades_at_least_20": (
+            int(holdout_source.get("option_trade_count") or 0)
+            >= MIN_DATA_HOLDOUT_OPTION_TRADES
+        ),
+        "development_market_context_available": (
+            int(development_source.get("market_context_observations") or 0) > 0
+        ),
+        "holdout_market_context_available": (
+            int(holdout_source.get("market_context_observations") or 0) > 0
+        ),
+        "development_context_match_at_least_70pct": (
+            float(development_match.get("match_rate_pct") or 0.0)
+            >= MIN_CONTEXT_MATCH_RATE_PCT
+        ),
+        "holdout_context_match_at_least_70pct": (
+            float(holdout_match.get("match_rate_pct") or 0.0)
+            >= MIN_CONTEXT_MATCH_RATE_PCT
+        ),
+        "development_matched_trades_at_least_30": (
+            int(development_match.get("matched_trades") or 0)
+            >= MIN_DATA_DEVELOPMENT_MATCHED_TRADES
+        ),
+        "holdout_matched_trades_at_least_20": (
+            int(holdout_match.get("matched_trades") or 0)
+            >= MIN_DATA_HOLDOUT_MATCHED_TRADES
+        ),
+    }
+
+
+def _apply_data_quality_status(result: dict, development_source: dict, holdout_source: dict):
+    gates = _data_quality_gates(development_source, holdout_source)
+    result["data_quality_gates"] = gates
+    result["economic_failed_gates"] = list(result.get("failed_gates") or [])
+    if all(gates.values()):
+        result["data_quality_status"] = "COMPLETE"
+        result["economic_evaluation_status"] = "VALID_SAMPLE"
+        return result
+    result["data_quality_status"] = "INCOMPLETE"
+    result["economic_evaluation_status"] = "NOT_EVALUABLE"
+    result["decision"] = "INSUFFICIENT_DATA_FOR_STRATEGY_REGIME_ROUTER"
+    result["failed_gates"] = [name for name, passed in gates.items() if not passed]
+    return result
 
 
 async def _run_split(
@@ -491,4 +554,4 @@ async def run_strategy_regime_routing(
         "development": development_source,
         "holdout": holdout_source,
     }
-    return result
+    return _apply_data_quality_status(result, development_source, holdout_source)
