@@ -15,6 +15,7 @@ from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_next_session import run_commodity_next_session
+from .commodity_option_history import probe_mcx_option_history
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .edge_discovery import run_edge_discovery
@@ -54,7 +55,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.36.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.37.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -97,11 +98,12 @@ class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; str
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
 class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; days:int=30; min_risk_reward:float=1.5; strength_threshold:float=65.0; slippage_bps:float=2.0; cost_bps:float=2.0
 class CommodityNextSessionRequest(BaseModel): observation_date:str; target_date:str; include_outcome:bool=False; include_news:bool=True
+class CommodityOptionHistoryProbeRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; underlying_price:float=Field(gt=0); option_type:Literal["CE","PE"]
 
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.36.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.37.0","provider":settings.market_data_provider.upper()}
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
@@ -299,6 +301,11 @@ async def mcx_next_session_prototype(request:CommodityNextSessionRequest):
     try:return await run_commodity_next_session(get_provider(settings),request.observation_date,request.target_date,request.include_outcome,request.include_news)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("commodity next-session prototype",exc)
+@app.post("/v1/research/commodity-option-history-probe")
+async def mcx_option_history_probe(request:CommodityOptionHistoryProbeRequest):
+    try:return await probe_mcx_option_history(get_provider(settings),request.symbol,request.trade_date,request.underlying_price,request.option_type)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("historical MCX option premium probe",exc)
 @app.get("/v1/news")
 async def news(symbols:str,limit:int=3):return await latest_market_news([x.strip().upper() for x in symbols.split(",") if x.strip()],max(1,min(int(limit),5)))
 @app.post("/v1/scan")

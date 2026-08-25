@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import csv
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+
+import httpx
+
+from .fno_history_probe import INSTRUMENT_CSV_URL
+
+
+IST = ZoneInfo("Asia/Kolkata")
+SUPPORTED = {"CRUDEOIL", "NATURALGAS"}
+AUTO_EXPIRY_MAX_DTE_DAYS = 35
+
+
+def _number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _timestamp(value):
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, (int, float)) or str(value).isdigit():
+        parsed = datetime.fromtimestamp(float(value) / 1000.0 if float(value) > 1e12 else float(value), IST)
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=IST)
+    return parsed.astimezone(IST)
+
+
+def _expiry(value):
+    try:
+        return datetime.fromisoformat(str(value or "")[:10]).date()
+    except Exception:
+        return None
+
+
+def _normalized_tick(raw):
+    value = _number(raw)
+    return round(value / 100.0, 4) if value is not None and value > 0 else None
+
+
+def _option_row(row, wanted):
+    symbol = str(row.get("underlying_symbol") or "").upper().strip()
+    option_type = str(row.get("instrument_type") or "").upper().strip()
+    if str(row.get("exchange") or "").upper() != "MCX":
+        return None
+    if str(row.get("segment") or "").upper() != "COMMODITY":
+        return None
+    if symbol not in SUPPORTED or (wanted and symbol not in wanted):
+        return None
+    if option_type not in {"CE", "PE"}:
+        return None
+    strike = _number(row.get("strike_price"))
+    expiry_date = _expiry(row.get("expiry_date"))
+    groww_symbol = row.get("groww_symbol")
+    if strike is None or strike <= 0 or expiry_date is None or not groww_symbol:
+        return None
+    return {
+        "underlying": symbol,
+        "exchange": "MCX",
+        "segment": "COMMODITY",
+        "option_type": option_type,
+        "expiry": expiry_date.isoformat(),
+        "strike": float(strike),
+        "groww_symbol": str(groww_symbol),
+        "trading_symbol": str(row.get("trading_symbol") or row.get("internal_trading_symbol") or ""),
+        "lot_size": int(float(row["lot_size"])) if str(row.get("lot_size") or "").strip() else None,
+        "tick_size": _normalized_tick(row.get("tick_size")),
+        "buy_allowed": str(row.get("buy_allowed") or "") == "1",
+    }
+
+
+async def fetch_mcx_option_master(symbols=None):
+    wanted = {str(symbol).upper().strip() for symbol in (symbols or []) if str(symbol).strip()}
+    rows = []
+    async with httpx.AsyncClient(timeout=40) as client:
+        async with client.stream("GET", INSTRUMENT_CSV_URL) as response:
+            response.raise_for_status()
+            fieldnames = None
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                values = next(csv.reader([line]))
+                if fieldnames is None:
+                    fieldnames = [str(value).lstrip("\ufeff").strip() for value in values]
+                    continue
+                if len(values) < len(fieldnames):
+                    values += [""] * (len(fieldnames) - len(values))
+                elif len(values) > len(fieldnames):
+                    values = values[: len(fieldnames)]
+                normalized = _option_row(dict(zip(fieldnames, values)), wanted)
+                if normalized:
+                    rows.append(normalized)
+    return rows
+
+
+def select_mcx_option_contract(master_rows, symbol, trade_date, underlying_price, option_type):
+    symbol = str(symbol).upper().strip()
+    option_type = str(option_type).upper().strip()
+    when = trade_date if isinstance(trade_date, date) else datetime.fromisoformat(str(trade_date)[:10]).date()
+    price = _number(underlying_price)
+    if symbol not in SUPPORTED:
+        raise ValueError("symbol must be CRUDEOIL or NATURALGAS")
+    if option_type not in {"CE", "PE"}:
+        raise ValueError("option_type must be CE or PE")
+    if price is None or price <= 0:
+        raise ValueError("underlying_price must be positive")
+    candidates = []
+    for row in master_rows or []:
+        if str(row.get("underlying") or "").upper() != symbol:
+            continue
+        if str(row.get("option_type") or "").upper() != option_type:
+            continue
+        expiry_date = _expiry(row.get("expiry"))
+        strike = _number(row.get("strike"))
+        if expiry_date is None or strike is None or expiry_date < when:
+            continue
+        dte = (expiry_date - when).days
+        if dte > AUTO_EXPIRY_MAX_DTE_DAYS:
+            continue
+        candidates.append((expiry_date, abs(strike - price), strike, row))
+    if not candidates:
+        return None
+    nearest_expiry = min(item[0] for item in candidates)
+    same_expiry = [item for item in candidates if item[0] == nearest_expiry]
+    _, distance, _, selected = min(same_expiry, key=lambda item: (item[1], item[2]))
+    return {
+        **selected,
+        "expiry_dte": (nearest_expiry - when).days,
+        "strike_selection": "NEAREST_LISTED_STRIKE_TO_POINT_IN_TIME_UNDERLYING",
+        "distance_from_underlying": round(distance, 4),
+        "research_only": True,
+    }
+
+
+def _clean_candles(candles):
+    rows = []
+    for row in candles or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            continue
+        try:
+            stamp = _timestamp(row[0])
+        except Exception:
+            continue
+        values = [_number(row[index]) for index in range(1, 5)]
+        if any(value is None or value <= 0 for value in values) or values[1] < values[2]:
+            continue
+        volume = max(0.0, _number(row[5]) or 0.0) if len(row) > 5 else 0.0
+        rows.append([stamp.isoformat(), *values, volume])
+    return sorted(rows, key=lambda row: _timestamp(row[0]))
+
+
+async def fetch_mcx_option_day(provider, contract, trade_date, client=None):
+    day = trade_date if isinstance(trade_date, date) else datetime.fromisoformat(str(trade_date)[:10]).date()
+    start = datetime.combine(day, time(9, 0), tzinfo=IST)
+    end = datetime.combine(day, time(23, 30), tzinfo=IST)
+    throttle = getattr(provider, "_throttle", None)
+    if callable(throttle):
+        await throttle()
+    params = {
+        "exchange": "MCX",
+        "segment": "COMMODITY",
+        "groww_symbol": contract["groww_symbol"],
+        "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "candle_interval": "5minute",
+    }
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(timeout=40)
+    try:
+        response = await client.get(
+            f"{provider.BASE_URL}/v1/historical/candles",
+            headers=await provider._headers(),
+            params=params,
+        )
+        response.raise_for_status()
+        body = response.json()
+    finally:
+        if owns_client:
+            await client.aclose()
+    payload = body.get("payload", body) if isinstance(body, dict) else {}
+    candles = _clean_candles(payload.get("candles", []) if isinstance(payload, dict) else [])
+    return {
+        "status": "AVAILABLE" if candles else "NO_CANDLES",
+        "contract": contract,
+        "trade_date": day.isoformat(),
+        "candles": candles,
+        "candles_available": len(candles),
+        "source": "GROWW_HISTORICAL_MCX_OPTION_PREMIUM",
+        "research_only": True,
+    }
+
+
+def premium_entry_after_click(candles, click_at):
+    click = _timestamp(click_at)
+    rows = _clean_candles(candles)
+    entry = next((row for row in rows if _timestamp(row[0]) > click), None)
+    if entry is None:
+        return None
+    return {
+        "entry_at": entry[0],
+        "entry_price": round(float(entry[1]), 4),
+        "entry_basis": "NEXT_5M_OPTION_CANDLE_OPEN_AFTER_CLICK",
+        "no_look_ahead_signal": True,
+    }
+
+
+async def probe_mcx_option_history(provider, symbol, trade_date, underlying_price, option_type):
+    symbol = str(symbol).upper().strip()
+    option_type = str(option_type).upper().strip()
+    master = await fetch_mcx_option_master([symbol])
+    selected = select_mcx_option_contract(master, symbol, trade_date, underlying_price, option_type)
+    if selected is None:
+        return {
+            "status": "CONTRACT_NOT_FOUND",
+            "symbol": symbol,
+            "trade_date": str(trade_date)[:10],
+            "underlying_price": float(underlying_price),
+            "option_type": option_type,
+            "research_only": True,
+        }
+    history = await fetch_mcx_option_day(provider, selected, trade_date)
+    return {
+        "mode": "MCX_OPTION_HISTORY_PROBE_V1",
+        "symbol": symbol,
+        "trade_date": str(trade_date)[:10],
+        "underlying_price": float(underlying_price),
+        "option_type": option_type,
+        "contract": selected,
+        "history": history,
+        "research_only": True,
+        "production_rules_changed": False,
+        "paper_trading_permission_changed": False,
+        "live_execution_enabled": False,
+    }
