@@ -40,6 +40,9 @@ class CommodityNextSessionTests(unittest.TestCase):
         self.assertGreaterEqual(plan["features"]["directional_score"], 3)
         self.assertEqual(plan["risk_reward"], 1.5)
         self.assertGreater(plan["entry"], plan["features"]["session_high"])
+        self.assertAlmostEqual(plan["entry"] / 0.1, round(plan["entry"] / 0.1))
+        self.assertAlmostEqual(plan["stop_loss"] / 0.1, round(plan["stop_loss"] / 0.1))
+        self.assertAlmostEqual(plan["target1"] / 0.1, round(plan["target1"] / 0.1))
 
     def test_mixed_session_returns_no_trade(self):
         monday = date(2026, 8, 24)

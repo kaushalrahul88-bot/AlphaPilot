@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+import math
 from statistics import mean
 from zoneinfo import ZoneInfo
 
@@ -10,7 +11,7 @@ from .news import latest_commodity_news
 
 
 IST = ZoneInfo("Asia/Kolkata")
-PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26-r2"
+PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26-r3"
 SESSION_OPEN = time(9, 0)
 SESSION_CLOSE = time(23, 30)
 SYMBOLS = ("CRUDEOIL", "NATURALGAS")
@@ -31,6 +32,14 @@ def _ema(values, period):
     for value in values[1:]:
         current = value * multiplier + current * (1.0 - multiplier)
     return current
+
+
+def _floor_to_tick(value, tick):
+    return round(math.floor((value + 1e-10) / tick) * tick, 10) if tick > 0 else value
+
+
+def _ceil_to_tick(value, tick):
+    return round(math.ceil((value - 1e-10) / tick) * tick, 10) if tick > 0 else value
 
 
 def _session_rows(rows, session_date):
@@ -174,9 +183,13 @@ def build_next_session_plan(symbol, rows, observation_date, target_date, tick_si
     tick = max(_f(tick_size), 0.0)
     buffer_distance = max(0.05 * daily_atr, tick)
     risk_distance = max(0.75 * daily_atr, 0.40 * session_range)
-    entry = session_high + buffer_distance if action == "BUY" else session_low - buffer_distance
-    stop = entry - risk_distance if action == "BUY" else entry + risk_distance
-    target = entry + 1.5 * risk_distance if action == "BUY" else entry - 1.5 * risk_distance
+    raw_entry = session_high + buffer_distance if action == "BUY" else session_low - buffer_distance
+    entry = _ceil_to_tick(raw_entry, tick) if action == "BUY" else _floor_to_tick(raw_entry, tick)
+    raw_stop = entry - risk_distance if action == "BUY" else entry + risk_distance
+    stop = _floor_to_tick(raw_stop, tick) if action == "BUY" else _ceil_to_tick(raw_stop, tick)
+    aligned_risk = abs(entry - stop)
+    raw_target = entry + 1.5 * aligned_risk if action == "BUY" else entry - 1.5 * aligned_risk
+    target = _ceil_to_tick(raw_target, tick) if action == "BUY" else _floor_to_tick(raw_target, tick)
     invalidation = session_low if action == "BUY" else session_high
     return {
         **base,
@@ -185,7 +198,7 @@ def build_next_session_plan(symbol, rows, observation_date, target_date, tick_si
         "entry": round(entry, 4),
         "stop_loss": round(stop, 4),
         "target1": round(target, 4),
-        "risk_points": round(risk_distance, 4),
+        "risk_points": round(aligned_risk, 4),
         "risk_reward": 1.5,
         "invalidation": round(invalidation, 4),
         "reason": f"{abs(directional_score)} of 5 frozen directional votes agree on {action}.",
@@ -327,7 +340,7 @@ async def run_commodity_next_session(provider, observation_date_text, target_dat
             "cost_bps_each_side": 2.0,
             "max_risk_per_trade_pct": 1.0,
             "news_role": "current context only; never reconstructed and not a backtest gate",
-            "provider_unit_normalization": "MCX authoritative rupee tick sizes: CRUDEOIL 1.00, NATURALGAS 0.10",
+            "provider_unit_normalization": "MCX authoritative rupee tick sizes: CRUDEOIL 1.00, NATURALGAS 0.10; all plan levels aligned conservatively to legal ticks",
         },
         "research_only": True,
         "production_rules_changed": False,
