@@ -115,6 +115,16 @@ class PaperTradeLifecycleTests(unittest.TestCase):
 
         self.assertIn("RISK_DECISION_STALE", result["blockers"])
 
+    def test_live_open_outside_nse_window_is_blocked(self):
+        after_close = datetime(2026, 8, 25, 11, 30, tzinfo=timezone.utc)
+        result = open_paper_trade(
+            request(evaluated_at=after_close),
+            contract(),
+            observation(at=after_close),
+        )
+
+        self.assertIn("NSE_SESSION_NOT_EXECUTABLE", result["blockers"])
+
     def test_live_price_is_re_evaluated_not_trusted_from_old_entry(self):
         result = open_paper_trade(request(), contract(), observation(price=130))
 
@@ -155,6 +165,16 @@ class PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual(result["status"], "MARKED_OPEN")
         self.assertEqual(result["open_position_risk"]["risk_rupees"], 800)
         self.assertEqual(result["paper_trade"]["unrealized_pnl_rupees"], 700)
+
+    def test_mark_outside_nse_window_is_rejected(self):
+        trade = self.open_trade()
+        after_close = datetime(2026, 8, 25, 11, 30, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(ValueError, "executable NSE session"):
+            mark_paper_trade(
+                trade,
+                observation(price=117, at=after_close, source_id="obs-after-close"),
+            )
 
     def test_duplicate_observation_is_idempotent(self):
         trade = self.open_trade()
