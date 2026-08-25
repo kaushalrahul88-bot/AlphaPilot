@@ -31,6 +31,14 @@ from .option_native_research import run_option_native_research
 from .option_native_phase2 import run_option_native_phase2
 from .providers.factory import get_provider
 from .risk_discipline import RiskDisciplineRequest, evaluate_risk_discipline
+from .paper_trade_lifecycle import (
+    ExactOptionContract,
+    PaperTradeMarkRequest,
+    PaperTradeOpenRequest,
+    fetch_live_option_observation,
+    mark_paper_trade,
+    open_paper_trade,
+)
 from .setup_discovery_v2 import run_setup_discovery_v2
 from .strategy_research import run_strategy_research
 from .strategy_premium_replay import run_strategy_premium_replay
@@ -40,7 +48,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.29.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.30.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -85,11 +93,29 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.29.0","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.30.0","provider":settings.market_data_provider.upper()}
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+@app.post("/v1/paper-trades/open")
+async def paper_trade_open(request:PaperTradeOpenRequest):
+    try:
+        observation=await fetch_live_option_observation(get_provider(settings),request.contract)
+        return open_paper_trade(request.risk_request,request.contract,observation)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("paper option observation",exc)
+
+@app.post("/v1/paper-trades/mark")
+async def paper_trade_mark(request:PaperTradeMarkRequest):
+    try:
+        contract=request.paper_trade
+        exact=ExactOptionContract(symbol=contract.symbol,expiry=contract.expiry,strike=contract.strike,option_type=contract.option_type,lot_size=contract.lot_size)
+        observation=await fetch_live_option_observation(get_provider(settings),exact)
+        return mark_paper_trade(request.paper_trade,observation,request.manual_exit)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("paper option observation",exc)
+
 @app.get("/v1/market/global-intelligence")
 async def market_global_intelligence(limit:int=5): return await global_intelligence(limit)
 @app.get("/v1/quote/{symbol}")

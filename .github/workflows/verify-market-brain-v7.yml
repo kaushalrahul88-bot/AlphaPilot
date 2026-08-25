@@ -1,4 +1,4 @@
-name: Verify Market Brain v7
+name: Verify AlphaPilot Backend
 
 on:
   pull_request:
