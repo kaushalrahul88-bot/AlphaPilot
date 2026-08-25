@@ -11,7 +11,7 @@ from .news import latest_commodity_news
 
 
 IST = ZoneInfo("Asia/Kolkata")
-PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26-r3"
+PROTOCOL_REVISION = "commodity-next-session-v1-2026-08-26-r4-buy-options-only"
 SESSION_OPEN = time(9, 0)
 SESSION_CLOSE = time(23, 30)
 SYMBOLS = ("CRUDEOIL", "NATURALGAS")
@@ -139,7 +139,8 @@ def build_next_session_plan(symbol, rows, observation_date, target_date, tick_si
         structure_vote = 1 if session_high > prior_high and session_low > prior_low else -1 if session_high < prior_high and session_low < prior_low else 0
     votes.append(("session_structure", structure_vote))
     directional_score = sum(value for _, value in votes)
-    action = "BUY" if directional_score >= 3 else "SELL" if directional_score <= -3 else "NO TRADE"
+    internal_direction = "BUY" if directional_score >= 3 else "SELL" if directional_score <= -3 else "NO TRADE"
+    action = "BUY CE" if internal_direction == "BUY" else "BUY PE" if internal_direction == "SELL" else "NO TRADE"
 
     daily = _daily_range_metrics(sessions)
     ranges = [item["true_range"] for item in daily[-10:] if item["true_range"] > 0]
@@ -175,22 +176,23 @@ def build_next_session_plan(symbol, rows, observation_date, target_date, tick_si
         "last_observed_candle_at": _ts(observed[-1][0]).isoformat(),
         "features": features,
         "action": action,
+        "underlying_direction": "BULLISH" if internal_direction == "BUY" else "BEARISH" if internal_direction == "SELL" else "NEUTRAL",
         "confidence_pct": round(abs(directional_score) / 5.0 * 100.0, 1),
     }
-    if action == "NO TRADE":
+    if internal_direction == "NO TRADE":
         return {**base, "status": "NO_TRADE", "reason": "Fewer than 3 of 5 frozen directional votes agree."}
 
     tick = max(_f(tick_size), 0.0)
     buffer_distance = max(0.05 * daily_atr, tick)
     risk_distance = max(0.75 * daily_atr, 0.40 * session_range)
-    raw_entry = session_high + buffer_distance if action == "BUY" else session_low - buffer_distance
-    entry = _ceil_to_tick(raw_entry, tick) if action == "BUY" else _floor_to_tick(raw_entry, tick)
-    raw_stop = entry - risk_distance if action == "BUY" else entry + risk_distance
-    stop = _floor_to_tick(raw_stop, tick) if action == "BUY" else _ceil_to_tick(raw_stop, tick)
+    raw_entry = session_high + buffer_distance if internal_direction == "BUY" else session_low - buffer_distance
+    entry = _ceil_to_tick(raw_entry, tick) if internal_direction == "BUY" else _floor_to_tick(raw_entry, tick)
+    raw_stop = entry - risk_distance if internal_direction == "BUY" else entry + risk_distance
+    stop = _floor_to_tick(raw_stop, tick) if internal_direction == "BUY" else _ceil_to_tick(raw_stop, tick)
     aligned_risk = abs(entry - stop)
-    raw_target = entry + 1.5 * aligned_risk if action == "BUY" else entry - 1.5 * aligned_risk
-    target = _ceil_to_tick(raw_target, tick) if action == "BUY" else _floor_to_tick(raw_target, tick)
-    invalidation = session_low if action == "BUY" else session_high
+    raw_target = entry + 1.5 * aligned_risk if internal_direction == "BUY" else entry - 1.5 * aligned_risk
+    target = _ceil_to_tick(raw_target, tick) if internal_direction == "BUY" else _floor_to_tick(raw_target, tick)
+    invalidation = session_low if internal_direction == "BUY" else session_high
     return {
         **base,
         "status": "SETUP",
@@ -201,7 +203,7 @@ def build_next_session_plan(symbol, rows, observation_date, target_date, tick_si
         "risk_points": round(aligned_risk, 4),
         "risk_reward": 1.5,
         "invalidation": round(invalidation, 4),
-        "reason": f"{abs(directional_score)} of 5 frozen directional votes agree on {action}.",
+        "reason": f"{abs(directional_score)} of 5 frozen directional votes support {action}; no short option or futures order is permitted.",
     }
 
 
@@ -212,7 +214,7 @@ def score_next_session(plan, target_rows, slippage_bps=2.0, cost_bps=2.0):
     if not rows:
         return {"outcome": "TARGET_SESSION_UNAVAILABLE", "r_multiple": 0.0, "entry_time": None, "exit_time": None}
 
-    action = plan["action"]
+    bullish = plan.get("underlying_direction") == "BULLISH"
     entry = _f(plan["entry"])
     stop = _f(plan["stop_loss"])
     target = _f(plan["target1"])
@@ -221,19 +223,19 @@ def score_next_session(plan, target_rows, slippage_bps=2.0, cost_bps=2.0):
     for row in rows:
         stamp = _ts(row[0])
         high, low = _f(row[2]), _f(row[3])
-        entry_hit = high >= entry if action == "BUY" else low <= entry
+        entry_hit = high >= entry if bullish else low <= entry
         if entered_at is None:
             if not entry_hit:
                 continue
             entered_at = stamp
-            stop_hit = low <= stop if action == "BUY" else high >= stop
-            target_hit = high >= target if action == "BUY" else low <= target
+            stop_hit = low <= stop if bullish else high >= stop
+            target_hit = high >= target if bullish else low <= target
             if stop_hit or target_hit:
                 return {"outcome": "AMBIGUOUS_ENTRY_BAR", "r_multiple": 0.0, "entry_time": stamp.isoformat(), "exit_time": stamp.isoformat()}
             continue
 
-        stop_hit = low <= stop if action == "BUY" else high >= stop
-        target_hit = high >= target if action == "BUY" else low <= target
+        stop_hit = low <= stop if bullish else high >= stop
+        target_hit = high >= target if bullish else low <= target
         if stop_hit and target_hit:
             return {"outcome": "AMBIGUOUS_EXIT_BAR", "r_multiple": 0.0, "entry_time": entered_at.isoformat(), "exit_time": stamp.isoformat()}
         if stop_hit:
@@ -246,7 +248,7 @@ def score_next_session(plan, target_rows, slippage_bps=2.0, cost_bps=2.0):
     if entered_at is None:
         return {"outcome": "NO_ENTRY", "r_multiple": 0.0, "entry_time": None, "exit_time": _ts(rows[-1][0]).isoformat()}
     exit_price = _f(rows[-1][4])
-    gross_r = ((exit_price - entry) / risk) if action == "BUY" else ((entry - exit_price) / risk)
+    gross_r = ((exit_price - entry) / risk) if bullish else ((entry - exit_price) / risk)
     return {
         "outcome": "SESSION_CLOSE_EXIT",
         "r_multiple": round(gross_r - _cost_r(entry, risk, slippage_bps, cost_bps), 3),
@@ -341,10 +343,13 @@ async def run_commodity_next_session(provider, observation_date_text, target_dat
             "max_risk_per_trade_pct": 1.0,
             "news_role": "current context only; never reconstructed and not a backtest gate",
             "provider_unit_normalization": "MCX authoritative rupee tick sizes: CRUDEOIL 1.00, NATURALGAS 0.10; all plan levels aligned conservatively to legal ticks",
+            "trade_expression": "bullish=BUY CE, bearish=BUY PE; no option/futures selling",
+            "premium_validation": "not performed; entry/stop/target and R are underlying-futures directional proxies",
         },
         "research_only": True,
         "production_rules_changed": False,
         "paper_trading_permission_changed": False,
         "live_execution_enabled": False,
+        "option_premium_backtest": False,
         "results": results,
     }
