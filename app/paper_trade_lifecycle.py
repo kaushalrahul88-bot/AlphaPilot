@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -97,6 +97,11 @@ def _round(value: float) -> float:
     return round(float(value), 2)
 
 
+def _in_nse_window(value: datetime) -> bool:
+    ist = _utc(value).astimezone(IST)
+    return ist.weekday() < 5 and time(9, 15) <= ist.time().replace(tzinfo=None) <= time(15, 30)
+
+
 def _contract_matches(contract: ExactOptionContract, observation: PremiumObservation) -> bool:
     return (
         contract.symbol.strip().upper() == observation.symbol.strip().upper()
@@ -179,6 +184,8 @@ def open_paper_trade(
         blockers.append("HISTORICAL_REPLAY_STATUS_REQUIRED")
     if observation.data_status == "LIVE" and abs((observed_at - requested_at).total_seconds()) > MAX_LIVE_DECISION_AGE_SECONDS:
         blockers.append("RISK_DECISION_STALE")
+    if observation.data_status == "LIVE" and not _in_nse_window(observed_at):
+        blockers.append("NSE_SESSION_NOT_EXECUTABLE")
     if contract.expiry < observed_at.astimezone(IST).date():
         blockers.append("OPTION_CONTRACT_EXPIRED")
 
@@ -301,6 +308,8 @@ def mark_paper_trade(
         raise ValueError("Paper lifecycle marking requires LIVE Groww option data")
 
     observed_at = _utc(observation.observed_at)
+    if not _in_nse_window(observed_at):
+        raise ValueError("Paper lifecycle marking requires an executable NSE session")
     if observed_at < _utc(paper_trade.last_observed_at):
         return {
             "schema_version": 1,
