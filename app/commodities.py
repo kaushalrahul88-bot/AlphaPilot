@@ -10,6 +10,7 @@ import httpx
 
 INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 SUPPORTED_COMMODITIES = {"CRUDEOIL", "NATURALGAS"}
+MCX_TICK_SIZE_RUPEES = {"CRUDEOIL": 1.0, "NATURALGAS": 0.10}
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _contract_cache = {}
 
@@ -95,7 +96,8 @@ async def resolve_nearest_mcx_future(symbol, force=False):
                 expiry = _row_matches_symbol(row, symbol, today)
                 if not expiry: continue
                 if best is None or expiry < best[0]:
-                    best = (expiry, {"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None,"instrument_type":str(row.get("instrument_type") or "FUT")})
+                    raw_tick=float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None
+                    best = (expiry, {"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":MCX_TICK_SIZE_RUPEES[symbol],"provider_tick_size_raw":raw_tick,"tick_size_source":"MCX_CONTRACT_SPECIFICATION_2026","instrument_type":str(row.get("instrument_type") or "FUT")})
     finally:
         try: os.remove(path)
         except OSError: pass

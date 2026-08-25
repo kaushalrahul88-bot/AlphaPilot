@@ -4,7 +4,7 @@ import csv
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .commodities import _download_instrument_master_to_tempfile, _parse_expiry, SUPPORTED_COMMODITIES, analyze_commodity_candles
+from .commodities import MCX_TICK_SIZE_RUPEES, _download_instrument_master_to_tempfile, _parse_expiry, SUPPORTED_COMMODITIES, analyze_commodity_candles
 from .commodity_backtest import _fetch_chunked, _slice_until, _plan_at, _resolve_trade, _summary, _ts
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -41,7 +41,8 @@ async def discover_mcx_contracts(symbol):
             for row in csv.DictReader(handle):
                 if not _matches(row, symbol): continue
                 expiry = _parse_expiry(row.get("expiry_date"))
-                contracts.append({"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None,"instrument_type":str(row.get("instrument_type") or "FUT")})
+                raw_tick=float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None
+                contracts.append({"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":MCX_TICK_SIZE_RUPEES[symbol],"provider_tick_size_raw":raw_tick,"tick_size_source":"MCX_CONTRACT_SPECIFICATION_2026","instrument_type":str(row.get("instrument_type") or "FUT")})
     finally:
         import os
         try: os.remove(path)
