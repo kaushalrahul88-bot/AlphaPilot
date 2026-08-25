@@ -174,6 +174,16 @@ class PaperTradeLifecycleTests(unittest.TestCase):
         self.assertEqual(result["paper_trade"]["exit_reason"], "MANUAL")
         self.assertEqual(result["paper_trade"]["realized_pnl_rupees"], 325)
 
+    def test_inconsistent_browser_state_is_rejected(self):
+        trade = self.open_trade()
+        tampered = trade.model_copy(update={"quantity": trade.quantity + trade.lot_size})
+
+        with self.assertRaisesRegex(ValueError, "whole-lot"):
+            mark_paper_trade(
+                tampered,
+                observation(price=105, at=NOW + timedelta(minutes=1), source_id="obs-tampered"),
+            )
+
     def test_historical_observation_can_exercise_pure_engine(self):
         replay = observation(provider="HISTORICAL_REPLAY", data_status="HISTORICAL")
         result = open_paper_trade(request(), contract(), replay)
