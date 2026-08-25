@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from .strategy_premium_replay import run_strategy_premium_replay
 
-STRATEGIES = ("VWAP_TREND", "ORB_30", "BREAKOUT_20")
+STRATEGIES = ("VWAP_TREND", "ORB_30", "BREAKOUT_20", "PRICE_ACTION_BREAKOUT")
 
 
 def _cost_adjusted_r(trade: dict, round_trip_cost_bps: float) -> float | None:
@@ -61,7 +61,7 @@ async def run_option_native_research(
 ):
     """Research-only option-premium stress and discovery layer.
 
-    V3 deliberately does not alter Strategy Research v2 or the production scanner.
+    V4 deliberately does not alter the production scanner.
     It replays every frozen directional strategy into actual historical CE/PE premium
     candles, applies a configurable round-trip cost stress, and exposes diagnostics
     that identify where option buying does or does not preserve the underlying edge.
@@ -107,7 +107,7 @@ async def run_option_native_research(
         row["rank"] = rank
 
     return {
-        "mode": "ALPHAPILOT_OPTION_NATIVE_RESEARCH_V3",
+        "mode": "ALPHAPILOT_OPTION_NATIVE_RESEARCH_V4_BOOK_PRICE_ACTION",
         "research_only": True,
         "production_rules_changed": False,
         "start_date": start_date,
@@ -119,8 +119,8 @@ async def run_option_native_research(
         "leaderboard": leaderboard,
         "errors": all_errors,
         "limitations": [
-            "Strategy Research v2 directional rules remain frozen and unchanged.",
-            "This first V3 layer is an option-premium stress/discovery comparison of frozen strategy signals, not yet a standalone premium-signal generator.",
+            "Legacy strategy rules remain frozen; the added PRICE_ACTION_BREAKOUT hypothesis is isolated to research.",
+            "This V4 layer compares legacy and book-informed research signals on historical option premiums; it is not a production signal generator.",
             "V3 is research-only and cannot authorize a live AlphaPilot trade.",
             "LONG maps to BUY CE and SHORT maps to BUY PE using the existing historical contract-selection integrity rules.",
             "Cost adjustment is a configurable stress estimate; it is not a broker contract note reconstruction.",

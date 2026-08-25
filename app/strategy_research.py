@@ -6,10 +6,11 @@ from statistics import mean
 from zoneinfo import ZoneInfo
 
 from .backtest import _historical, _ts
+from .price_action_knowledge import price_action_breakout_signal, price_action_snapshot
 
 IST = ZoneInfo("Asia/Kolkata")
 
-STRATEGIES = ("ORB_30", "VWAP_TREND", "BREAKOUT_20")
+STRATEGIES = ("ORB_30", "VWAP_TREND", "BREAKOUT_20", "PRICE_ACTION_BREAKOUT")
 
 
 def _ema(values: list[float], period: int) -> list[float]:
@@ -242,11 +243,27 @@ async def run_strategy_research(provider, symbols: list[str], start_date: str, e
                     "ORB_30": _orb_signal(rows, indices, atrs),
                     "VWAP_TREND": _vwap_trend_signal(rows, indices, vwaps, ema20, ema50, atrs),
                     "BREAKOUT_20": _breakout_signal(rows, indices, atrs),
+                    "PRICE_ACTION_BREAKOUT": price_action_breakout_signal(rows, indices, atrs),
                 }
                 for strategy, signal in definitions.items():
                     if not signal:
                         continue
                     signal_index, direction, stop, features = signal
+                    features = dict(features or {})
+                    level = features.get("breakout_level")
+                    if level is None and strategy == "ORB_30":
+                        level = features.get("opening_high") if direction == "LONG" else features.get("opening_low")
+                    elif level is None and strategy == "VWAP_TREND":
+                        level = features.get("vwap")
+                    elif level is None and strategy == "BREAKOUT_20":
+                        level = features.get("lookback_high") if direction == "LONG" else features.get("lookback_low")
+                    features["book_price_action"] = features.get("book_price_action") or price_action_snapshot(
+                        rows,
+                        signal_index,
+                        direction,
+                        atrs[signal_index] if signal_index < len(atrs) else None,
+                        level,
+                    )
                     sim = _simulate_underlying(rows, signal_index, direction, float(stop), target_r)
                     if not sim:
                         continue
@@ -271,7 +288,7 @@ async def run_strategy_research(provider, symbols: list[str], start_date: str, e
         leaderboard.append({"strategy": strategy, **summary})
     leaderboard.sort(key=lambda x: (x["average_r"], x["trades"]), reverse=True)
     return {
-        "mode": "ALPHAPILOT_STRATEGY_RESEARCH_V2_UNDERLYING_DISCOVERY",
+        "mode": "ALPHAPILOT_STRATEGY_RESEARCH_V3_BOOK_PRICE_ACTION_DISCOVERY",
         "start_date": start_date,
         "end_date": end_date,
         "target_r": target_r,
@@ -279,12 +296,14 @@ async def run_strategy_research(provider, symbols: list[str], start_date: str, e
             "ORB_30": "30-minute opening-range breakout after 09:45, with a modest volume-expansion requirement and ATR/range-based stop.",
             "VWAP_TREND": "VWAP continuation/pullback hypothesis using EMA20/EMA50 trend alignment and a return through VWAP/EMA area.",
             "BREAKOUT_20": "20-bar intraday price-channel breakout with a 0.10 ATR confirmation buffer and ATR-based stop.",
+            "PRICE_ACTION_BREAKOUT": "Book-informed, AlphaPilot-defined breakout hypothesis requiring a level close, directional candle body, volume confirmation and low false-breakout risk.",
         },
         "leaderboard": leaderboard,
         "trades_by_strategy": strategies,
         "errors": errors,
         "limitations": [
             "This is a strategy-discovery layer on underlying 5-minute NSE candles, not option-premium P&L.",
+            "Book attribution covers public concepts only; all numeric thresholds and the quality score are AlphaPilot research hypotheses, not quoted author rules.",
             "The three rule sets are explicit AlphaPilot research definitions of established strategy families; they are hypotheses, not claims that a public strategy is profitable.",
             "Entry is the next 5-minute candle open after the signal to avoid look-ahead.",
             "Only one signal per strategy per symbol per day is generated in this first research version.",
