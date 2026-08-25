@@ -32,6 +32,7 @@ from .option_native_phase2 import run_option_native_phase2
 from .providers.factory import get_provider
 from .risk_discipline import RiskDisciplineRequest, evaluate_risk_discipline
 from .paper_trade_lifecycle import (
+    ExactOptionContract,
     PaperTradeMarkRequest,
     PaperTradeOpenRequest,
     fetch_live_option_observation,
@@ -109,7 +110,6 @@ async def paper_trade_open(request:PaperTradeOpenRequest):
 async def paper_trade_mark(request:PaperTradeMarkRequest):
     try:
         contract=request.paper_trade
-        from .paper_trade_lifecycle import ExactOptionContract
         exact=ExactOptionContract(symbol=contract.symbol,expiry=contract.expiry,strike=contract.strike,option_type=contract.option_type,lot_size=contract.lot_size)
         observation=await fetch_live_option_observation(get_provider(settings),exact)
         return mark_paper_trade(request.paper_trade,observation,request.manual_exit)
