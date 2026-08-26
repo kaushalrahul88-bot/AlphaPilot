@@ -101,6 +101,36 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(quality["checks"]["first_click_gate_handoff"])
         self.assertEqual(quality["target_first_at"], "2026-08-25T09:00:00+05:30")
 
+    def test_groww_epoch_rows_reach_phase_a_gate_handoff(self):
+        target = date(2026, 8, 25)
+        comparison_5m = []
+        for offset in range(1, 6):
+            comparison_5m.extend(_rows(target - timedelta(days=offset), 9, 120, 5))
+        target_rows = _rows(target, 9, 120, 5)
+
+        def epoch_rows(rows, milliseconds=False):
+            output = []
+            for row in rows:
+                raw = int(datetime.fromisoformat(row[0]).timestamp())
+                output.append([raw * 1000 if milliseconds else raw, *row[1:]])
+            return output
+
+        quality = _data_quality(
+            "CRUDEOIL",
+            {"trading_symbol": "CRUDE"},
+            {
+                "5m": epoch_rows(comparison_5m + target_rows),
+                "15m": epoch_rows(_rows(target, 9, 40, 15), milliseconds=True),
+                "1h": epoch_rows(_rows(target, 9, 10, 60)),
+            },
+            {"benchmark_symbol": "WTI", "candles": []},
+            {"status": "SETUP", "underlying_direction": "BEARISH"},
+            target,
+        )
+        self.assertEqual(quality["status"], "VALID")
+        self.assertTrue(quality["checks"]["first_click_gate_handoff"])
+        self.assertEqual(quality["target_candles"]["5m"], 120)
+
     async def test_data_validation_route_never_generates_trade_decisions(self):
         target = date(2026, 8, 25)
         comparison_5m = []
