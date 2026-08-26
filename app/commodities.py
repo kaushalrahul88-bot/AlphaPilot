@@ -190,18 +190,16 @@ def analyze_commodity_candles(symbol, candles, min_rr=1.5):
     c=_clean_mcx_candles(candles)
     if len(c)<60: return {"symbol":symbol,"status":"NO_TRADE","signal":"NO TRADE","reason":"Not enough MCX history","clean_candles":len(c)}
     closes=[x[4] for x in c]; last=closes[-1]; e9=_ema(closes,9); e20=_ema(closes,20); e50=_ema(closes,50); r=_rsi(closes); a=_atr(c); st,sup,res=_mcx_structure(c)
-    trend=0
-    if last>e20>e50: trend+=2
-    elif last<e20<e50: trend-=2
-    trend += 1 if e9>e20 else -1
-    momentum = 1 if r>=55 else -1 if r<=45 else 0
+    ema_regime_score = 2 if last>e20>e50 else -2 if last<e20<e50 else 0
+    ema_fast_score = 1 if e9>e20 else -1
+    rsi_score = 1 if r>=55 else -1 if r<=45 else 0
     structure_score = 2 if st=="UPTREND" else -2 if st=="DOWNTREND" else 0
     roc=((last/closes[-11])-1)*100 if len(closes)>10 else 0
-    momentum += 1 if roc>.2 else -1 if roc<-.2 else 0
-    bias=trend+momentum+structure_score
+    roc_score = 1 if roc>.2 else -1 if roc<-.2 else 0
+    bias=ema_regime_score+ema_fast_score+rsi_score+roc_score+structure_score
     alpha=max(0,min(100,50+bias*8))
     direction="BUY" if bias>=3 and r<78 else "SELL" if bias<=-3 and r>22 else "NO TRADE"
-    base={"symbol":symbol,"alpha_score":round(alpha,1),"signal":direction,"price":round(last,2),"latest_candle_at":str(c[-1][0]),"ema9":round(e9,2),"ema20":round(e20,2),"ema50":round(e50,2),"rsi14":round(r,2),"atr14":round(a,2),"market_structure":st,"recent_support":round(sup,2),"recent_resistance":round(res,2),"clean_candles":len(c)}
+    base={"symbol":symbol,"alpha_score":round(alpha,1),"signal":direction,"price":round(last,2),"latest_candle_at":str(c[-1][0]),"ema9":round(e9,2),"ema20":round(e20,2),"ema50":round(e50,2),"rsi14":round(r,2),"atr14":round(a,2),"roc10_pct":round(roc,3),"market_structure":st,"recent_support":round(sup,2),"recent_resistance":round(res,2),"clean_candles":len(c),"bias_components":{"ema_regime":ema_regime_score,"ema9_vs_ema20":ema_fast_score,"rsi14":rsi_score,"roc10":roc_score,"market_structure":structure_score,"total":bias}}
     if direction=="NO TRADE": return {**base,"status":"NO_TRADE","reason":"Commodity confluence threshold not met"}
     risk=max(a*1.25,last*.003)
     if direction=="BUY": stop=min(last-risk,sup-.15*a) if sup<last else last-risk; rrisk=last-stop; t1=last+rrisk*min_rr; t2=last+rrisk*max(2,min_rr+.5)

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from .commodity_backtest import _fetch_chunked, _plan_at, _resolve_trade, _ts
 from .commodity_benchmarks import benchmark_confirmation, fetch_benchmark_candles
-from .commodity_click_brain import _valid_rows, evaluate_commodity_click
+from .commodity_click_brain import _valid_rows, evaluate_commodity_click, market_brain_audit
 from .commodity_next_session import build_next_session_plan
 from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
 
@@ -31,6 +31,11 @@ EXTENDED_TARGET_DATES = tuple(
 EXTENDED_SESSION_PAIRS = tuple(
     (target - timedelta(days=3 if target.weekday() == 0 else 1), target)
     for target in EXTENDED_TARGET_DATES
+)
+IDENTIFIED_SETUP_AUDIT_POINTS = (
+    {"symbol": "NATURALGAS", "observation_date": date(2026, 8, 7), "target_date": date(2026, 8, 10), "click_time_ist": "19:05"},
+    {"symbol": "CRUDEOIL", "observation_date": date(2026, 8, 17), "target_date": date(2026, 8, 18), "click_time_ist": "12:10"},
+    {"symbol": "CRUDEOIL", "observation_date": date(2026, 8, 24), "target_date": date(2026, 8, 25), "click_time_ist": "21:10"},
 )
 MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
 EXTENDED_CLICK_SALT = "alphapilot-frozen-20-session-click-v1"
@@ -123,7 +128,8 @@ def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previo
     }
 def _summary(decisions):
     ready = [row for row in decisions if row.get("status") == "READY"]
-    resolved = [row for row in ready if isinstance((row.get("outcome") or {}).get("r_multiple"), (int, float))]
+    completed_outcomes = {"T1_HIT", "SL_HIT"}
+    resolved = [row for row in ready if (row.get("outcome") or {}).get("outcome") in completed_outcomes]
     positive = sum(1 for row in resolved if row["outcome"]["r_multiple"] > 0)
     negative = sum(1 for row in resolved if row["outcome"]["r_multiple"] < 0)
     flat = sum(1 for row in resolved if row["outcome"]["r_multiple"] == 0)
@@ -133,6 +139,8 @@ def _summary(decisions):
         "wait": sum(1 for row in decisions if row.get("status") == "WAIT"),
         "no_trade": sum(1 for row in decisions if row.get("status") == "NO_TRADE"),
         "resolved_underlying_proxies": len(resolved),
+        "open_underlying_proxies": sum((row.get("outcome") or {}).get("outcome") == "OPEN" for row in ready),
+        "ambiguous_underlying_proxies": sum((row.get("outcome") or {}).get("outcome") == "AMBIGUOUS" for row in ready),
         "positive": positive,
         "negative": negative,
         "flat_or_ambiguous": flat,
@@ -174,7 +182,8 @@ def _deduplicate_ready_setups(decisions):
 
 def _weekly_summary(decisions):
     setups = [row for row in decisions if row.get("independent_setup")]
-    resolved = [row for row in setups if isinstance((row.get("outcome") or {}).get("r_multiple"), (int, float))]
+    completed_outcomes = {"T1_HIT", "SL_HIT"}
+    resolved = [row for row in setups if (row.get("outcome") or {}).get("outcome") in completed_outcomes]
     positive = sum(row["outcome"]["r_multiple"] > 0 for row in resolved)
     negative = sum(row["outcome"]["r_multiple"] < 0 for row in resolved)
     return {
@@ -185,6 +194,8 @@ def _weekly_summary(decisions):
         "independent_setups": len(setups),
         "duplicate_ready_snapshots": sum(row.get("status") == "READY" and not row.get("independent_setup") for row in decisions),
         "resolved_underlying_proxies": len(resolved),
+        "open_underlying_proxies": sum((row.get("outcome") or {}).get("outcome") == "OPEN" for row in setups),
+        "ambiguous_underlying_proxies": sum((row.get("outcome") or {}).get("outcome") == "AMBIGUOUS" for row in setups),
         "positive": positive,
         "negative": negative,
         "flat_or_ambiguous": len(resolved) - positive - negative,
@@ -438,6 +449,7 @@ async def _run_frozen_click_backtest(provider, session_pairs, mode, click_schedu
                     "blockers": brain["blockers"],
                     "gates": brain["gates"],
                     "timeframe_signals": {key: value.get("signal") for key, value in frames.items()},
+                    "market_brain_audit": market_brain_audit(previous, frames, click, brain["gates"]),
                 })
 
     expected_snapshots = sum(len(times) for times in click_schedule.values()) * len(SYMBOLS)
@@ -488,3 +500,91 @@ async def run_frozen_extended_click_backtest(provider):
     return await _run_frozen_click_backtest(
         provider, EXTENDED_SESSION_PAIRS, "COMMODITY_FROZEN_20_SESSION_CLICK_BACKTEST_V1", schedule,
     )
+
+
+async def audit_identified_setups(provider):
+    """Recompute only the three frozen setup inputs; never score their outcomes."""
+    records = []
+    quality_records = []
+    for symbol in SYMBOLS:
+        points = [point for point in IDENTIFIED_SETUP_AUDIT_POINTS if point["symbol"] == symbol]
+        if not points:
+            continue
+        contract = await resolve_nearest_mcx_future(symbol)
+        fetch_start = datetime.combine(min(point["observation_date"] for point in points) - timedelta(days=14), time(9, 0), tzinfo=IST)
+        fetch_end = datetime.combine(max(point["target_date"] for point in points), time(23, 30), tzinfo=IST)
+        rows_by_timeframe = {
+            "5m": await _fetch_chunked(provider, contract, 5, fetch_start, fetch_end),
+            "15m": await _fetch_chunked(provider, contract, 15, fetch_start, fetch_end),
+            "1h": await _fetch_chunked(provider, contract, 60, fetch_start, fetch_end),
+        }
+        normalized_5m = _valid_rows(rows_by_timeframe["5m"])
+        for point in points:
+            observation_date = point["observation_date"]
+            target_date = point["target_date"]
+            click = _click(target_date, point["click_time_ist"])
+            benchmark_payload = await fetch_benchmark_candles(
+                symbol,
+                datetime.combine(target_date, time(0, 0), tzinfo=IST),
+                datetime.combine(target_date + timedelta(days=1), time(0, 0), tzinfo=IST),
+            )
+            previous = build_next_session_plan(
+                symbol, normalized_5m, observation_date, target_date, contract.get("tick_size"),
+            )
+            quality = _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date)
+            quality.update({
+                "observation_date": observation_date.isoformat(),
+                "target_date": target_date.isoformat(),
+                "click_time_ist": point["click_time_ist"],
+            })
+            quality_records.append(quality)
+            if quality["status"] != "VALID":
+                continue
+            frames, _, mtf = _historical_mtf(rows_by_timeframe, click)
+            target_rows = [row for row in normalized_5m if _ts(row[0]).date() == target_date]
+            current_rows = [row for row in target_rows if _ts(row[0]) < click]
+            comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
+            benchmark = benchmark_confirmation(symbol, benchmark_payload.get("candles", []), click)
+            brain = evaluate_commodity_click(
+                symbol=symbol,
+                click_at=click,
+                previous_plan=previous,
+                mtf_snapshot=mtf,
+                current_rows=current_rows,
+                comparison_rows=comparison_rows,
+                benchmark=benchmark,
+                option_premium=None,
+                premium_risk_reward=1.5,
+                require_option_premium=False,
+            )
+            records.append({
+                "symbol": symbol,
+                "observation_date": observation_date.isoformat(),
+                "target_date": target_date.isoformat(),
+                "click_time_ist": point["click_time_ist"],
+                "status": brain["status"],
+                "action": brain["action"],
+                "gates": brain["gates"],
+                "blockers": brain["blockers"],
+                "benchmark": benchmark,
+                "market_brain_audit": market_brain_audit(previous, frames, click, brain["gates"]),
+            })
+    valid = len(quality_records) == len(IDENTIFIED_SETUP_AUDIT_POINTS) and all(
+        quality["status"] == "VALID" for quality in quality_records
+    )
+    return {
+        "mode": "MARKET_BRAIN_IDENTIFIED_SETUP_AUDIT_V1",
+        "status": "VALID" if valid else "INVALID_TARGET_SESSION_SLICE",
+        "frozen_points": [
+            {key: value.isoformat() if isinstance(value, date) else value for key, value in point.items()}
+            for point in IDENTIFIED_SETUP_AUDIT_POINTS
+        ],
+        "quality": quality_records,
+        "records": records,
+        "random_schedule_regenerated": False,
+        "full_backtest_rerun": False,
+        "outcomes_scored": False,
+        "performance_statistics_generated": False,
+        "strategy_rules_changed": False,
+        "research_only": True,
+    }

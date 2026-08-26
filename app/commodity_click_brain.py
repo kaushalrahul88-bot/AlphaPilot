@@ -165,6 +165,59 @@ def premium_plan(entry, risk_reward=PREMIUM_RISK_REWARD):
     }
 
 
+def market_brain_audit(previous_plan, timeframe_frames, click_at, gates=None):
+    """Expose frozen feature contributions without participating in the decision."""
+    click = _timestamp(click_at)
+    session_close = datetime.combine(click.date(), time(23, 30), tzinfo=IST)
+    signals = [str((timeframe_frames or {}).get(tf, {}).get("signal") or "NO TRADE").upper() for tf in ("5m", "15m", "1h")]
+    structures = [str((timeframe_frames or {}).get(tf, {}).get("market_structure") or "RANGE").upper() for tf in ("5m", "15m", "1h")]
+    if signals.count("BUY") >= 2 and structures.count("UPTREND") >= 2:
+        regime = "TRENDING_BULLISH"
+    elif signals.count("SELL") >= 2 and structures.count("DOWNTREND") >= 2:
+        regime = "TRENDING_BEARISH"
+    elif structures.count("RANGE") >= 2:
+        regime = "RANGE"
+    else:
+        regime = "MIXED"
+    frame_audit = {}
+    for timeframe in ("5m", "15m", "1h"):
+        frame = (timeframe_frames or {}).get(timeframe, {})
+        price = _number(frame.get("price"))
+        atr = _number(frame.get("atr14"))
+        frame_audit[timeframe] = {
+            "signal": frame.get("signal", "NO TRADE"),
+            "alpha_score": _number(frame.get("alpha_score"), 50.0),
+            "bias_components": dict(frame.get("bias_components") or {}),
+            "ema9": frame.get("ema9"),
+            "ema20": frame.get("ema20"),
+            "ema50": frame.get("ema50"),
+            "rsi14": frame.get("rsi14"),
+            "roc10_pct": frame.get("roc10_pct"),
+            "atr14": frame.get("atr14"),
+            "atr_pct_of_price": round(atr / price * 100.0, 4) if price > 0 and atr > 0 else None,
+            "market_structure": frame.get("market_structure"),
+        }
+    previous_features = (previous_plan or {}).get("features") or {}
+    return {
+        "version": "MARKET_BRAIN_AUDIT_V1",
+        "diagnostic_only": True,
+        "decision_role": "NONE",
+        "regime_label": regime,
+        "minutes_to_session_close": round(max(0.0, (session_close - click).total_seconds() / 60.0), 1),
+        "previous_session": {
+            "status": (previous_plan or {}).get("status"),
+            "direction": (previous_plan or {}).get("underlying_direction", "NEUTRAL"),
+            "directional_score": previous_features.get("directional_score"),
+            "votes": dict(previous_features.get("votes") or {}),
+        },
+        "timeframes": frame_audit,
+        "failed_gates": [
+            name for name, gate in (gates or {}).items()
+            if not (gate.get("passed") if isinstance(gate, dict) else bool(gate))
+        ],
+    }
+
+
 def evaluate_commodity_click(
     symbol,
     click_at,

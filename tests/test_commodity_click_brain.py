@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from app.commodity_click_brain import _timestamp, _valid_rows, evaluate_commodity_click, premium_plan
+from app.commodity_click_brain import _timestamp, _valid_rows, evaluate_commodity_click, market_brain_audit, premium_plan
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -149,6 +149,30 @@ class CommodityClickBrainTests(unittest.TestCase):
         self.assertEqual(result["action"], "BUY CE")
         self.assertIsNone(result["premium_setup"])
         self.assertFalse(result["gates"]["option_premium"]["required"])
+
+    def test_market_brain_audit_is_diagnostic_and_exposes_contributions(self):
+        click = datetime(2026, 8, 25, 21, 10, tzinfo=IST)
+        frames = {
+            timeframe: {
+                "signal": "SELL", "alpha_score": 18.0, "price": 100.0, "atr14": 2.0,
+                "ema9": 99.0, "ema20": 101.0, "ema50": 102.0, "rsi14": 35.0,
+                "roc10_pct": -0.4, "market_structure": "DOWNTREND",
+                "bias_components": {"ema_regime": -2, "ema9_vs_ema20": -1, "rsi14": -1, "roc10": -1, "market_structure": -2, "total": -7},
+            }
+            for timeframe in ("5m", "15m", "1h")
+        }
+        previous = {
+            "status": "SETUP", "underlying_direction": "BEARISH",
+            "features": {"directional_score": -4, "votes": {"session_return": -1}},
+        }
+        audit = market_brain_audit(previous, frames, click, {"opening_range": {"passed": False}})
+        self.assertTrue(audit["diagnostic_only"])
+        self.assertEqual(audit["decision_role"], "NONE")
+        self.assertEqual(audit["regime_label"], "TRENDING_BEARISH")
+        self.assertEqual(audit["minutes_to_session_close"], 140.0)
+        self.assertEqual(audit["previous_session"]["directional_score"], -4)
+        self.assertEqual(audit["timeframes"]["5m"]["bias_components"]["total"], -7)
+        self.assertEqual(audit["failed_gates"], ["opening_range"])
 
 
 if __name__ == "__main__":
