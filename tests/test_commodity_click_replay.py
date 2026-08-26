@@ -8,18 +8,22 @@ from app.commodity_click_replay import (
     EXTENDED_SESSION_PAIRS,
     EXTENDED_TARGET_DATES,
     IDENTIFIED_SETUP_AUDIT_POINTS,
+    VALIDATION_SESSION_PAIRS,
+    VALIDATION_TARGET_DATES,
     WEEKLY_CLICK_TIMES,
     WEEKLY_SESSION_PAIRS,
     _click_timeline,
     _data_quality,
     _deduplicate_ready_setups,
     _extended_click_times,
+    _validation_click_times,
     _historical_mtf,
     _summary,
     _weekly_summary,
     audit_identified_setups,
     run_frozen_weekly_click_backtest,
     run_frozen_extended_click_backtest,
+    run_frozen_july_validation_backtest,
     validate_frozen_tuesday_phase_a_data,
 )
 
@@ -59,6 +63,22 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(first, second)
         self.assertNotEqual(first, WEEKLY_CLICK_TIMES)
         self.assertTrue(all("10:00" <= value <= "22:00" for value in first))
+
+    def test_july_validation_protocol_is_independently_frozen_at_20_sessions(self):
+        self.assertEqual(len(VALIDATION_TARGET_DATES), 20)
+        self.assertEqual(VALIDATION_TARGET_DATES[0], date(2026, 7, 1))
+        self.assertEqual(VALIDATION_TARGET_DATES[-1], date(2026, 7, 28))
+        self.assertEqual(VALIDATION_SESSION_PAIRS[0], (date(2026, 6, 30), date(2026, 7, 1)))
+        self.assertEqual(VALIDATION_SESSION_PAIRS[-1], (date(2026, 7, 27), date(2026, 7, 28)))
+        self.assertEqual(len(VALIDATION_SESSION_PAIRS) * 10 * 2, 400)
+
+    def test_july_validation_clicks_are_reproducible_and_use_a_distinct_salt(self):
+        target = date(2026, 7, 15)
+        clicks = _validation_click_times(target)
+        self.assertEqual(clicks, _validation_click_times(target))
+        self.assertEqual(len(clicks), len(set(clicks)))
+        self.assertTrue(all("10:00" <= value <= "22:00" for value in clicks))
+        self.assertNotEqual(clicks, _extended_click_times(target))
 
     def test_weekly_ready_snapshots_are_deduplicated_without_hiding_clicks(self):
         decisions = [
@@ -314,6 +334,41 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
             result["click_schedule"][0]["click_times_ist"],
             result["click_schedule"][1]["click_times_ist"],
         )
+
+    async def test_july_validation_replay_returns_exactly_400_auditable_snapshots(self):
+        days = []
+        cursor = date(2026, 6, 15)
+        while cursor <= date(2026, 7, 28):
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor += timedelta(days=1)
+        five = [row for day in days for row in _rows(day, 9, 120, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
+        previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
+        frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
+        plan = {"action": "SELL", "strength": 80.0, "entry": 100, "stop": 110, "target1": 85}
+        brain = {
+            "status": "NO_TRADE", "action": "NO TRADE", "underlying_direction": "BEARISH",
+            "blockers": ["RVOL failed."], "gates": {"rvol": False},
+        }
+        with (
+            patch("app.commodity_click_replay.resolve_nearest_mcx_future", new=AsyncMock(side_effect=[contract, contract])),
+            patch("app.commodity_click_replay._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly])),
+            patch("app.commodity_click_replay.fetch_benchmark_candles", new=AsyncMock(return_value={"benchmark_symbol": "TEST", "candles": []})),
+            patch("app.commodity_click_replay.build_next_session_plan", return_value=previous),
+            patch("app.commodity_click_replay._historical_mtf", return_value=(frames, plan, {"action": "SELL", "alpha_score": 80.0, "fresh_market_data": True})),
+            patch("app.commodity_click_replay.benchmark_confirmation", return_value={"passed": True}),
+            patch("app.commodity_click_replay.evaluate_commodity_click", return_value=brain),
+        ):
+            result = await run_frozen_july_validation_backtest(object())
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["mode"], "COMMODITY_FROZEN_JULY_VALIDATION_BACKTEST_V1")
+        self.assertEqual(len(result["decisions"]), 400)
+        self.assertEqual(len(result["click_timeline"]), 200)
+        self.assertEqual(result["summary"]["decision_snapshots"], 400)
+        self.assertEqual(len(result["click_schedule"]), 20)
 
     async def test_identified_setup_audit_recomputes_only_three_points_without_outcomes(self):
         days = []

@@ -32,6 +32,15 @@ EXTENDED_SESSION_PAIRS = tuple(
     (target - timedelta(days=3 if target.weekday() == 0 else 1), target)
     for target in EXTENDED_TARGET_DATES
 )
+VALIDATION_TARGET_DATES = tuple(
+    day
+    for day in (date(2026, 7, 1) + timedelta(days=offset) for offset in range(28))
+    if day.weekday() < 5
+)
+VALIDATION_SESSION_PAIRS = tuple(
+    (target - timedelta(days=3 if target.weekday() == 0 else 1), target)
+    for target in VALIDATION_TARGET_DATES
+)
 IDENTIFIED_SETUP_AUDIT_POINTS = (
     {"symbol": "NATURALGAS", "observation_date": date(2026, 8, 7), "target_date": date(2026, 8, 10), "click_time_ist": "19:05"},
     {"symbol": "CRUDEOIL", "observation_date": date(2026, 8, 17), "target_date": date(2026, 8, 18), "click_time_ist": "12:10"},
@@ -39,6 +48,7 @@ IDENTIFIED_SETUP_AUDIT_POINTS = (
 )
 MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
 EXTENDED_CLICK_SALT = "alphapilot-frozen-20-session-click-v1"
+VALIDATION_CLICK_SALT = "alphapilot-frozen-july-validation-v1"
 
 
 def _click(day, text):
@@ -46,17 +56,25 @@ def _click(day, text):
     return datetime.combine(day, time(hour, minute), tzinfo=IST)
 
 
-def _extended_click_times(target_date):
+def _deterministic_click_times(target_date, salt):
     """Select ten reproducible, result-independent 5-minute slots from 10:00-22:00 IST."""
     slots = range(10 * 60, 22 * 60 + 1, 5)
     ranked = sorted(
         slots,
         key=lambda minute: sha256(
-            f"{EXTENDED_CLICK_SALT}|{target_date.isoformat()}|{minute}".encode()
+            f"{salt}|{target_date.isoformat()}|{minute}".encode()
         ).digest(),
     )
     selected = sorted(ranked[:10])
     return tuple(f"{minute // 60:02d}:{minute % 60:02d}" for minute in selected)
+
+
+def _extended_click_times(target_date):
+    return _deterministic_click_times(target_date, EXTENDED_CLICK_SALT)
+
+
+def _validation_click_times(target_date):
+    return _deterministic_click_times(target_date, VALIDATION_CLICK_SALT)
 
 
 def _click_schedule(session_pairs, selector):
@@ -499,6 +517,17 @@ async def run_frozen_extended_click_backtest(provider):
     schedule = _click_schedule(EXTENDED_SESSION_PAIRS, _extended_click_times)
     return await _run_frozen_click_backtest(
         provider, EXTENDED_SESSION_PAIRS, "COMMODITY_FROZEN_20_SESSION_CLICK_BACKTEST_V1", schedule,
+    )
+
+
+async def run_frozen_july_validation_backtest(provider):
+    """Replay the independently frozen July sample without changing the baseline brain."""
+    schedule = _click_schedule(VALIDATION_SESSION_PAIRS, _validation_click_times)
+    return await _run_frozen_click_backtest(
+        provider,
+        VALIDATION_SESSION_PAIRS,
+        "COMMODITY_FROZEN_JULY_VALIDATION_BACKTEST_V1",
+        schedule,
     )
 
 
