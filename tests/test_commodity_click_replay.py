@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app.commodity_click_replay import CLICK_TIMES, _data_quality, _summary, validate_frozen_tuesday_phase_a_data
+from app.commodity_click_replay import CLICK_TIMES, _data_quality, _historical_mtf, _summary, validate_frozen_tuesday_phase_a_data
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -17,6 +17,18 @@ def _rows(day, start_hour, count, minutes):
 class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
     def test_frozen_click_times_are_unchanged(self):
         self.assertEqual(CLICK_TIMES, ("09:35", "10:55", "11:05", "13:20", "13:35", "15:15", "15:25", "16:15", "16:40", "18:35"))
+
+    def test_historical_mtf_always_returns_unpackable_snapshot(self):
+        day = date(2026, 8, 25)
+        rows = _rows(day, 9, 120, 5)
+        frames, plan, snapshot = _historical_mtf(
+            {"5m": rows, "15m": rows, "1h": rows},
+            datetime(2026, 8, 25, 18, 35, tzinfo=IST),
+        )
+        self.assertEqual(set(frames), {"5m", "15m", "1h"})
+        self.assertIn(snapshot["action"], {"BUY", "SELL", "NO TRADE"})
+        self.assertTrue(snapshot["fresh_market_data"])
+        self.assertTrue(plan is None or isinstance(plan, dict))
 
     def test_summary_does_not_present_overlapping_clicks_as_additive_pnl(self):
         decisions = [
