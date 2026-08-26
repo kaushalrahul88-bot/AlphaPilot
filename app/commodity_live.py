@@ -26,18 +26,43 @@ def _completed_rows(rows, click_at, interval_minutes):
     return [row for row in _valid_rows(rows) if row[0] + duration <= click]
 
 
-def _previous_complete_session(rows, target_date):
+def _expected_previous_weekday(target_date):
+    candidate = target_date - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def _previous_session_state(rows, target_date):
     grouped = {}
     for row in _valid_rows(rows):
         stamp = row[0]
         if stamp.date() >= target_date or not (time(9, 0) <= stamp.time() <= time(23, 30)):
             continue
         grouped.setdefault(stamp.date(), []).append(row)
-    complete = [
-        day for day, values in grouped.items()
-        if len(values) >= 100 and values[-1][0].time() >= time(23, 20)
-    ]
-    return max(complete) if complete else None
+    expected = _expected_previous_weekday(target_date)
+    latest = max(grouped) if grouped else None
+    values = grouped.get(expected, [])
+    last = values[-1][0] if values else None
+    checks = {
+        "expected_session_present": bool(values),
+        "expected_session_is_latest_observed": latest == expected,
+        "minimum_previous_candles": len(values) >= 100,
+        "previous_session_reaches_close": last is not None and last.time() >= time(23, 20),
+    }
+    return {
+        "expected_date": expected,
+        "latest_observed_date": latest,
+        "candles": len(values),
+        "last_at": last,
+        "checks": checks,
+        "complete": all(checks.values()),
+    }
+
+
+def _previous_complete_session(rows, target_date):
+    state = _previous_session_state(rows, target_date)
+    return state["expected_date"] if state["complete"] else None
 
 
 def _live_mtf(symbol, rows_by_timeframe, click_at):
@@ -121,13 +146,13 @@ async def fetch_live_mcx_option_quote(provider, contract):
     }
 
 
-def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_date, click_at):
+def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_state, click_at):
     click = _ts(click_at)
     first = current_rows[0][0] if current_rows else None
     last = current_rows[-1][0] if current_rows else None
     comparison_dates = {row[0].date() for row in comparison_rows if row[5] > 0}
     checks = {
-        "previous_complete_session": previous_date is not None,
+        "previous_complete_session": previous_state["complete"],
         "current_session_started": first is not None and first.time() <= time(9, 15),
         "minimum_current_candles": len(current_rows) >= 4,
         "current_volume": sum(row[5] for row in current_rows) > 0,
@@ -140,7 +165,11 @@ def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_
         "status": "VALID" if all(checks.values()) else "DATA_NOT_READY",
         "checks": checks,
         "candles": {key: len(value) for key, value in rows_by_timeframe.items()},
-        "previous_session": previous_date.isoformat() if previous_date else None,
+        "expected_previous_session": previous_state["expected_date"].isoformat(),
+        "latest_previous_observed_session": previous_state["latest_observed_date"].isoformat() if previous_state["latest_observed_date"] else None,
+        "previous_session_candles": previous_state["candles"],
+        "previous_session_last_at": previous_state["last_at"].isoformat() if previous_state["last_at"] else None,
+        "previous_session_checks": previous_state["checks"],
         "current_completed_5m_candles": len(current_rows),
         "current_first_at": first.isoformat() if first else None,
         "current_last_at": last.isoformat() if last else None,
@@ -178,17 +207,24 @@ async def run_commodity_live_scan(provider, now=None):
                 for timeframe, minutes in TIMEFRAMES.items()
             }
             completed_5m = _completed_rows(rows_by_timeframe["5m"], click, 5)
-            previous_date = _previous_complete_session(completed_5m, target_date)
+            previous_state = _previous_session_state(completed_5m, target_date)
+            previous_date = previous_state["expected_date"] if previous_state["complete"] else None
             current_rows = [row for row in completed_5m if row[0].date() == target_date]
             comparison_rows = [row for row in completed_5m if row[0].date() < target_date]
             quality = _data_quality(
-                symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_date, click,
+                symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_state, click,
             )
             if not session["is_open"]:
                 results.append(_blocked_result(symbol, click, "MARKET_CLOSED", "MCX session is closed.", quality))
                 continue
             if quality["status"] != "VALID":
-                results.append(_blocked_result(symbol, click, "DATA_NOT_READY", "Required completed MCX session data is unavailable.", quality))
+                results.append(_blocked_result(
+                    symbol,
+                    click,
+                    "DATA_NOT_READY",
+                    "The immediately preceding weekday MCX session is missing or incomplete; older sessions are not eligible.",
+                    quality,
+                ))
                 continue
 
             previous = build_next_session_plan(
