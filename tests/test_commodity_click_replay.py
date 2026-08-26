@@ -7,6 +7,7 @@ from app.commodity_click_replay import (
     CLICK_TIMES,
     EXTENDED_SESSION_PAIRS,
     EXTENDED_TARGET_DATES,
+    IDENTIFIED_SETUP_AUDIT_POINTS,
     WEEKLY_CLICK_TIMES,
     WEEKLY_SESSION_PAIRS,
     _click_timeline,
@@ -16,6 +17,7 @@ from app.commodity_click_replay import (
     _historical_mtf,
     _summary,
     _weekly_summary,
+    audit_identified_setups,
     run_frozen_weekly_click_backtest,
     run_frozen_extended_click_backtest,
     validate_frozen_tuesday_phase_a_data,
@@ -77,6 +79,23 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["independent_setups"], 3)
         self.assertFalse(summary["additive_pnl_available"])
 
+    def test_open_and_ambiguous_outcomes_are_not_reported_as_resolved(self):
+        decisions = [
+            {"status": "READY", "independent_setup": True, "outcome": {"outcome": "SL_HIT", "r_multiple": -1.1}},
+            {"status": "READY", "independent_setup": True, "outcome": {"outcome": "OPEN", "r_multiple": 0.0}},
+            {"status": "READY", "independent_setup": True, "outcome": {"outcome": "AMBIGUOUS", "r_multiple": 0.0}},
+        ]
+        summary = _weekly_summary(decisions)
+        self.assertEqual(summary["resolved_underlying_proxies"], 1)
+        self.assertEqual(summary["open_underlying_proxies"], 1)
+        self.assertEqual(summary["ambiguous_underlying_proxies"], 1)
+        self.assertEqual(summary["negative"], 1)
+        self.assertEqual(summary["average_resolved_r_proxy"], -1.1)
+        phase_a_summary = _summary(decisions)
+        self.assertEqual(phase_a_summary["resolved_underlying_proxies"], 1)
+        self.assertEqual(phase_a_summary["open_underlying_proxies"], 1)
+        self.assertEqual(phase_a_summary["ambiguous_underlying_proxies"], 1)
+
     def test_click_timeline_looks_like_successive_user_clicks(self):
         decisions = []
         for _, target in WEEKLY_SESSION_PAIRS:
@@ -107,8 +126,8 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
 
     def test_summary_does_not_present_overlapping_clicks_as_additive_pnl(self):
         decisions = [
-            {"status": "READY", "outcome": {"r_multiple": 1.4}},
-            {"status": "READY", "outcome": {"r_multiple": -1.0}},
+            {"status": "READY", "outcome": {"outcome": "T1_HIT", "r_multiple": 1.4}},
+            {"status": "READY", "outcome": {"outcome": "SL_HIT", "r_multiple": -1.0}},
             {"status": "WAIT", "outcome": None},
             {"status": "NO_TRADE", "outcome": None},
         ]
@@ -295,6 +314,41 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
             result["click_schedule"][0]["click_times_ist"],
             result["click_schedule"][1]["click_times_ist"],
         )
+
+    async def test_identified_setup_audit_recomputes_only_three_points_without_outcomes(self):
+        days = []
+        cursor = date(2026, 7, 20)
+        while cursor <= date(2026, 8, 25):
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor += timedelta(days=1)
+        five = [row for day in days for row in _rows(day, 9, 120, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
+        previous = {"status": "SETUP", "underlying_direction": "BEARISH", "features": {"directional_score": -3, "votes": {}}}
+        frames = {key: {"signal": "SELL", "market_structure": "DOWNTREND"} for key in ("5m", "15m", "1h")}
+        brain = {
+            "status": "READY", "action": "BUY PE", "underlying_direction": "BEARISH",
+            "blockers": [], "gates": {"alignment": {"passed": True}},
+        }
+        with (
+            patch("app.commodity_click_replay.resolve_nearest_mcx_future", new=AsyncMock(side_effect=[contract, contract])),
+            patch("app.commodity_click_replay._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly])),
+            patch("app.commodity_click_replay.fetch_benchmark_candles", new=AsyncMock(return_value={"benchmark_symbol": "TEST", "candles": []})),
+            patch("app.commodity_click_replay.build_next_session_plan", return_value=previous),
+            patch("app.commodity_click_replay._historical_mtf", return_value=(frames, None, {"action": "SELL", "alpha_score": 80.0, "fresh_market_data": True})),
+            patch("app.commodity_click_replay.benchmark_confirmation", return_value={"passed": True}),
+            patch("app.commodity_click_replay.evaluate_commodity_click", return_value=brain),
+        ):
+            result = await audit_identified_setups(object())
+        self.assertEqual(len(IDENTIFIED_SETUP_AUDIT_POINTS), 3)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(len(result["records"]), 3)
+        self.assertFalse(result["outcomes_scored"])
+        self.assertFalse(result["performance_statistics_generated"])
+        self.assertFalse(result["full_backtest_rerun"])
+        self.assertTrue(all("outcome" not in record for record in result["records"]))
 
 
 if __name__ == "__main__":

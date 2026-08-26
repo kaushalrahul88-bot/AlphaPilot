@@ -7,7 +7,7 @@ import httpx
 
 from .commodity_backtest import _fetch_chunked, _plan_at, _ts
 from .commodity_benchmarks import benchmark_confirmation, fetch_benchmark_candles
-from .commodity_click_brain import _valid_rows, evaluate_commodity_click
+from .commodity_click_brain import _valid_rows, evaluate_commodity_click, market_brain_audit
 from .commodity_next_session import build_next_session_plan
 from .commodity_option_history import fetch_mcx_option_master, select_mcx_option_contract
 from .commodities import analyze_commodity_candles, mcx_session_status, resolve_nearest_mcx_future
@@ -352,6 +352,7 @@ async def run_commodity_live_scan(provider, now=None):
                 "premium_setup": (strict or {}).get("premium_setup"),
                 "gates": gates,
                 "blockers": blockers,
+                "market_brain_audit": market_brain_audit(previous, frames, click, gates),
                 "data_quality": quality,
                 "research_only": True,
                 "live_execution_enabled": False,
