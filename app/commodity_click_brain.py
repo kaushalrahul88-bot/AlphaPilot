@@ -179,6 +179,7 @@ def evaluate_commodity_click(
     benchmark,
     option_premium=None,
     premium_risk_reward=PREMIUM_RISK_REWARD,
+    require_option_premium=True,
 ):
     symbol = str(symbol).upper().strip()
     if symbol not in BENCHMARKS:
@@ -208,7 +209,12 @@ def evaluate_commodity_click(
             gates[name] = {"passed": False, "reason": "Previous session has no directional setup."}
 
     plan = premium_plan(option_premium, premium_risk_reward)
-    gates["option_premium"] = {"passed": plan is not None, "risk_reward": float(premium_risk_reward)}
+    gates["option_premium"] = {
+        "passed": plan is not None or not require_option_premium,
+        "required": bool(require_option_premium),
+        "available": plan is not None,
+        "risk_reward": float(premium_risk_reward),
+    }
     passed = all(bool(gate.get("passed")) for gate in gates.values())
     waiting = gates["opening_range"].get("status") == "WAIT"
     blockers = [name for name, gate in gates.items() if not gate.get("passed")]

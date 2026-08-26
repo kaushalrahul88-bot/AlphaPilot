@@ -126,6 +126,18 @@ class CommodityClickBrainTests(unittest.TestCase):
         self.assertEqual(premium_plan(20.0)["risk_percent"], 25.0)
         self.assertEqual(premium_plan(50.0)["risk_percent"], 20.0)
 
+    def test_phase_a_can_bypass_unavailable_premium_without_claiming_a_plan(self):
+        click = datetime(2026, 8, 25, 10, 15, tzinfo=IST)
+        result = evaluate_commodity_click(
+            "CRUDEOIL", click, prior("BULLISH"), mtf("BUY"), session(click.date()),
+            history(click.date()), benchmark("WTI", "BULLISH", click), option_premium=None,
+            require_option_premium=False,
+        )
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["action"], "BUY CE")
+        self.assertIsNone(result["premium_setup"])
+        self.assertFalse(result["gates"]["option_premium"]["required"])
+
 
 if __name__ == "__main__":
     unittest.main()
