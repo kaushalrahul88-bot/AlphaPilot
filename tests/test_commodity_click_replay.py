@@ -18,6 +18,7 @@ from app.commodity_click_replay import (
     _extended_click_times,
     _validation_click_times,
     _historical_mtf,
+    _strict_slice,
     _summary,
     _weekly_summary,
     audit_identified_setups,
@@ -144,6 +145,23 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["fresh_market_data"])
         self.assertTrue(plan is None or isinstance(plan, dict))
 
+    def test_historical_slice_excludes_the_candle_still_forming_at_click(self):
+        day = date(2026, 8, 25)
+        rows = _rows(day, 9, 13, 5)
+        click = datetime(2026, 8, 25, 10, 2, tzinfo=IST)
+        completed = _strict_slice(rows, click, 5)
+        self.assertEqual(len(completed), 12)
+        self.assertEqual(completed[-1][0].isoformat(), "2026-08-25T09:55:00+05:30")
+
+    def test_historical_mtf_fails_freshness_when_completed_history_is_stale(self):
+        day = date(2026, 8, 25)
+        rows = _rows(day, 9, 60, 5)
+        _, _, snapshot = _historical_mtf(
+            {"5m": rows, "15m": rows, "1h": rows},
+            datetime(2026, 8, 25, 22, 0, tzinfo=IST),
+        )
+        self.assertFalse(snapshot["fresh_market_data"])
+
     def test_summary_does_not_present_overlapping_clicks_as_additive_pnl(self):
         decisions = [
             {"status": "READY", "outcome": {"outcome": "T1_HIT", "r_multiple": 1.4}},
@@ -215,6 +233,33 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(quality["checks"]["first_click_gate_handoff"])
         self.assertEqual(quality["target_first_at"], "2026-08-25T09:00:00+05:30")
 
+    def test_sparse_five_minute_rows_use_schedule_coverage_not_a_fixed_daily_count(self):
+        target = date(2026, 7, 3)
+        comparison_5m = []
+        for offset in range(1, 8):
+            day = target - timedelta(days=offset)
+            if day.weekday() < 5:
+                comparison_5m.extend(_rows(day, 9, 120, 5))
+        full_grid = _rows(target, 9, 174, 5)
+        sparse_rows = full_grid[::2]
+        quality = _data_quality(
+            "CRUDEOIL",
+            {"trading_symbol": "CRUDE"},
+            {
+                "5m": comparison_5m + sparse_rows,
+                "15m": _rows(target, 9, 58, 15),
+                "1h": _rows(target, 9, 15, 60),
+            },
+            {"benchmark_symbol": "WTI", "candles": []},
+            {"status": "SETUP", "underlying_direction": "BULLISH"},
+            target,
+            ("10:00", "21:30"),
+        )
+        self.assertEqual(len(sparse_rows), 87)
+        self.assertEqual(quality["status"], "VALID")
+        self.assertEqual(quality["first_click_at"], "2026-07-03T10:00:00+05:30")
+        self.assertEqual(quality["first_click_completed_5m_candles"], 6)
+
     def test_groww_epoch_rows_reach_phase_a_gate_handoff(self):
         target = date(2026, 8, 25)
         comparison_5m = []
@@ -267,9 +312,9 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_weekly_replay_returns_exactly_100_auditable_snapshots(self):
         days = [date(2026, 8, day) for day in range(3, 25) if date(2026, 8, day).weekday() < 5]
-        five = [row for day in days for row in _rows(day, 9, 120, 5)]
-        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
-        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        five = [row for day in days for row in _rows(day, 9, 174, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 58, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 15, 60)]
         contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
         previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
         frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
@@ -302,9 +347,9 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
             if cursor.weekday() < 5:
                 days.append(cursor)
             cursor += timedelta(days=1)
-        five = [row for day in days for row in _rows(day, 9, 120, 5)]
-        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
-        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        five = [row for day in days for row in _rows(day, 9, 174, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 58, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 15, 60)]
         contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
         previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
         frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
@@ -342,9 +387,9 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
             if cursor.weekday() < 5:
                 days.append(cursor)
             cursor += timedelta(days=1)
-        five = [row for day in days for row in _rows(day, 9, 120, 5)]
-        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
-        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        five = [row for day in days for row in _rows(day, 9, 174, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 58, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 15, 60)]
         contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
         previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
         frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
@@ -377,9 +422,9 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
             if cursor.weekday() < 5:
                 days.append(cursor)
             cursor += timedelta(days=1)
-        five = [row for day in days for row in _rows(day, 9, 120, 5)]
-        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
-        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        five = [row for day in days for row in _rows(day, 9, 174, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 58, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 15, 60)]
         contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
         previous = {"status": "SETUP", "underlying_direction": "BEARISH", "features": {"directional_score": -3, "votes": {}}}
         frames = {key: {"signal": "SELL", "market_structure": "DOWNTREND"} for key in ("5m", "15m", "1h")}
