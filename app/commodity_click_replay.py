@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from hashlib import sha256
 from statistics import mean
 from zoneinfo import ZoneInfo
 
@@ -22,12 +23,39 @@ WEEKLY_SESSION_PAIRS = (
     (date(2026, 8, 20), date(2026, 8, 21)),
     (date(2026, 8, 21), date(2026, 8, 24)),
 )
+EXTENDED_TARGET_DATES = tuple(
+    day
+    for day in (date(2026, 7, 29) + timedelta(days=offset) for offset in range(28))
+    if day.weekday() < 5
+)
+EXTENDED_SESSION_PAIRS = tuple(
+    (target - timedelta(days=3 if target.weekday() == 0 else 1), target)
+    for target in EXTENDED_TARGET_DATES
+)
 MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
+EXTENDED_CLICK_SALT = "alphapilot-frozen-20-session-click-v1"
 
 
 def _click(day, text):
     hour, minute = [int(value) for value in text.split(":")]
     return datetime.combine(day, time(hour, minute), tzinfo=IST)
+
+
+def _extended_click_times(target_date):
+    """Select ten reproducible, result-independent 5-minute slots from 10:00-22:00 IST."""
+    slots = range(10 * 60, 22 * 60 + 1, 5)
+    ranked = sorted(
+        slots,
+        key=lambda minute: sha256(
+            f"{EXTENDED_CLICK_SALT}|{target_date.isoformat()}|{minute}".encode()
+        ).digest(),
+    )
+    selected = sorted(ranked[:10])
+    return tuple(f"{minute // 60:02d}:{minute % 60:02d}" for minute in selected)
+
+
+def _click_schedule(session_pairs, selector):
+    return {target.isoformat(): tuple(selector(target)) for _, target in session_pairs}
 
 
 def _strict_slice(rows, click):
@@ -166,10 +194,11 @@ def _weekly_summary(decisions):
     }
 
 
-def _click_timeline(decisions):
+def _click_timeline(decisions, session_pairs=WEEKLY_SESSION_PAIRS, click_schedule=None):
+    schedule = click_schedule or _click_schedule(session_pairs, lambda _: WEEKLY_CLICK_TIMES)
     timeline = []
-    for _, target_date in WEEKLY_SESSION_PAIRS:
-        for click_text in WEEKLY_CLICK_TIMES:
+    for _, target_date in session_pairs:
+        for click_text in schedule[target_date.isoformat()]:
             cards = []
             for symbol in SYMBOLS:
                 row = next((item for item in decisions if item["target_date"] == target_date.isoformat()
@@ -332,10 +361,10 @@ async def run_frozen_tuesday_phase_a(provider):
     }
 
 
-async def run_frozen_weekly_click_backtest(provider):
-    """Replay five preregistered next sessions as ten hourly user clicks per symbol."""
-    first_observation = WEEKLY_SESSION_PAIRS[0][0]
-    last_target = WEEKLY_SESSION_PAIRS[-1][1]
+async def _run_frozen_click_backtest(provider, session_pairs, mode, click_schedule):
+    """Replay preregistered next sessions at frozen user-click samples."""
+    first_observation = session_pairs[0][0]
+    last_target = session_pairs[-1][1]
     fetch_start = datetime.combine(first_observation - timedelta(days=14), time(9, 0), tzinfo=IST)
     fetch_end = datetime.combine(last_target, time(23, 30), tzinfo=IST)
     decisions = []
@@ -350,7 +379,7 @@ async def run_frozen_weekly_click_backtest(provider):
         }
         normalized_5m = _valid_rows(rows_by_timeframe["5m"])
 
-        for observation_date, target_date in WEEKLY_SESSION_PAIRS:
+        for observation_date, target_date in session_pairs:
             benchmark_start = datetime.combine(target_date, time(0, 0), tzinfo=IST)
             benchmark_end = datetime.combine(target_date + timedelta(days=1), time(0, 0), tzinfo=IST)
             benchmark_payload = await fetch_benchmark_candles(symbol, benchmark_start, benchmark_end)
@@ -369,7 +398,7 @@ async def run_frozen_weekly_click_backtest(provider):
 
             target_rows = [row for row in normalized_5m if _ts(row[0]).date() == target_date]
             comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
-            for click_text in WEEKLY_CLICK_TIMES:
+            for click_text in click_schedule[target_date.isoformat()]:
                 click = _click(target_date, click_text)
                 frames, plan, mtf = _historical_mtf(rows_by_timeframe, click)
                 current_rows = [row for row in target_rows if _ts(row[0]) < click]
@@ -411,24 +440,30 @@ async def run_frozen_weekly_click_backtest(provider):
                     "timeframe_signals": {key: value.get("signal") for key, value in frames.items()},
                 })
 
-    valid = len(data_quality) == len(SYMBOLS) * len(WEEKLY_SESSION_PAIRS) and all(
+    expected_snapshots = sum(len(times) for times in click_schedule.values()) * len(SYMBOLS)
+    valid = len(data_quality) == len(SYMBOLS) * len(session_pairs) and all(
         row["status"] == "VALID" for row in data_quality
     )
     if valid:
         _deduplicate_ready_setups(decisions)
     return {
-        "mode": "COMMODITY_FROZEN_WEEKLY_CLICK_BACKTEST_V1",
+        "mode": mode,
         "status": "VALID" if valid else "INVALID_TARGET_SESSION_SLICE",
         "observation_target_pairs": [
             {"observation_date": observation.isoformat(), "target_date": target.isoformat()}
-            for observation, target in WEEKLY_SESSION_PAIRS
+            for observation, target in session_pairs
         ],
-        "click_times_ist": list(WEEKLY_CLICK_TIMES),
+        "click_sampling": "TEN_FROZEN_BACKTEST_SAMPLES_PER_SESSION_NOT_A_LIVE_CLICK_LIMIT",
+        "click_window_ist": {"start": "10:00", "end_inclusive": "22:00"},
+        "click_schedule": [
+            {"target_date": target.isoformat(), "click_times_ist": list(click_schedule[target.isoformat()])}
+            for _, target in session_pairs
+        ],
         "symbols": list(SYMBOLS),
-        "expected_decision_snapshots": 100,
+        "expected_decision_snapshots": expected_snapshots,
         "summary": _weekly_summary(decisions),
         "data_quality": data_quality,
-        "click_timeline": _click_timeline(decisions),
+        "click_timeline": _click_timeline(decisions, session_pairs, click_schedule),
         "decisions": decisions,
         "deduplication_rule": "Consecutive same-symbol READY snapshots with the same action are one trade.",
         "research_only": True,
@@ -437,3 +472,19 @@ async def run_frozen_weekly_click_backtest(provider):
         "strategy_rules_changed": False,
         "live_execution_enabled": False,
     }
+
+
+async def run_frozen_weekly_click_backtest(provider):
+    """Replay the original five-session preregistered protocol."""
+    schedule = _click_schedule(WEEKLY_SESSION_PAIRS, lambda _: WEEKLY_CLICK_TIMES)
+    return await _run_frozen_click_backtest(
+        provider, WEEKLY_SESSION_PAIRS, "COMMODITY_FROZEN_WEEKLY_CLICK_BACKTEST_V1", schedule,
+    )
+
+
+async def run_frozen_extended_click_backtest(provider):
+    """Replay the fixed 20-target-session extension without optional stopping."""
+    schedule = _click_schedule(EXTENDED_SESSION_PAIRS, _extended_click_times)
+    return await _run_frozen_click_backtest(
+        provider, EXTENDED_SESSION_PAIRS, "COMMODITY_FROZEN_20_SESSION_CLICK_BACKTEST_V1", schedule,
+    )
