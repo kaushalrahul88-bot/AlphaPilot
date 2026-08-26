@@ -15,6 +15,7 @@ from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_click_replay import run_frozen_tuesday_phase_a, validate_frozen_tuesday_phase_a_data
+from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
 from .commodity_option_history import probe_mcx_option_history, scan_mcx_option_history_band
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.38.4"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.39.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -105,7 +106,7 @@ class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["CRUDEOIL","N
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.38.4","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.39.0","provider":settings.market_data_provider.upper()}
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
@@ -321,6 +322,10 @@ async def commodity_click_phase_a_tuesday():
 async def commodity_click_phase_a_data_validation():
     try:return await validate_frozen_tuesday_phase_a_data(get_provider(settings))
     except Exception as exc:_safe_upstream_error("commodity click Phase A data validation",exc)
+@app.post("/v1/research/commodity-live-scan-v1")
+async def commodity_live_scan_v1():
+    try:return await run_commodity_live_scan(get_provider(settings))
+    except Exception as exc:_safe_upstream_error("commodity live prototype",exc)
 @app.get("/v1/news")
 async def news(symbols:str,limit:int=3):return await latest_market_news([x.strip().upper() for x in symbols.split(",") if x.strip()],max(1,min(int(limit),5)))
 @app.post("/v1/scan")

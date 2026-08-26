@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+import httpx
+
+from .commodity_backtest import _fetch_chunked, _plan_at, _ts
+from .commodity_benchmarks import benchmark_confirmation, fetch_benchmark_candles
+from .commodity_click_brain import _valid_rows, evaluate_commodity_click
+from .commodity_next_session import build_next_session_plan
+from .commodity_option_history import fetch_mcx_option_master, select_mcx_option_contract
+from .commodities import analyze_commodity_candles, mcx_session_status, resolve_nearest_mcx_future
+
+
+IST = ZoneInfo("Asia/Kolkata")
+SYMBOLS = ("CRUDEOIL", "NATURALGAS")
+TIMEFRAMES = {"5m": 5, "15m": 15, "1h": 60}
+FRESHNESS_MINUTES = {"5m": 15, "15m": 35, "1h": 90}
+PREMIUM_RISK_REWARD = 1.5
+
+
+def _completed_rows(rows, click_at, interval_minutes):
+    click = _ts(click_at)
+    duration = timedelta(minutes=int(interval_minutes))
+    return [row for row in _valid_rows(rows) if row[0] + duration <= click]
+
+
+def _previous_complete_session(rows, target_date):
+    grouped = {}
+    for row in _valid_rows(rows):
+        stamp = row[0]
+        if stamp.date() >= target_date or not (time(9, 0) <= stamp.time() <= time(23, 30)):
+            continue
+        grouped.setdefault(stamp.date(), []).append(row)
+    complete = [
+        day for day, values in grouped.items()
+        if len(values) >= 100 and values[-1][0].time() >= time(23, 20)
+    ]
+    return max(complete) if complete else None
+
+
+def _live_mtf(symbol, rows_by_timeframe, click_at):
+    click = _ts(click_at)
+    frames = {}
+    freshness = {}
+    for timeframe, interval in TIMEFRAMES.items():
+        rows = _completed_rows(rows_by_timeframe.get(timeframe, []), click, interval)[-260:]
+        frames[timeframe] = analyze_commodity_candles(symbol, rows, PREMIUM_RISK_REWARD)
+        if rows:
+            completed_at = rows[-1][0] + timedelta(minutes=interval)
+            age = max(0.0, (click - completed_at).total_seconds() / 60.0)
+        else:
+            completed_at = None
+            age = None
+        passed = age is not None and age <= FRESHNESS_MINUTES[timeframe]
+        freshness[timeframe] = {
+            "passed": passed,
+            "last_completed_at": completed_at.isoformat() if completed_at else None,
+            "age_minutes": round(age, 1) if age is not None else None,
+            "maximum_minutes": FRESHNESS_MINUTES[timeframe],
+        }
+    plan = _plan_at(symbol, frames, PREMIUM_RISK_REWARD, 65.0)
+    snapshot = {
+        "action": plan.get("action") if plan else "NO TRADE",
+        "alpha_score": plan.get("strength") if plan else 50.0,
+        "fresh_market_data": all(value["passed"] for value in freshness.values()),
+    }
+    return frames, plan, snapshot, freshness
+
+
+def _quote_payload(body):
+    if not isinstance(body, dict):
+        return None
+    payload = body.get("payload", body)
+    if not isinstance(payload, dict):
+        return None
+    for key in ("last_price", "ltp", "last_traded_price"):
+        try:
+            value = float(payload.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return payload, value
+    return None
+
+
+async def fetch_live_mcx_option_quote(provider, contract):
+    throttle = getattr(provider, "_throttle", None)
+    if callable(throttle):
+        await throttle()
+    async with httpx.AsyncClient(timeout=25) as client:
+        response = await client.get(
+            f"{provider.BASE_URL}/v1/live-data/quote",
+            headers=await provider._headers(),
+            params={
+                "exchange": "MCX",
+                "segment": "COMMODITY",
+                "trading_symbol": contract["trading_symbol"],
+            },
+        )
+    response.raise_for_status()
+    parsed = _quote_payload(response.json())
+    if parsed is None:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "Exact MCX option quote has no positive live premium.",
+            "contract": contract,
+        }
+    payload, premium = parsed
+    observed_at = datetime.now(IST)
+    return {
+        "status": "AVAILABLE",
+        "provider": "GROWW",
+        "data_status": "LIVE",
+        "premium": round(premium, 4),
+        "observed_at": observed_at.isoformat(),
+        "contract": contract,
+        "source": "GROWW_LIVE_MCX_OPTION_QUOTE",
+        "payload_keys": sorted(payload.keys()),
+    }
+
+
+def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_date, click_at):
+    click = _ts(click_at)
+    first = current_rows[0][0] if current_rows else None
+    last = current_rows[-1][0] if current_rows else None
+    comparison_dates = {row[0].date() for row in comparison_rows if row[5] > 0}
+    checks = {
+        "previous_complete_session": previous_date is not None,
+        "current_session_started": first is not None and first.time() <= time(9, 15),
+        "minimum_current_candles": len(current_rows) >= 4,
+        "current_volume": sum(row[5] for row in current_rows) > 0,
+        "comparison_sessions": len(comparison_dates) >= 5,
+        "no_future_or_open_5m_candles": all(row[0] + timedelta(minutes=5) <= click for row in current_rows),
+    }
+    return {
+        "symbol": symbol,
+        "contract": contract.get("trading_symbol"),
+        "status": "VALID" if all(checks.values()) else "DATA_NOT_READY",
+        "checks": checks,
+        "candles": {key: len(value) for key, value in rows_by_timeframe.items()},
+        "previous_session": previous_date.isoformat() if previous_date else None,
+        "current_completed_5m_candles": len(current_rows),
+        "current_first_at": first.isoformat() if first else None,
+        "current_last_at": last.isoformat() if last else None,
+        "comparison_sessions": len(comparison_dates),
+    }
+
+
+def _blocked_result(symbol, click, status, reason, quality=None):
+    return {
+        "symbol": symbol,
+        "click_at": click.isoformat(),
+        "decision_status": status,
+        "action": "NO TRADE",
+        "reason": reason,
+        "data_quality": quality,
+        "research_only": True,
+        "live_execution_enabled": False,
+    }
+
+
+async def run_commodity_live_scan(provider, now=None):
+    click = _ts(now or datetime.now(IST))
+    target_date = click.date()
+    session = mcx_session_status(click)
+    fetch_start = datetime.combine(target_date - timedelta(days=16), time(9, 0), tzinfo=IST)
+    benchmark_start = datetime.combine(target_date, time(0, 0), tzinfo=IST)
+    results = []
+    option_master = None
+
+    for symbol in SYMBOLS:
+        try:
+            contract = await resolve_nearest_mcx_future(symbol)
+            rows_by_timeframe = {
+                timeframe: await _fetch_chunked(provider, contract, minutes, fetch_start, click)
+                for timeframe, minutes in TIMEFRAMES.items()
+            }
+            completed_5m = _completed_rows(rows_by_timeframe["5m"], click, 5)
+            previous_date = _previous_complete_session(completed_5m, target_date)
+            current_rows = [row for row in completed_5m if row[0].date() == target_date]
+            comparison_rows = [row for row in completed_5m if row[0].date() < target_date]
+            quality = _data_quality(
+                symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_date, click,
+            )
+            if not session["is_open"]:
+                results.append(_blocked_result(symbol, click, "MARKET_CLOSED", "MCX session is closed.", quality))
+                continue
+            if quality["status"] != "VALID":
+                results.append(_blocked_result(symbol, click, "DATA_NOT_READY", "Required completed MCX session data is unavailable.", quality))
+                continue
+
+            previous = build_next_session_plan(
+                symbol, completed_5m, previous_date, target_date, contract.get("tick_size"),
+            )
+            frames, plan, mtf, frame_freshness = _live_mtf(symbol, rows_by_timeframe, click)
+            benchmark_payload = await fetch_benchmark_candles(symbol, benchmark_start, click)
+            benchmark_rows = _completed_rows(benchmark_payload.get("candles", []), click, 5)
+            benchmark = benchmark_confirmation(symbol, benchmark_rows, click)
+            directional = evaluate_commodity_click(
+                symbol=symbol,
+                click_at=click,
+                previous_plan=previous,
+                mtf_snapshot=mtf,
+                current_rows=current_rows,
+                comparison_rows=comparison_rows,
+                benchmark=benchmark,
+                option_premium=None,
+                premium_risk_reward=PREMIUM_RISK_REWARD,
+                require_option_premium=False,
+            )
+
+            option_quote = {"status": "NOT_REQUESTED", "reason": "Directional market gates did not all pass."}
+            strict = None
+            decision_status = directional["status"]
+            action = directional["action"]
+            if directional["status"] == "READY" and plan:
+                action = "BUY CE" if previous.get("underlying_direction") == "BULLISH" else "BUY PE"
+                option_type = action.split()[-1]
+                if option_master is None:
+                    option_master = await fetch_mcx_option_master(SYMBOLS)
+                selected = select_mcx_option_contract(
+                    [row for row in option_master if row.get("buy_allowed")],
+                    symbol,
+                    target_date,
+                    current_rows[-1][4],
+                    option_type,
+                )
+                if selected is None:
+                    option_quote = {"status": "CONTRACT_NOT_FOUND", "option_type": option_type}
+                else:
+                    try:
+                        option_quote = await fetch_live_mcx_option_quote(provider, selected)
+                    except Exception as exc:
+                        option_quote = {
+                            "status": "QUOTE_ERROR",
+                            "contract": selected,
+                            "error": f"{exc.__class__.__name__}: {str(exc)[:180]}",
+                        }
+                premium = option_quote.get("premium") if option_quote.get("status") == "AVAILABLE" else None
+                strict = evaluate_commodity_click(
+                    symbol=symbol,
+                    click_at=click,
+                    previous_plan=previous,
+                    mtf_snapshot=mtf,
+                    current_rows=current_rows,
+                    comparison_rows=comparison_rows,
+                    benchmark=benchmark,
+                    option_premium=premium,
+                    premium_risk_reward=PREMIUM_RISK_REWARD,
+                    require_option_premium=True,
+                )
+                decision_status = "EXECUTABLE_READY" if strict["status"] == "READY" else "DIRECTIONAL_READY"
+
+            gates = (strict or directional)["gates"]
+            blockers = (strict or directional)["blockers"]
+            results.append({
+                "symbol": symbol,
+                "click_at": click.isoformat(),
+                "decision_status": decision_status,
+                "action": action,
+                "previous_session": previous_date.isoformat(),
+                "previous_plan": previous,
+                "current_mtf_action": mtf.get("action"),
+                "current_mtf_strength": mtf.get("alpha_score"),
+                "current_completed_5m_candles": len(current_rows),
+                "frame_freshness": frame_freshness,
+                "timeframe_signals": {key: value.get("signal") for key, value in frames.items()},
+                "benchmark": benchmark,
+                "underlying_setup": {
+                    "entry": plan.get("entry"),
+                    "stop_loss": plan.get("stop"),
+                    "target1": plan.get("target1"),
+                    "risk_reward": PREMIUM_RISK_REWARD,
+                } if plan else None,
+                "option_quote": option_quote,
+                "premium_setup": (strict or {}).get("premium_setup"),
+                "gates": gates,
+                "blockers": blockers,
+                "data_quality": quality,
+                "research_only": True,
+                "live_execution_enabled": False,
+            })
+        except Exception as exc:
+            results.append(_blocked_result(
+                symbol,
+                click,
+                "DATA_ERROR",
+                f"{exc.__class__.__name__}: {str(exc)[:180]}",
+            ))
+
+    return {
+        "mode": "COMMODITY_LIVE_PROTOTYPE_V1",
+        "generated_at": datetime.now(IST).isoformat(),
+        "click_at": click.isoformat(),
+        "target_date": target_date.isoformat(),
+        "market_session": session,
+        "symbols": list(SYMBOLS),
+        "premium_risk_reward": PREMIUM_RISK_REWARD,
+        "results": results,
+        "summary": {
+            "executable_ready": sum(row.get("decision_status") == "EXECUTABLE_READY" for row in results),
+            "directional_ready": sum(row.get("decision_status") == "DIRECTIONAL_READY" for row in results),
+            "wait": sum(row.get("decision_status") == "WAIT" for row in results),
+            "no_trade": sum(row.get("decision_status") == "NO_TRADE" for row in results),
+            "data_not_ready": sum(row.get("decision_status") in {"DATA_NOT_READY", "DATA_ERROR"} for row in results),
+        },
+        "readiness_definition": {
+            "DIRECTIONAL_READY": "All frozen market gates passed, but no verified positive live premium was available.",
+            "EXECUTABLE_READY": "All frozen market gates passed and an exact buy-allowed MCX option contract returned a positive live Groww premium.",
+        },
+        "research_only": True,
+        "production_rules_changed": False,
+        "paper_trading_permission_changed": False,
+        "live_execution_enabled": False,
+        "order_endpoint_called": False,
+    }
