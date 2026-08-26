@@ -3,7 +3,19 @@ from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app.commodity_click_replay import CLICK_TIMES, _data_quality, _historical_mtf, _summary, validate_frozen_tuesday_phase_a_data
+from app.commodity_click_replay import (
+    CLICK_TIMES,
+    WEEKLY_CLICK_TIMES,
+    WEEKLY_SESSION_PAIRS,
+    _click_timeline,
+    _data_quality,
+    _deduplicate_ready_setups,
+    _historical_mtf,
+    _summary,
+    _weekly_summary,
+    run_frozen_weekly_click_backtest,
+    validate_frozen_tuesday_phase_a_data,
+)
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -17,6 +29,47 @@ def _rows(day, start_hour, count, minutes):
 class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
     def test_frozen_click_times_are_unchanged(self):
         self.assertEqual(CLICK_TIMES, ("09:35", "10:55", "11:05", "13:20", "13:35", "15:15", "15:25", "16:15", "16:40", "18:35"))
+
+    def test_weekly_protocol_has_five_sessions_and_hourly_clicks(self):
+        self.assertEqual(WEEKLY_CLICK_TIMES, ("10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00"))
+        self.assertEqual(len(WEEKLY_SESSION_PAIRS), 5)
+        self.assertEqual(WEEKLY_SESSION_PAIRS[-1], (date(2026, 8, 21), date(2026, 8, 24)))
+        self.assertEqual(len(WEEKLY_CLICK_TIMES) * len(WEEKLY_SESSION_PAIRS) * 2, 100)
+
+    def test_weekly_ready_snapshots_are_deduplicated_without_hiding_clicks(self):
+        decisions = [
+            {"symbol": "CRUDEOIL", "target_date": "2026-08-18", "status": "READY", "action": "BUY PE", "outcome": {"r_multiple": 1.5}},
+            {"symbol": "CRUDEOIL", "target_date": "2026-08-18", "status": "READY", "action": "BUY PE", "outcome": {"r_multiple": 1.2}},
+            {"symbol": "CRUDEOIL", "target_date": "2026-08-18", "status": "NO_TRADE", "action": "NO TRADE", "outcome": None},
+            {"symbol": "CRUDEOIL", "target_date": "2026-08-18", "status": "READY", "action": "BUY PE", "outcome": {"r_multiple": -1.0}},
+            {"symbol": "CRUDEOIL", "target_date": "2026-08-19", "status": "READY", "action": "BUY PE", "outcome": {"r_multiple": 0.5}},
+        ]
+        _deduplicate_ready_setups(decisions)
+        self.assertEqual(len(decisions), 5)
+        self.assertEqual(sum(row["independent_setup"] for row in decisions), 3)
+        self.assertEqual(decisions[0]["trade_id"], decisions[1]["trade_id"])
+        self.assertIsNone(decisions[1]["outcome"])
+        self.assertNotEqual(decisions[3]["trade_id"], decisions[4]["trade_id"])
+        summary = _weekly_summary(decisions)
+        self.assertEqual(summary["decision_snapshots"], 5)
+        self.assertEqual(summary["independent_setups"], 3)
+        self.assertFalse(summary["additive_pnl_available"])
+
+    def test_click_timeline_looks_like_successive_user_clicks(self):
+        decisions = []
+        for _, target in WEEKLY_SESSION_PAIRS:
+            for click_text in WEEKLY_CLICK_TIMES:
+                for symbol in ("CRUDEOIL", "NATURALGAS"):
+                    decisions.append({
+                        "target_date": target.isoformat(), "click_time_ist": click_text,
+                        "symbol": symbol, "status": "NO_TRADE", "action": "NO TRADE",
+                        "current_mtf_strength": 50.0, "blockers": ["Frozen gate failed."],
+                    })
+        timeline = _click_timeline(decisions)
+        self.assertEqual(len(timeline), 50)
+        self.assertEqual(timeline[0]["display_label"], "Clicked at 10:00 IST")
+        self.assertEqual(timeline[1]["display_label"], "Clicked at 11:00 IST")
+        self.assertEqual(len(timeline[0]["cards"]), 2)
 
     def test_historical_mtf_always_returns_unpackable_snapshot(self):
         day = date(2026, 8, 25)
@@ -150,6 +203,35 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "VALID")
         self.assertFalse(result["generates_trade_decisions"])
         self.assertNotIn("decisions", result)
+
+    async def test_weekly_replay_returns_exactly_100_auditable_snapshots(self):
+        days = [date(2026, 8, day) for day in range(3, 25) if date(2026, 8, day).weekday() < 5]
+        five = [row for day in days for row in _rows(day, 9, 120, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
+        previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
+        frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
+        plan = {"action": "SELL", "strength": 80.0, "entry": 100, "stop": 110, "target1": 85}
+        brain = {
+            "status": "NO_TRADE", "action": "NO TRADE", "underlying_direction": "BEARISH",
+            "blockers": ["RVOL failed."], "gates": {"rvol": False},
+        }
+        fetches = [five, fifteen, hourly, five, fifteen, hourly]
+        with (
+            patch("app.commodity_click_replay.resolve_nearest_mcx_future", new=AsyncMock(side_effect=[contract, contract])),
+            patch("app.commodity_click_replay._fetch_chunked", new=AsyncMock(side_effect=fetches)),
+            patch("app.commodity_click_replay.fetch_benchmark_candles", new=AsyncMock(return_value={"benchmark_symbol": "TEST", "candles": []})),
+            patch("app.commodity_click_replay.build_next_session_plan", return_value=previous),
+            patch("app.commodity_click_replay._historical_mtf", return_value=(frames, plan, {"action": "SELL", "alpha_score": 80.0, "fresh_market_data": True})),
+            patch("app.commodity_click_replay.benchmark_confirmation", return_value={"passed": True}),
+            patch("app.commodity_click_replay.evaluate_commodity_click", return_value=brain),
+        ):
+            result = await run_frozen_weekly_click_backtest(object())
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(len(result["decisions"]), 100)
+        self.assertEqual(len(result["click_timeline"]), 50)
+        self.assertEqual(result["summary"]["decision_snapshots"], 100)
 
 
 if __name__ == "__main__":

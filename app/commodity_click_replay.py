@@ -14,6 +14,14 @@ from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
 IST = ZoneInfo("Asia/Kolkata")
 SYMBOLS = ("CRUDEOIL", "NATURALGAS")
 CLICK_TIMES = ("09:35", "10:55", "11:05", "13:20", "13:35", "15:15", "15:25", "16:15", "16:40", "18:35")
+WEEKLY_CLICK_TIMES = tuple(f"{hour:02d}:00" for hour in range(10, 20))
+WEEKLY_SESSION_PAIRS = (
+    (date(2026, 8, 17), date(2026, 8, 18)),
+    (date(2026, 8, 18), date(2026, 8, 19)),
+    (date(2026, 8, 19), date(2026, 8, 20)),
+    (date(2026, 8, 20), date(2026, 8, 21)),
+    (date(2026, 8, 21), date(2026, 8, 24)),
+)
 MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
 
 
@@ -104,6 +112,86 @@ def _summary(decisions):
         "win_rate_pct": round(positive / len(resolved) * 100.0, 1) if resolved else 0.0,
         "non_additive": True,
     }
+
+
+def _deduplicate_ready_setups(decisions):
+    """Mark consecutive same-direction READY snapshots without deleting audit rows."""
+    next_trade = 1
+    active = {}
+    for row in decisions:
+        symbol = row["symbol"]
+        key = (row.get("status"), row.get("action"))
+        previous = active.get(symbol)
+        if previous and previous["target_date"] != row.get("target_date"):
+            active.pop(symbol, None)
+        if row.get("status") != "READY":
+            active.pop(symbol, None)
+            row["independent_setup"] = False
+            row["trade_id"] = None
+            continue
+        previous = active.get(symbol)
+        if previous and previous["key"] == key:
+            row["independent_setup"] = False
+            row["trade_id"] = previous["trade_id"]
+            row["outcome"] = None
+            row["outcome_note"] = "Duplicate snapshot of the preceding open setup; not scored again."
+            continue
+        trade_id = f"W{next_trade:03d}"
+        next_trade += 1
+        active[symbol] = {"key": key, "trade_id": trade_id, "target_date": row.get("target_date")}
+        row["independent_setup"] = True
+        row["trade_id"] = trade_id
+    return decisions
+
+
+def _weekly_summary(decisions):
+    setups = [row for row in decisions if row.get("independent_setup")]
+    resolved = [row for row in setups if isinstance((row.get("outcome") or {}).get("r_multiple"), (int, float))]
+    positive = sum(row["outcome"]["r_multiple"] > 0 for row in resolved)
+    negative = sum(row["outcome"]["r_multiple"] < 0 for row in resolved)
+    return {
+        "decision_snapshots": len(decisions),
+        "ready_snapshots": sum(row.get("status") == "READY" for row in decisions),
+        "wait_snapshots": sum(row.get("status") == "WAIT" for row in decisions),
+        "no_trade_snapshots": sum(row.get("status") == "NO_TRADE" for row in decisions),
+        "independent_setups": len(setups),
+        "duplicate_ready_snapshots": sum(row.get("status") == "READY" and not row.get("independent_setup") for row in decisions),
+        "resolved_underlying_proxies": len(resolved),
+        "positive": positive,
+        "negative": negative,
+        "flat_or_ambiguous": len(resolved) - positive - negative,
+        "average_resolved_r_proxy": round(mean(row["outcome"]["r_multiple"] for row in resolved), 3) if resolved else 0.0,
+        "win_rate_pct": round(positive / len(resolved) * 100.0, 1) if resolved else 0.0,
+        "additive_pnl_available": False,
+    }
+
+
+def _click_timeline(decisions):
+    timeline = []
+    for _, target_date in WEEKLY_SESSION_PAIRS:
+        for click_text in WEEKLY_CLICK_TIMES:
+            cards = []
+            for symbol in SYMBOLS:
+                row = next((item for item in decisions if item["target_date"] == target_date.isoformat()
+                            and item["click_time_ist"] == click_text and item["symbol"] == symbol), None)
+                if row:
+                    cards.append({
+                        "symbol": symbol,
+                        "screen_result": row["status"],
+                        "action": row["action"],
+                        "strength": row["current_mtf_strength"],
+                        "main_reason": row["blockers"][0] if row["blockers"] else "All frozen gates passed.",
+                        "trade_id": row.get("trade_id"),
+                        "independent_setup": row.get("independent_setup", False),
+                        "outcome": row.get("outcome"),
+                    })
+            timeline.append({
+                "target_date": target_date.isoformat(),
+                "clicked_at_ist": click_text,
+                "display_label": f"Clicked at {click_text} IST",
+                "cards": cards,
+            })
+    return timeline
 
 
 async def validate_frozen_tuesday_phase_a_data(provider):
@@ -240,5 +328,112 @@ async def run_frozen_tuesday_phase_a(provider):
         "independent_overlapping_snapshots": True,
         "production_rules_changed": False,
         "paper_trading_permission_changed": False,
+        "live_execution_enabled": False,
+    }
+
+
+async def run_frozen_weekly_click_backtest(provider):
+    """Replay five preregistered next sessions as ten hourly user clicks per symbol."""
+    first_observation = WEEKLY_SESSION_PAIRS[0][0]
+    last_target = WEEKLY_SESSION_PAIRS[-1][1]
+    fetch_start = datetime.combine(first_observation - timedelta(days=14), time(9, 0), tzinfo=IST)
+    fetch_end = datetime.combine(last_target, time(23, 30), tzinfo=IST)
+    decisions = []
+    data_quality = []
+
+    for symbol in SYMBOLS:
+        contract = await resolve_nearest_mcx_future(symbol)
+        rows_by_timeframe = {
+            "5m": await _fetch_chunked(provider, contract, 5, fetch_start, fetch_end),
+            "15m": await _fetch_chunked(provider, contract, 15, fetch_start, fetch_end),
+            "1h": await _fetch_chunked(provider, contract, 60, fetch_start, fetch_end),
+        }
+        normalized_5m = _valid_rows(rows_by_timeframe["5m"])
+
+        for observation_date, target_date in WEEKLY_SESSION_PAIRS:
+            benchmark_start = datetime.combine(target_date, time(0, 0), tzinfo=IST)
+            benchmark_end = datetime.combine(target_date + timedelta(days=1), time(0, 0), tzinfo=IST)
+            benchmark_payload = await fetch_benchmark_candles(symbol, benchmark_start, benchmark_end)
+            benchmark_rows = benchmark_payload.get("candles", [])
+            previous = build_next_session_plan(
+                symbol, normalized_5m, observation_date, target_date, contract.get("tick_size"),
+            )
+            quality = _data_quality(
+                symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date,
+            )
+            quality["observation_date"] = observation_date.isoformat()
+            quality["target_date"] = target_date.isoformat()
+            data_quality.append(quality)
+            if quality["status"] != "VALID":
+                continue
+
+            target_rows = [row for row in normalized_5m if _ts(row[0]).date() == target_date]
+            comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
+            for click_text in WEEKLY_CLICK_TIMES:
+                click = _click(target_date, click_text)
+                frames, plan, mtf = _historical_mtf(rows_by_timeframe, click)
+                current_rows = [row for row in target_rows if _ts(row[0]) < click]
+                benchmark = benchmark_confirmation(symbol, benchmark_rows, click)
+                brain = evaluate_commodity_click(
+                    symbol=symbol,
+                    click_at=click,
+                    previous_plan=previous,
+                    mtf_snapshot=mtf,
+                    current_rows=current_rows,
+                    comparison_rows=comparison_rows,
+                    benchmark=benchmark,
+                    option_premium=None,
+                    premium_risk_reward=1.5,
+                    require_option_premium=False,
+                )
+                outcome = _resolve_trade(plan, target_rows, click, 2.0, 2.0) if brain["status"] == "READY" and plan else None
+                decisions.append({
+                    "observation_date": observation_date.isoformat(),
+                    "target_date": target_date.isoformat(),
+                    "click_time_ist": click_text,
+                    "click_at": click.isoformat(),
+                    "symbol": symbol,
+                    "status": brain["status"],
+                    "action": brain["action"],
+                    "underlying_direction": brain["underlying_direction"],
+                    "previous_direction": previous.get("underlying_direction", "NEUTRAL"),
+                    "current_mtf_action": mtf.get("action"),
+                    "current_mtf_strength": mtf.get("alpha_score"),
+                    "session_input_candles": len(current_rows),
+                    "benchmark": benchmark,
+                    "underlying_setup": {
+                        "entry": plan.get("entry"), "stop_loss": plan.get("stop"),
+                        "target1": plan.get("target1"), "risk_reward": 1.5,
+                    } if plan else None,
+                    "outcome": outcome,
+                    "blockers": brain["blockers"],
+                    "gates": brain["gates"],
+                    "timeframe_signals": {key: value.get("signal") for key, value in frames.items()},
+                })
+
+    valid = len(data_quality) == len(SYMBOLS) * len(WEEKLY_SESSION_PAIRS) and all(
+        row["status"] == "VALID" for row in data_quality
+    )
+    if valid:
+        _deduplicate_ready_setups(decisions)
+    return {
+        "mode": "COMMODITY_FROZEN_WEEKLY_CLICK_BACKTEST_V1",
+        "status": "VALID" if valid else "INVALID_TARGET_SESSION_SLICE",
+        "observation_target_pairs": [
+            {"observation_date": observation.isoformat(), "target_date": target.isoformat()}
+            for observation, target in WEEKLY_SESSION_PAIRS
+        ],
+        "click_times_ist": list(WEEKLY_CLICK_TIMES),
+        "symbols": list(SYMBOLS),
+        "expected_decision_snapshots": 100,
+        "summary": _weekly_summary(decisions),
+        "data_quality": data_quality,
+        "click_timeline": _click_timeline(decisions),
+        "decisions": decisions,
+        "deduplication_rule": "Consecutive same-symbol READY snapshots with the same action are one trade.",
+        "research_only": True,
+        "outcome_basis": "UNDERLYING_DIRECTION_PROXY_NOT_OPTION_PREMIUM_PNL",
+        "historical_news_reconstructed": False,
+        "strategy_rules_changed": False,
         "live_execution_enabled": False,
     }
