@@ -31,6 +31,12 @@ def _historical_mtf(rows_by_timeframe, click):
         timeframe: analyze_commodity_candles("", _strict_slice(rows_by_timeframe[timeframe], click), 1.5)
         for timeframe in ("5m", "15m", "1h")
     }
+    plan = _plan_at("", frames, 1.5, 65.0)
+    return frames, plan, {
+        "action": plan.get("action") if plan else "NO TRADE",
+        "alpha_score": plan.get("strength") if plan else 50.0,
+        "fresh_market_data": True,
+    }
 
 
 def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date):
@@ -72,14 +78,6 @@ def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previo
         "previous_status": previous.get("status"),
         "previous_direction": previous.get("underlying_direction"),
     }
-    plan = _plan_at("", frames, 1.5, 65.0)
-    return frames, plan, {
-        "action": plan.get("action") if plan else "NO TRADE",
-        "alpha_score": plan.get("strength") if plan else 50.0,
-        "fresh_market_data": True,
-    }
-
-
 def _summary(decisions):
     ready = [row for row in decisions if row.get("status") == "READY"]
     resolved = [row for row in ready if isinstance((row.get("outcome") or {}).get("r_multiple"), (int, float))]
