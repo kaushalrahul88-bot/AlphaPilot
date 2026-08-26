@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from typing import Literal
 import logging
+import hmac
 import traceback
 
 from .backtest import run_backtest
@@ -13,6 +14,7 @@ from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
+from .commodity_candle_collector import PostgresCandleStore, collect_completed_commodity_candles
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -56,8 +58,10 @@ logger = logging.getLogger("alphapilot.scan")
 class Settings(BaseSettings):
     market_data_provider: str = "MOCK"
     allowed_origins: str = "*"
+    database_url: str = ""
+    commodity_collector_token: str = ""
     class Config: env_file = ".env"
-settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.39.7"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
+settings=Settings(); app=FastAPI(title="AlphaPilot API",version="0.40.0"); parsed_origins=[x.strip() for x in settings.allowed_origins.split(",") if x.strip()]; parsed_origins=["*"] if "*" in parsed_origins else parsed_origins; app.add_middleware(CORSMiddleware,allow_origins=parsed_origins,allow_credentials=False,allow_methods=["*"],allow_headers=["*"]); TF=Literal["5m","15m","1h","1d"]
 
 def _safe_upstream_error(operation:str,exc:Exception):
     response=getattr(exc,"response",None); request=getattr(exc,"request",None) or getattr(response,"request",None); status=getattr(response,"status_code",None); text=str(exc); upstream_path=None
@@ -106,7 +110,24 @@ class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["CRUDEOIL","N
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.39.7","provider":settings.market_data_provider.upper()}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.40.0","provider":settings.market_data_provider.upper(),"commodity_collector_enabled":bool(settings.database_url.strip() and settings.commodity_collector_token.strip())}
+def _collector_store(x_collector_token:str|None):
+    expected=settings.commodity_collector_token.strip(); supplied=str(x_collector_token or "")
+    if not settings.database_url.strip() or not expected:
+        raise HTTPException(status_code=503,detail={"code":"COLLECTOR_DISABLED","message":"Configure DATABASE_URL and COMMODITY_COLLECTOR_TOKEN to enable collection"})
+    if not hmac.compare_digest(supplied,expected):
+        raise HTTPException(status_code=401,detail="Invalid collector token")
+    return PostgresCandleStore(settings.database_url)
+@app.post("/v1/internal/commodity-candles/collect")
+async def commodity_candles_collect(x_collector_token:str|None=Header(default=None)):
+    store=_collector_store(x_collector_token)
+    try:return await collect_completed_commodity_candles(get_provider(settings),store)
+    except Exception as exc:_safe_upstream_error("commodity candle collection",exc)
+@app.get("/v1/internal/commodity-candles/status")
+async def commodity_candles_status(x_collector_token:str|None=Header(default=None)):
+    store=_collector_store(x_collector_token)
+    try:return await store.status()
+    except Exception as exc:_safe_upstream_error("commodity candle storage status",exc)
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
