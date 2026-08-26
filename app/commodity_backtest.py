@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
+from .commodity_time import parse_ist_timestamp
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -19,15 +20,7 @@ def _f(value, default=0.0):
 
 
 def _ts(value):
-    if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().isdigit()):
-        raw = float(value)
-        if raw > 1_000_000_000_000:
-            raw /= 1000
-        return datetime.fromtimestamp(raw, IST)
-    parsed = datetime.fromisoformat(str(value))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=IST)
-    return parsed.astimezone(IST)
+    return parse_ist_timestamp(value)
 
 
 def _direction_strength(frame, action):

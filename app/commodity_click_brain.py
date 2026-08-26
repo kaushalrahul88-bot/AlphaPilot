@@ -4,6 +4,8 @@ from datetime import datetime, time
 from statistics import mean
 from zoneinfo import ZoneInfo
 
+from .commodity_time import parse_ist_timestamp
+
 
 IST = ZoneInfo("Asia/Kolkata")
 OPENING_RANGE_START = time(9, 0)
@@ -21,13 +23,7 @@ def _number(value, default=0.0):
 
 
 def _timestamp(value):
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=IST)
-    return parsed.astimezone(IST)
+    return parse_ist_timestamp(value)
 
 
 def _valid_rows(rows, through=None):

@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from app.commodity_click_brain import evaluate_commodity_click, premium_plan
+from app.commodity_click_brain import _timestamp, _valid_rows, evaluate_commodity_click, premium_plan
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -48,6 +48,18 @@ def benchmark(symbol, direction, click):
 
 
 class CommodityClickBrainTests(unittest.TestCase):
+    def test_groww_epoch_seconds_milliseconds_numeric_string_and_iso_match(self):
+        expected = "2026-08-25T09:00:00+05:30"
+        seconds = 1787628600
+        values = [seconds, seconds * 1000, str(seconds), expected]
+        self.assertEqual([_timestamp(value).isoformat() for value in values], [expected] * 4)
+
+    def test_valid_rows_accept_groww_epoch_timestamp(self):
+        row = [1787628600, 8080, 8090, 8070, 8085, 1000]
+        result = _valid_rows([row])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0].isoformat(), "2026-08-25T09:00:00+05:30")
+
     def test_bullish_click_returns_buy_ce_with_1_5r_premium_plan(self):
         click = datetime(2026, 8, 25, 10, 15, tzinfo=IST)
         result = evaluate_commodity_click(
