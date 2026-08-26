@@ -39,7 +39,16 @@ def _direction_strength(frame, action):
 
 
 async def _fetch_range(provider, contract, interval_minutes, start, end):
-    params = {
+    modern_intervals = {5: "5minute", 15: "15minute", 60: "1hour"}
+    modern_params = {
+        "exchange": contract["exchange"],
+        "segment": contract["segment"],
+        "groww_symbol": contract.get("groww_symbol"),
+        "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "candle_interval": modern_intervals.get(interval_minutes, f"{interval_minutes}minute"),
+    }
+    legacy_params = {
         "exchange": contract["exchange"],
         "segment": contract["segment"],
         "trading_symbol": contract["trading_symbol"],
@@ -48,13 +57,24 @@ async def _fetch_range(provider, contract, interval_minutes, start, end):
         "interval_in_minutes": str(interval_minutes),
     }
     async with httpx.AsyncClient(timeout=45) as client:
-        response = await client.get(
+        modern = await client.get(
+            f"{provider.BASE_URL}/v1/historical/candles",
+            headers=await provider._headers(),
+            params=modern_params,
+        )
+        if modern.status_code == 200:
+            data = modern.json()
+            payload = data.get("payload", data)
+            candles = payload.get("candles", []) if isinstance(payload, dict) else []
+            if candles:
+                return candles
+        legacy = await client.get(
             f"{provider.BASE_URL}/v1/historical/candle/range",
             headers=await provider._headers(),
-            params=params,
+            params=legacy_params,
         )
-    response.raise_for_status()
-    data = response.json()
+    legacy.raise_for_status()
+    data = legacy.json()
     payload = data.get("payload", data)
     return payload.get("candles", []) if isinstance(payload, dict) else []
 
@@ -66,12 +86,20 @@ async def _fetch_chunked(provider, contract, interval_minutes, start, end):
     while cursor < end:
         chunk_end = min(end, cursor + timedelta(days=chunk_days))
         chunk = await _fetch_range(provider, contract, interval_minutes, cursor, chunk_end)
-        rows.extend(chunk)
+        for row in chunk:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            try:
+                stamp = _ts(row[0])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if cursor <= stamp <= chunk_end:
+                rows.append(list(row))
         cursor = chunk_end + timedelta(seconds=1)
     dedup = {}
     for row in rows:
         if isinstance(row, (list, tuple)) and len(row) >= 5:
-            dedup[str(row[0])] = list(row)
+            dedup[_ts(row[0]).isoformat()] = list(row)
     return sorted(dedup.values(), key=lambda row: _ts(row[0]))
 
 

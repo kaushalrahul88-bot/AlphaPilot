@@ -14,6 +14,7 @@ from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
 IST = ZoneInfo("Asia/Kolkata")
 SYMBOLS = ("CRUDEOIL", "NATURALGAS")
 CLICK_TIMES = ("09:35", "10:55", "11:05", "13:20", "13:35", "15:15", "15:25", "16:15", "16:40", "18:35")
+MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
 
 
 def _click(day, text):
@@ -29,6 +30,47 @@ def _historical_mtf(rows_by_timeframe, click):
     frames = {
         timeframe: analyze_commodity_candles("", _strict_slice(rows_by_timeframe[timeframe], click), 1.5)
         for timeframe in ("5m", "15m", "1h")
+    }
+
+
+def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date):
+    target_by_timeframe = {
+        timeframe: [row for row in rows if _ts(row[0]).date() == target_date]
+        for timeframe, rows in rows_by_timeframe.items()
+    }
+    target_5m = target_by_timeframe["5m"]
+    comparison_dates = {
+        _ts(row[0]).date()
+        for row in rows_by_timeframe["5m"]
+        if _ts(row[0]).date() < target_date and len(row) > 5 and float(row[5] or 0) > 0
+    }
+    first = _ts(target_5m[0][0]) if target_5m else None
+    last = _ts(target_5m[-1][0]) if target_5m else None
+    checks = {
+        "target_candle_counts": all(
+            len(target_by_timeframe[timeframe]) >= minimum
+            for timeframe, minimum in MIN_TARGET_CANDLES.items()
+        ),
+        "target_session_start": first is not None and first.time() <= time(9, 15),
+        "target_session_through_last_click": last is not None and last.time() >= time(18, 35),
+        "target_volume": sum(float(row[5] or 0) for row in target_5m if len(row) > 5) > 0,
+        "comparison_sessions": len(comparison_dates) >= 5,
+    }
+    return {
+        "symbol": symbol,
+        "contract": contract.get("trading_symbol"),
+        "status": "VALID" if all(checks.values()) else "INVALID_TARGET_SESSION_SLICE",
+        "checks": checks,
+        "candles": {key: len(value) for key, value in rows_by_timeframe.items()},
+        "target_candles": {key: len(value) for key, value in target_by_timeframe.items()},
+        "target_first_at": first.isoformat() if first else None,
+        "target_last_at": last.isoformat() if last else None,
+        "target_5m_volume": round(sum(float(row[5] or 0) for row in target_5m if len(row) > 5), 2),
+        "comparison_sessions": len(comparison_dates),
+        "benchmark": benchmark_payload.get("benchmark_symbol"),
+        "benchmark_candles": len(benchmark_payload.get("candles", [])),
+        "previous_status": previous.get("status"),
+        "previous_direction": previous.get("underlying_direction"),
     }
     plan = _plan_at("", frames, 1.5, 65.0)
     return frames, plan, {
@@ -59,6 +101,55 @@ def _summary(decisions):
     }
 
 
+async def validate_frozen_tuesday_phase_a_data(provider):
+    observation_date = date(2026, 8, 24)
+    target_date = date(2026, 8, 25)
+    fetch_start = datetime.combine(observation_date - timedelta(days=14), time(9, 0), tzinfo=IST)
+    fetch_end = datetime.combine(target_date, time(23, 30), tzinfo=IST)
+    quality_rows = []
+    benchmarks = {"CRUDEOIL": "WTI", "NATURALGAS": "HENRY_HUB"}
+
+    for symbol in SYMBOLS:
+        contract = await resolve_nearest_mcx_future(symbol)
+        rows_by_timeframe = {
+            "5m": await _fetch_chunked(provider, contract, 5, fetch_start, fetch_end),
+            "15m": await _fetch_chunked(provider, contract, 15, fetch_start, fetch_end),
+            "1h": await _fetch_chunked(provider, contract, 60, fetch_start, fetch_end),
+        }
+        previous = build_next_session_plan(
+            symbol,
+            rows_by_timeframe["5m"],
+            observation_date,
+            target_date,
+            contract.get("tick_size"),
+        )
+        quality_rows.append(_data_quality(
+            symbol,
+            contract,
+            rows_by_timeframe,
+            {"benchmark_symbol": benchmarks[symbol], "candles": []},
+            previous,
+            target_date,
+        ))
+
+    valid = len(quality_rows) == len(SYMBOLS) and all(row["status"] == "VALID" for row in quality_rows)
+    return {
+        "mode": "COMMODITY_CLICK_PHASE_A_DATA_VALIDATION_V1",
+        "status": "VALID" if valid else "INVALID_TARGET_SESSION_SLICE",
+        "observation_date": observation_date.isoformat(),
+        "target_date": target_date.isoformat(),
+        "symbols": list(SYMBOLS),
+        "data_quality": quality_rows,
+        "generates_trade_decisions": False,
+        "benchmark_check_performed": False,
+        "option_premium_check_performed": False,
+        "research_only": True,
+        "production_rules_changed": False,
+        "paper_trading_permission_changed": False,
+        "live_execution_enabled": False,
+    }
+
+
 async def run_frozen_tuesday_phase_a(provider):
     observation_date = date(2026, 8, 24)
     target_date = date(2026, 8, 25)
@@ -79,17 +170,12 @@ async def run_frozen_tuesday_phase_a(provider):
         benchmark_payload = await fetch_benchmark_candles(symbol, benchmark_start, benchmark_end)
         benchmark_rows = benchmark_payload.get("candles", [])
         previous = build_next_session_plan(symbol, rows_by_timeframe["5m"], observation_date, target_date, contract.get("tick_size"))
+        quality = _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date)
+        data_quality.append(quality)
+        if quality["status"] != "VALID":
+            continue
         target_rows = [row for row in rows_by_timeframe["5m"] if _ts(row[0]).date() == target_date]
         comparison_rows = [row for row in rows_by_timeframe["5m"] if _ts(row[0]).date() < target_date]
-        data_quality.append({
-            "symbol": symbol,
-            "contract": contract.get("trading_symbol"),
-            "candles": {key: len(value) for key, value in rows_by_timeframe.items()},
-            "benchmark": benchmark_payload.get("benchmark_symbol"),
-            "benchmark_candles": len(benchmark_rows),
-            "previous_status": previous.get("status"),
-            "previous_direction": previous.get("underlying_direction"),
-        })
 
         for click_text in CLICK_TIMES:
             click = _click(target_date, click_text)
@@ -130,8 +216,10 @@ async def run_frozen_tuesday_phase_a(provider):
                 "timeframe_signals": {key: value.get("signal") for key, value in frames.items()},
             })
 
+    valid = all(row["status"] == "VALID" for row in data_quality) and len(data_quality) == len(SYMBOLS)
     return {
         "mode": "COMMODITY_CLICK_PHASE_A_FROZEN_TUESDAY_V1",
+        "status": "VALID" if valid else "INVALID_TARGET_SESSION_SLICE",
         "observation_date": observation_date.isoformat(),
         "target_date": target_date.isoformat(),
         "click_times_ist": list(CLICK_TIMES),
