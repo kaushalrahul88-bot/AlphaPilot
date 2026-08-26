@@ -8,6 +8,8 @@ import httpx
 from app.commodity_live import (
     _completed_rows,
     _expected_previous_weekday,
+    _fetch_live_rows,
+    _merge_rows,
     _previous_complete_session,
     _previous_session_state,
     _quote_payload,
@@ -71,6 +73,29 @@ class CommodityLiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_quote_payload({"payload": {"last_price": 27.5}})[1], 27.5)
         self.assertIsNone(_quote_payload({"payload": {"last_price": 0}}))
 
+    def test_merge_rows_deduplicates_canonical_timestamp(self):
+        day = date(2026, 8, 25)
+        combined = rows(day, count=2)
+        targeted = [combined[1], *rows(day, count=3)[2:]]
+        merged = _merge_rows(combined, targeted)
+        self.assertEqual(len(merged), 3)
+        self.assertEqual(len({row[0].isoformat() for row in merged}), 3)
+
+    async def test_exact_previous_day_is_fetched_for_all_timeframes(self):
+        expected = date(2026, 8, 25)
+        click = datetime(2026, 8, 26, 14, 0, tzinfo=IST)
+        combined = rows(date(2026, 8, 26), count=10)
+        targeted = rows(expected)
+        fetch = AsyncMock(side_effect=[combined, targeted, combined, targeted[:58], combined, targeted[:15]])
+        with patch("app.commodity_live._fetch_chunked", new=fetch):
+            result, counts = await _fetch_live_rows(
+                Provider(), {"trading_symbol": "TEST"}, datetime(2026, 8, 10, 9, 0, tzinfo=IST), click, expected,
+            )
+        self.assertEqual(counts, {"5m": 174, "15m": 58, "1h": 15})
+        self.assertIn(expected, {row[0].date() for row in result["5m"]})
+        targeted_calls = [fetch.await_args_list[index] for index in (1, 3, 5)]
+        self.assertTrue(all(call.args[3].date() == expected and call.args[4].date() == expected for call in targeted_calls))
+
     async def test_exact_mcx_option_quote_uses_contract_trading_symbol(self):
         contract = {"trading_symbol": "CRUDEOIL17SEP267800PE", "strike": 7800, "option_type": "PE"}
 
@@ -93,7 +118,7 @@ class CommodityLiveTests(unittest.IsolatedAsyncioTestCase):
         contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
         with (
             patch("app.commodity_live.resolve_nearest_mcx_future", new=AsyncMock(side_effect=[contract, contract])),
-            patch("app.commodity_live._fetch_chunked", new=AsyncMock(return_value=history)),
+            patch("app.commodity_live._fetch_live_rows", new=AsyncMock(return_value=({key: history for key in ("5m", "15m", "1h")}, {"5m": 174, "15m": 58, "1h": 15}))),
             patch("app.commodity_live.fetch_mcx_option_master", new=AsyncMock()) as master,
         ):
             result = await run_commodity_live_scan(Provider(), datetime(2026, 8, 29, 12, 0, tzinfo=IST))

@@ -26,6 +26,27 @@ def _completed_rows(rows, click_at, interval_minutes):
     return [row for row in _valid_rows(rows) if row[0] + duration <= click]
 
 
+def _merge_rows(*groups):
+    deduplicated = {}
+    for group in groups:
+        for row in _valid_rows(group):
+            deduplicated[row[0].isoformat()] = row
+    return [deduplicated[key] for key in sorted(deduplicated)]
+
+
+async def _fetch_live_rows(provider, contract, fetch_start, click_at, expected_previous):
+    previous_start = datetime.combine(expected_previous, time(9, 0), tzinfo=IST)
+    previous_end = datetime.combine(expected_previous, time(23, 30), tzinfo=IST)
+    rows_by_timeframe = {}
+    targeted_counts = {}
+    for timeframe, minutes in TIMEFRAMES.items():
+        combined = await _fetch_chunked(provider, contract, minutes, fetch_start, click_at)
+        targeted = await _fetch_chunked(provider, contract, minutes, previous_start, previous_end)
+        rows_by_timeframe[timeframe] = _merge_rows(combined, targeted)
+        targeted_counts[timeframe] = len(_valid_rows(targeted))
+    return rows_by_timeframe, targeted_counts
+
+
 def _expected_previous_weekday(target_date):
     candidate = target_date - timedelta(days=1)
     while candidate.weekday() >= 5:
@@ -146,7 +167,16 @@ async def fetch_live_mcx_option_quote(provider, contract):
     }
 
 
-def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_state, click_at):
+def _data_quality(
+    symbol,
+    contract,
+    rows_by_timeframe,
+    current_rows,
+    comparison_rows,
+    previous_state,
+    targeted_previous_counts,
+    click_at,
+):
     click = _ts(click_at)
     first = current_rows[0][0] if current_rows else None
     last = current_rows[-1][0] if current_rows else None
@@ -165,6 +195,7 @@ def _data_quality(symbol, contract, rows_by_timeframe, current_rows, comparison_
         "status": "VALID" if all(checks.values()) else "DATA_NOT_READY",
         "checks": checks,
         "candles": {key: len(value) for key, value in rows_by_timeframe.items()},
+        "targeted_previous_fetch_candles": dict(targeted_previous_counts),
         "expected_previous_session": previous_state["expected_date"].isoformat(),
         "latest_previous_observed_session": previous_state["latest_observed_date"].isoformat() if previous_state["latest_observed_date"] else None,
         "previous_session_candles": previous_state["candles"],
@@ -193,6 +224,7 @@ def _blocked_result(symbol, click, status, reason, quality=None):
 async def run_commodity_live_scan(provider, now=None):
     click = _ts(now or datetime.now(IST))
     target_date = click.date()
+    expected_previous = _expected_previous_weekday(target_date)
     session = mcx_session_status(click)
     fetch_start = datetime.combine(target_date - timedelta(days=16), time(9, 0), tzinfo=IST)
     benchmark_start = datetime.combine(target_date, time(0, 0), tzinfo=IST)
@@ -202,17 +234,23 @@ async def run_commodity_live_scan(provider, now=None):
     for symbol in SYMBOLS:
         try:
             contract = await resolve_nearest_mcx_future(symbol)
-            rows_by_timeframe = {
-                timeframe: await _fetch_chunked(provider, contract, minutes, fetch_start, click)
-                for timeframe, minutes in TIMEFRAMES.items()
-            }
+            rows_by_timeframe, targeted_previous_counts = await _fetch_live_rows(
+                provider, contract, fetch_start, click, expected_previous,
+            )
             completed_5m = _completed_rows(rows_by_timeframe["5m"], click, 5)
             previous_state = _previous_session_state(completed_5m, target_date)
             previous_date = previous_state["expected_date"] if previous_state["complete"] else None
             current_rows = [row for row in completed_5m if row[0].date() == target_date]
             comparison_rows = [row for row in completed_5m if row[0].date() < target_date]
             quality = _data_quality(
-                symbol, contract, rows_by_timeframe, current_rows, comparison_rows, previous_state, click,
+                symbol,
+                contract,
+                rows_by_timeframe,
+                current_rows,
+                comparison_rows,
+                previous_state,
+                targeted_previous_counts,
+                click,
             )
             if not session["is_open"]:
                 results.append(_blocked_result(symbol, click, "MARKET_CLOSED", "MCX session is closed.", quality))
