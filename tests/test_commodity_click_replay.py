@@ -5,15 +5,19 @@ from zoneinfo import ZoneInfo
 
 from app.commodity_click_replay import (
     CLICK_TIMES,
+    EXTENDED_SESSION_PAIRS,
+    EXTENDED_TARGET_DATES,
     WEEKLY_CLICK_TIMES,
     WEEKLY_SESSION_PAIRS,
     _click_timeline,
     _data_quality,
     _deduplicate_ready_setups,
+    _extended_click_times,
     _historical_mtf,
     _summary,
     _weekly_summary,
     run_frozen_weekly_click_backtest,
+    run_frozen_extended_click_backtest,
     validate_frozen_tuesday_phase_a_data,
 )
 
@@ -35,6 +39,24 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(WEEKLY_SESSION_PAIRS), 5)
         self.assertEqual(WEEKLY_SESSION_PAIRS[-1], (date(2026, 8, 21), date(2026, 8, 24)))
         self.assertEqual(len(WEEKLY_CLICK_TIMES) * len(WEEKLY_SESSION_PAIRS) * 2, 100)
+
+    def test_extended_protocol_is_fixed_at_20_sessions_without_optional_stopping(self):
+        self.assertEqual(len(EXTENDED_TARGET_DATES), 20)
+        self.assertEqual(EXTENDED_TARGET_DATES[0], date(2026, 7, 29))
+        self.assertEqual(EXTENDED_TARGET_DATES[-1], date(2026, 8, 25))
+        self.assertEqual(EXTENDED_SESSION_PAIRS[0], (date(2026, 7, 28), date(2026, 7, 29)))
+        self.assertEqual(EXTENDED_SESSION_PAIRS[-1], (date(2026, 8, 24), date(2026, 8, 25)))
+        self.assertEqual(len(EXTENDED_SESSION_PAIRS) * len(WEEKLY_CLICK_TIMES) * 2, 400)
+
+    def test_extended_clicks_are_reproducible_irregular_and_inside_live_window(self):
+        first = _extended_click_times(date(2026, 7, 29))
+        second = _extended_click_times(date(2026, 7, 30))
+        self.assertEqual(first, _extended_click_times(date(2026, 7, 29)))
+        self.assertEqual(len(first), 10)
+        self.assertEqual(len(set(first)), 10)
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, WEEKLY_CLICK_TIMES)
+        self.assertTrue(all("10:00" <= value <= "22:00" for value in first))
 
     def test_weekly_ready_snapshots_are_deduplicated_without_hiding_clicks(self):
         decisions = [
@@ -232,6 +254,47 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["decisions"]), 100)
         self.assertEqual(len(result["click_timeline"]), 50)
         self.assertEqual(result["summary"]["decision_snapshots"], 100)
+        self.assertEqual(len(result["click_schedule"]), 5)
+
+    async def test_extended_replay_returns_exactly_400_auditable_snapshots(self):
+        days = []
+        cursor = date(2026, 7, 1)
+        while cursor <= date(2026, 8, 25):
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor += timedelta(days=1)
+        five = [row for day in days for row in _rows(day, 9, 120, 5)]
+        fifteen = [row for day in days for row in _rows(day, 9, 40, 15)]
+        hourly = [row for day in days for row in _rows(day, 9, 10, 60)]
+        contract = {"trading_symbol": "TESTFUT", "tick_size": 1}
+        previous = {"status": "SETUP", "underlying_direction": "BEARISH"}
+        frames = {key: {"signal": "SELL"} for key in ("5m", "15m", "1h")}
+        plan = {"action": "SELL", "strength": 80.0, "entry": 100, "stop": 110, "target1": 85}
+        brain = {
+            "status": "NO_TRADE", "action": "NO TRADE", "underlying_direction": "BEARISH",
+            "blockers": ["RVOL failed."], "gates": {"rvol": False},
+        }
+        with (
+            patch("app.commodity_click_replay.resolve_nearest_mcx_future", new=AsyncMock(side_effect=[contract, contract])),
+            patch("app.commodity_click_replay._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly])),
+            patch("app.commodity_click_replay.fetch_benchmark_candles", new=AsyncMock(return_value={"benchmark_symbol": "TEST", "candles": []})),
+            patch("app.commodity_click_replay.build_next_session_plan", return_value=previous),
+            patch("app.commodity_click_replay._historical_mtf", return_value=(frames, plan, {"action": "SELL", "alpha_score": 80.0, "fresh_market_data": True})),
+            patch("app.commodity_click_replay.benchmark_confirmation", return_value={"passed": True}),
+            patch("app.commodity_click_replay.evaluate_commodity_click", return_value=brain),
+        ):
+            result = await run_frozen_extended_click_backtest(object())
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["mode"], "COMMODITY_FROZEN_20_SESSION_CLICK_BACKTEST_V1")
+        self.assertEqual(len(result["decisions"]), 400)
+        self.assertEqual(len(result["click_timeline"]), 200)
+        self.assertEqual(result["summary"]["decision_snapshots"], 400)
+        self.assertEqual(len(result["click_schedule"]), 20)
+        self.assertEqual(len(result["click_schedule"][0]["click_times_ist"]), 10)
+        self.assertNotEqual(
+            result["click_schedule"][0]["click_times_ist"],
+            result["click_schedule"][1]["click_times_ist"],
+        )
 
 
 if __name__ == "__main__":
