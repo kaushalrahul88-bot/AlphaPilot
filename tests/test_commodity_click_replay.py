@@ -78,6 +78,29 @@ class CommodityClickReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quality["status"], "VALID")
         self.assertTrue(all(quality["checks"].values()))
 
+    def test_groww_naive_rows_survive_validation_and_first_click_handoff(self):
+        target = date(2026, 8, 25)
+        comparison_5m = []
+        for offset in range(1, 6):
+            comparison_5m.extend(_rows(target - timedelta(days=offset), 9, 120, 5))
+        target_rows = _rows(target, 9, 120, 5)
+        groww_rows = [[row[0].split("+")[0], *row[1:], None] for row in comparison_5m + target_rows]
+        quality = _data_quality(
+            "CRUDEOIL",
+            {"trading_symbol": "CRUDE"},
+            {
+                "5m": groww_rows,
+                "15m": _rows(target, 9, 40, 15),
+                "1h": _rows(target, 9, 10, 60),
+            },
+            {"benchmark_symbol": "WTI", "candles": []},
+            {"status": "SETUP", "underlying_direction": "BEARISH"},
+            target,
+        )
+        self.assertEqual(quality["status"], "VALID")
+        self.assertTrue(quality["checks"]["first_click_gate_handoff"])
+        self.assertEqual(quality["target_first_at"], "2026-08-25T09:00:00+05:30")
+
     async def test_data_validation_route_never_generates_trade_decisions(self):
         target = date(2026, 8, 25)
         comparison_5m = []

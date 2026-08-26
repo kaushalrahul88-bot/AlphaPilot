@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .commodity_backtest import _fetch_chunked, _plan_at, _resolve_trade, _ts
 from .commodity_benchmarks import benchmark_confirmation, fetch_benchmark_candles
-from .commodity_click_brain import evaluate_commodity_click
+from .commodity_click_brain import _valid_rows, evaluate_commodity_click
 from .commodity_next_session import build_next_session_plan
 from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
 
@@ -40,14 +40,18 @@ def _historical_mtf(rows_by_timeframe, click):
 
 
 def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date):
+    normalized_by_timeframe = {
+        timeframe: _valid_rows(rows)
+        for timeframe, rows in rows_by_timeframe.items()
+    }
     target_by_timeframe = {
         timeframe: [row for row in rows if _ts(row[0]).date() == target_date]
-        for timeframe, rows in rows_by_timeframe.items()
+        for timeframe, rows in normalized_by_timeframe.items()
     }
     target_5m = target_by_timeframe["5m"]
     comparison_dates = {
         _ts(row[0]).date()
-        for row in rows_by_timeframe["5m"]
+        for row in normalized_by_timeframe["5m"]
         if _ts(row[0]).date() < target_date and len(row) > 5 and float(row[5] or 0) > 0
     }
     first = _ts(target_5m[0][0]) if target_5m else None
@@ -61,6 +65,9 @@ def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previo
         "target_session_through_last_click": last is not None and last.time() >= time(18, 35),
         "target_volume": sum(float(row[5] or 0) for row in target_5m if len(row) > 5) > 0,
         "comparison_sessions": len(comparison_dates) >= 5,
+        "first_click_gate_handoff": sum(
+            1 for row in target_5m if _ts(row[0]) < _click(target_date, CLICK_TIMES[0])
+        ) >= 4,
     }
     return {
         "symbol": symbol,
@@ -172,8 +179,9 @@ async def run_frozen_tuesday_phase_a(provider):
         data_quality.append(quality)
         if quality["status"] != "VALID":
             continue
-        target_rows = [row for row in rows_by_timeframe["5m"] if _ts(row[0]).date() == target_date]
-        comparison_rows = [row for row in rows_by_timeframe["5m"] if _ts(row[0]).date() < target_date]
+        normalized_5m = _valid_rows(rows_by_timeframe["5m"])
+        target_rows = [row for row in normalized_5m if _ts(row[0]).date() == target_date]
+        comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
 
         for click_text in CLICK_TIMES:
             click = _click(target_date, click_text)
@@ -204,6 +212,7 @@ async def run_frozen_tuesday_phase_a(provider):
                 "previous_direction": previous.get("underlying_direction", "NEUTRAL"),
                 "current_mtf_action": mtf.get("action"),
                 "current_mtf_strength": mtf.get("alpha_score"),
+                "session_input_candles": len(current_rows),
                 "benchmark": benchmark,
                 "underlying_setup": {
                     "entry": plan.get("entry"), "stop_loss": plan.get("stop"), "target1": plan.get("target1"), "risk_reward": 1.5
