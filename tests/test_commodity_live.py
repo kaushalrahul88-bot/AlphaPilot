@@ -7,7 +7,9 @@ import httpx
 
 from app.commodity_live import (
     _completed_rows,
+    _expected_previous_weekday,
     _previous_complete_session,
+    _previous_session_state,
     _quote_payload,
     fetch_live_mcx_option_quote,
     run_commodity_live_scan,
@@ -41,11 +43,29 @@ class CommodityLiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 3)
         self.assertEqual(result[-1][0].time().isoformat(timespec="minutes"), "09:10")
 
-    def test_previous_session_skips_incomplete_day(self):
+    def test_incomplete_expected_session_never_falls_back(self):
         monday = date(2026, 8, 24)
         tuesday = date(2026, 8, 25)
         source = rows(monday) + rows(tuesday, count=50)
-        self.assertEqual(_previous_complete_session(source, date(2026, 8, 26)), monday)
+        state = _previous_session_state(source, date(2026, 8, 26))
+        self.assertIsNone(_previous_complete_session(source, date(2026, 8, 26)))
+        self.assertEqual(state["expected_date"], tuesday)
+        self.assertEqual(state["latest_observed_date"], tuesday)
+        self.assertFalse(state["complete"])
+
+    def test_missing_expected_session_never_uses_older_complete_day(self):
+        friday = date(2026, 8, 21)
+        state = _previous_session_state(rows(friday), date(2026, 8, 26))
+        self.assertEqual(state["expected_date"], date(2026, 8, 25))
+        self.assertEqual(state["latest_observed_date"], friday)
+        self.assertFalse(state["checks"]["expected_session_present"])
+        self.assertFalse(state["complete"])
+
+    def test_monday_requires_friday_and_accepts_complete_session(self):
+        monday = date(2026, 8, 31)
+        friday = date(2026, 8, 28)
+        self.assertEqual(_expected_previous_weekday(monday), friday)
+        self.assertEqual(_previous_complete_session(rows(friday), monday), friday)
 
     def test_quote_payload_accepts_positive_live_price_only(self):
         self.assertEqual(_quote_payload({"payload": {"last_price": 27.5}})[1], 27.5)
