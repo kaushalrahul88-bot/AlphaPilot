@@ -5,11 +5,12 @@ from hashlib import sha256
 from statistics import mean
 from zoneinfo import ZoneInfo
 
-from .commodity_backtest import _fetch_chunked, _plan_at, _resolve_trade, _ts
+from .commodity_backtest import _fetch_chunked, _resolve_trade, _ts
 from .commodity_benchmarks import benchmark_confirmation, fetch_benchmark_candles
 from .commodity_click_brain import _valid_rows, evaluate_commodity_click, market_brain_audit
+from .commodity_mtf import completed_mtf_snapshot, completed_rows
 from .commodity_next_session import build_next_session_plan
-from .commodities import analyze_commodity_candles, resolve_nearest_mcx_future
+from .commodities import resolve_nearest_mcx_future
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -46,7 +47,7 @@ IDENTIFIED_SETUP_AUDIT_POINTS = (
     {"symbol": "CRUDEOIL", "observation_date": date(2026, 8, 17), "target_date": date(2026, 8, 18), "click_time_ist": "12:10"},
     {"symbol": "CRUDEOIL", "observation_date": date(2026, 8, 24), "target_date": date(2026, 8, 25), "click_time_ist": "21:10"},
 )
-MIN_TARGET_CANDLES = {"5m": 100, "15m": 30, "1h": 8}
+MIN_TARGET_CANDLES = {"15m": 30, "1h": 8}
 EXTENDED_CLICK_SALT = "alphapilot-frozen-20-session-click-v1"
 VALIDATION_CLICK_SALT = "alphapilot-frozen-july-validation-v1"
 
@@ -81,24 +82,16 @@ def _click_schedule(session_pairs, selector):
     return {target.isoformat(): tuple(selector(target)) for _, target in session_pairs}
 
 
-def _strict_slice(rows, click):
-    return [row for row in rows if _ts(row[0]) < click][-260:]
+def _strict_slice(rows, click, interval_minutes=5):
+    return completed_rows(rows, click, interval_minutes)[-260:]
 
 
-def _historical_mtf(rows_by_timeframe, click):
-    frames = {
-        timeframe: analyze_commodity_candles("", _strict_slice(rows_by_timeframe[timeframe], click), 1.5)
-        for timeframe in ("5m", "15m", "1h")
-    }
-    plan = _plan_at("", frames, 1.5, 65.0)
-    return frames, plan, {
-        "action": plan.get("action") if plan else "NO TRADE",
-        "alpha_score": plan.get("strength") if plan else 50.0,
-        "fresh_market_data": True,
-    }
+def _historical_mtf(rows_by_timeframe, click, symbol=""):
+    frames, plan, snapshot, _ = completed_mtf_snapshot(symbol, rows_by_timeframe, click, 1.5)
+    return frames, plan, snapshot
 
 
-def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date):
+def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date, click_times=CLICK_TIMES):
     normalized_by_timeframe = {
         timeframe: _valid_rows(rows)
         for timeframe, rows in rows_by_timeframe.items()
@@ -115,18 +108,23 @@ def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previo
     }
     first = _ts(target_5m[0][0]) if target_5m else None
     last = _ts(target_5m[-1][0]) if target_5m else None
+    first_click = _click(target_date, min(click_times))
+    last_click = _click(target_date, max(click_times))
+    completed_at_first_click = completed_rows(target_5m, first_click, 5)
     checks = {
-        "target_candle_counts": all(
+        "target_timeframe_coverage": len(target_5m) >= 4 and all(
             len(target_by_timeframe[timeframe]) >= minimum
             for timeframe, minimum in MIN_TARGET_CANDLES.items()
         ),
         "target_session_start": first is not None and first.time() <= time(9, 15),
-        "target_session_through_last_click": last is not None and last.time() >= time(18, 35),
+        "target_session_through_last_click": (
+            last is not None
+            and last + timedelta(minutes=5) <= datetime.combine(target_date, time(23, 30), tzinfo=IST)
+            and last + timedelta(minutes=5) >= last_click
+        ),
         "target_volume": sum(float(row[5] or 0) for row in target_5m if len(row) > 5) > 0,
         "comparison_sessions": len(comparison_dates) >= 5,
-        "first_click_gate_handoff": sum(
-            1 for row in target_5m if _ts(row[0]) < _click(target_date, CLICK_TIMES[0])
-        ) >= 4,
+        "first_click_gate_handoff": len(completed_at_first_click) >= 4,
     }
     return {
         "symbol": symbol,
@@ -138,6 +136,8 @@ def _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previo
         "target_first_at": first.isoformat() if first else None,
         "target_last_at": last.isoformat() if last else None,
         "target_5m_volume": round(sum(float(row[5] or 0) for row in target_5m if len(row) > 5), 2),
+        "first_click_at": first_click.isoformat(),
+        "first_click_completed_5m_candles": len(completed_at_first_click),
         "comparison_sessions": len(comparison_dates),
         "benchmark": benchmark_payload.get("benchmark_symbol"),
         "benchmark_candles": len(benchmark_payload.get("candles", [])),
@@ -331,8 +331,8 @@ async def run_frozen_tuesday_phase_a(provider):
 
         for click_text in CLICK_TIMES:
             click = _click(target_date, click_text)
-            frames, plan, mtf = _historical_mtf(rows_by_timeframe, click)
-            current_rows = [row for row in target_rows if _ts(row[0]) < click]
+            frames, plan, mtf = _historical_mtf(rows_by_timeframe, click, symbol)
+            current_rows = completed_rows(target_rows, click, 5)
             benchmark = benchmark_confirmation(symbol, benchmark_rows, click)
             brain = evaluate_commodity_click(
                 symbol=symbol,
@@ -417,7 +417,13 @@ async def _run_frozen_click_backtest(provider, session_pairs, mode, click_schedu
                 symbol, normalized_5m, observation_date, target_date, contract.get("tick_size"),
             )
             quality = _data_quality(
-                symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date,
+                symbol,
+                contract,
+                rows_by_timeframe,
+                benchmark_payload,
+                previous,
+                target_date,
+                click_schedule[target_date.isoformat()],
             )
             quality["observation_date"] = observation_date.isoformat()
             quality["target_date"] = target_date.isoformat()
@@ -429,8 +435,8 @@ async def _run_frozen_click_backtest(provider, session_pairs, mode, click_schedu
             comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
             for click_text in click_schedule[target_date.isoformat()]:
                 click = _click(target_date, click_text)
-                frames, plan, mtf = _historical_mtf(rows_by_timeframe, click)
-                current_rows = [row for row in target_rows if _ts(row[0]) < click]
+                frames, plan, mtf = _historical_mtf(rows_by_timeframe, click, symbol)
+                current_rows = completed_rows(target_rows, click, 5)
                 benchmark = benchmark_confirmation(symbol, benchmark_rows, click)
                 brain = evaluate_commodity_click(
                     symbol=symbol,
@@ -560,7 +566,15 @@ async def audit_identified_setups(provider):
             previous = build_next_session_plan(
                 symbol, normalized_5m, observation_date, target_date, contract.get("tick_size"),
             )
-            quality = _data_quality(symbol, contract, rows_by_timeframe, benchmark_payload, previous, target_date)
+            quality = _data_quality(
+                symbol,
+                contract,
+                rows_by_timeframe,
+                benchmark_payload,
+                previous,
+                target_date,
+                (point["click_time_ist"],),
+            )
             quality.update({
                 "observation_date": observation_date.isoformat(),
                 "target_date": target_date.isoformat(),
@@ -569,9 +583,9 @@ async def audit_identified_setups(provider):
             quality_records.append(quality)
             if quality["status"] != "VALID":
                 continue
-            frames, _, mtf = _historical_mtf(rows_by_timeframe, click)
+            frames, _, mtf = _historical_mtf(rows_by_timeframe, click, symbol)
             target_rows = [row for row in normalized_5m if _ts(row[0]).date() == target_date]
-            current_rows = [row for row in target_rows if _ts(row[0]) < click]
+            current_rows = completed_rows(target_rows, click, 5)
             comparison_rows = [row for row in normalized_5m if _ts(row[0]).date() < target_date]
             benchmark = benchmark_confirmation(symbol, benchmark_payload.get("candles", []), click)
             brain = evaluate_commodity_click(
