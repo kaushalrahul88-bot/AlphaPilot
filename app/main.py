@@ -14,7 +14,7 @@ from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
-from .copper_research_brain import run_copper_research_baseline
+from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment
 from .commodity_candle_collector import PostgresCandleStore, collect_completed_commodity_candles
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
@@ -325,6 +325,11 @@ async def copper_research_baseline(request:CopperResearchBaselineRequest):
     try:return await run_copper_research_baseline(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("Copper research baseline",exc)
+@app.post("/v1/research/copper/brain-b-v1")
+async def copper_brain_b_v1(request:CopperResearchBaselineRequest):
+    try:return await run_copper_brain_b_experiment(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper Brain B experiment",exc)
 @app.post("/v1/commodity/backtest/continuous")
 async def mcx_continuous_backtest(request:CommodityBacktestRequest):return await run_continuous_commodity_backtest(get_provider(settings),request.symbol,request.days,request.min_risk_reward,request.strength_threshold,request.slippage_bps,request.cost_bps)
 @app.post("/v1/commodity/next-session-prototype-v1")
