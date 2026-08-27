@@ -11,7 +11,8 @@ import httpx
 IST = ZoneInfo("Asia/Kolkata")
 BENCHMARK_SPECS = {
     "CRUDEOIL": {"symbol": "WTI", "ticker": "CL=F"},
-    "NATURALGAS": {"symbol": "HENRY_HUB", "ticker": "NG=F"},\n    "COPPER": {"symbol": "COMEX_COPPER", "ticker": "HG=F"},
+    "NATURALGAS": {"symbol": "HENRY_HUB", "ticker": "NG=F"},
+    "COPPER": {"symbol": "COMEX_COPPER", "ticker": "HG=F"},
 }
 MOMENTUM_BARS = 6
 MOMENTUM_MIN_PCT = 0.10
