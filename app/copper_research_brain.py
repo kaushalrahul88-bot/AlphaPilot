@@ -305,3 +305,139 @@ async def run_copper_research_baseline(provider, days=30, sample_every_bars=3, r
             "The first run is a research baseline, not a live trading recommendation.",
         ],
     }
+
+
+BRAIN_B_CONFIG = {
+    "min_relative_volume": 0.90,
+    "max_atr_pct": 0.65,
+    "min_abs_return_15m_pct": 0.02,
+    "oi_confirmation": True,
+}
+
+
+def brain_b_signal(features, config=None):
+    """Research-only Copper Brain B: Brain A direction gated by participation/regime."""
+    cfg = dict(BRAIN_B_CONFIG)
+    if config:
+        cfg.update(config)
+    base = brain_a_signal(features)
+    if base == "NO_TRADE":
+        return "NO_TRADE"
+    rel_vol = _f(features.get("relative_volume"))
+    atr_pct = _f(features.get("atr_pct"))
+    ret15 = _f(features.get("return_15m_pct"), 0.0)
+    oi_change = _f(features.get("oi_change_15m_pct"))
+    if rel_vol is not None and rel_vol < cfg["min_relative_volume"]:
+        return "NO_TRADE"
+    if atr_pct is not None and atr_pct > cfg["max_atr_pct"]:
+        return "NO_TRADE"
+    if abs(ret15) < cfg["min_abs_return_15m_pct"]:
+        return "NO_TRADE"
+    if cfg.get("oi_confirmation") and oi_change is not None:
+        if base == "BUY" and oi_change <= 0:
+            return "NO_TRADE"
+        if base == "SELL" and oi_change <= 0:
+            return "NO_TRADE"
+    return base
+
+
+def _evaluate_signal(experiences, signal_fn, *, brain, name, horizon_minutes=60, round_trip_cost_bps=4.0):
+    key = f"forward_{int(horizon_minutes)}m_pct"
+    decisions = []
+    for item in experiences:
+        features = item.get("features") or {}
+        labels = item.get("labels") or {}
+        signal = signal_fn(features)
+        forward = _f(labels.get(key))
+        if signal == "NO_TRADE" or forward is None:
+            continue
+        signed = forward if signal == "BUY" else -forward
+        net = signed - max(0.0, float(round_trip_cost_bps)) / 100.0
+        decisions.append({"timestamp": features.get("timestamp"), "signal": signal, "gross_pct": signed, "net_pct": net})
+    values = [x["net_pct"] for x in decisions]
+    wins = [x for x in values if x > 0]
+    losses = [x for x in values if x < 0]
+    gp = sum(wins)
+    gl = abs(sum(losses))
+    return {
+        "brain": brain, "name": name, "research_only": True,
+        "horizon_minutes": int(horizon_minutes), "round_trip_cost_bps": float(round_trip_cost_bps),
+        "signals": len(decisions), "wins": len(wins), "losses": len(losses),
+        "win_rate_pct": round(len(wins) / len(decisions) * 100.0, 2) if decisions else 0.0,
+        "avg_net_return_pct": round(mean(values), 4) if values else 0.0,
+        "net_return_sum_pct": round(sum(values), 4),
+        "profit_factor": round(gp / gl, 3) if gl > 0 else None,
+        "decisions": decisions[-200:],
+    }
+
+
+def evaluate_brain_b(experiences, horizon_minutes=60, round_trip_cost_bps=4.0, config=None):
+    cfg = dict(BRAIN_B_CONFIG)
+    if config:
+        cfg.update(config)
+    report = _evaluate_signal(
+        experiences, lambda f: brain_b_signal(f, cfg), brain="B",
+        name="MCX_STRUCTURE_PARTICIPATION_REGIME", horizon_minutes=horizon_minutes,
+        round_trip_cost_bps=round_trip_cost_bps,
+    )
+    report["config"] = cfg
+    return report
+
+
+def chronological_split(experiences, train_fraction=0.70):
+    if len(experiences) < 20:
+        return experiences[:], []
+    cut = max(1, min(len(experiences) - 1, int(len(experiences) * float(train_fraction))))
+    return experiences[:cut], experiences[cut:]
+
+
+def compare_brains_a_b(experiences, horizon_minutes=60, round_trip_cost_bps=4.0, train_fraction=0.70):
+    """Evaluate frozen A and frozen B on the same chronological untouched holdout."""
+    train, holdout = chronological_split(experiences, train_fraction)
+    a_train = evaluate_brain_a(train, horizon_minutes, round_trip_cost_bps)
+    b_train = evaluate_brain_b(train, horizon_minutes, round_trip_cost_bps)
+    a_test = evaluate_brain_a(holdout, horizon_minutes, round_trip_cost_bps)
+    b_test = evaluate_brain_b(holdout, horizon_minutes, round_trip_cost_bps)
+    a_pf = _f(a_test.get("profit_factor"), 0.0) or 0.0
+    b_pf = _f(b_test.get("profit_factor"), 0.0) or 0.0
+    promoted = (
+        b_test["signals"] >= 20
+        and b_test["avg_net_return_pct"] > a_test["avg_net_return_pct"]
+        and b_pf > a_pf
+        and b_test["avg_net_return_pct"] > 0
+        and b_pf > 1.0
+    )
+    return {
+        "split": {"train_fraction": float(train_fraction), "train_experiences": len(train), "holdout_experiences": len(holdout)},
+        "train": {"brain_a": a_train, "brain_b": b_train},
+        "holdout": {"brain_a": a_test, "brain_b": b_test},
+        "gate": {
+            "brain_b_promoted": promoted,
+            "requirements": ["holdout signals >= 20", "holdout expectancy > Brain A", "holdout profit factor > Brain A", "positive holdout expectancy", "holdout profit factor > 1.0"],
+        },
+    }
+
+
+async def run_copper_brain_b_experiment(provider, days=30, sample_every_bars=3, round_trip_cost_bps=4.0):
+    """Experiment 002: compare frozen Brain A vs Brain B on chronological holdout."""
+    baseline = await run_copper_research_baseline(provider, days, sample_every_bars, round_trip_cost_bps)
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from .commodity_backtest import _fetch_chunked
+    from .commodities import resolve_nearest_mcx_future
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=max(7, min(int(days), 60)))
+    contract = await resolve_nearest_mcx_future("COPPER")
+    mcx = await _fetch_chunked(provider, contract, 5, start, end)
+    experiences = build_copper_experiences(mcx, sample_every_bars=max(1, min(int(sample_every_bars), 12)))
+    comparison = compare_brains_a_b(experiences, 60, round_trip_cost_bps, 0.70)
+    return {
+        "mode": "ALPHAPILOT_COPPER_EXPERIMENT_002",
+        "research_only": True,
+        "production_rules_changed": False,
+        "contract": contract,
+        "coverage": baseline["coverage"],
+        "comparison": comparison,
+        "next_gate": "Proceed to Brain C only if Brain B passes the untouched chronological holdout gate.",
+    }
