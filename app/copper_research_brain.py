@@ -419,25 +419,38 @@ def compare_brains_a_b(experiences, horizon_minutes=60, round_trip_cost_bps=4.0,
 
 
 async def run_copper_brain_b_experiment(provider, days=30, sample_every_bars=3, round_trip_cost_bps=4.0):
-    """Experiment 002: compare frozen Brain A vs Brain B on chronological holdout."""
-    baseline = await run_copper_research_baseline(provider, days, sample_every_bars, round_trip_cost_bps)
+    """Experiment 002: compare frozen Brain A vs Brain B on one shared historical fetch."""
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
     from .commodity_backtest import _fetch_chunked
     from .commodities import resolve_nearest_mcx_future
+
+    days = max(7, min(int(days), 60))
+    step = max(1, min(int(sample_every_bars), 12))
     ist = ZoneInfo("Asia/Kolkata")
     end = datetime.now(ist)
-    start = end - timedelta(days=max(7, min(int(days), 60)))
+    start = end - timedelta(days=days)
     contract = await resolve_nearest_mcx_future("COPPER")
     mcx = await _fetch_chunked(provider, contract, 5, start, end)
-    experiences = build_copper_experiences(mcx, sample_every_bars=max(1, min(int(sample_every_bars), 12)))
+    if len(mcx) < 80:
+        raise RuntimeError(f"Insufficient MCX Copper 5m history ({len(mcx)} candles)")
+    experiences = build_copper_experiences(mcx, sample_every_bars=step)
     comparison = compare_brains_a_b(experiences, 60, round_trip_cost_bps, 0.70)
     return {
         "mode": "ALPHAPILOT_COPPER_EXPERIMENT_002",
         "research_only": True,
         "production_rules_changed": False,
         "contract": contract,
-        "coverage": baseline["coverage"],
+        "coverage": {
+            "mcx_5m_candles": len(mcx),
+            "experiences": len(experiences),
+            "start": str(mcx[0][0]) if mcx else None,
+            "end": str(mcx[-1][0]) if mcx else None,
+        },
         "comparison": comparison,
         "next_gate": "Proceed to Brain C only if Brain B passes the untouched chronological holdout gate.",
+        "limitations": [
+            "Experiment 002 intentionally uses MCX-only features; COMEX/LME/FX remain excluded until Brain C.",
+            "Brain A and Brain B are evaluated on the same fetched candles and chronological holdout.",
+        ],
     }
