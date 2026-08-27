@@ -31,6 +31,27 @@ jobs:
           echo "Render health endpoint did not become available" >&2
           exit 1
 
+      - name: Wait for Copper research route deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python - <<'PY'
+import json, sys
+data=json.load(open("openapi.json"))
+sys.exit(0 if "/v1/research/copper/baseline-v1" in (data.get("paths") or {}) else 1)
+PY
+              then
+                echo "Copper research route is deployed."
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Copper research route did not appear in deployed OpenAPI" >&2
+          exit 1
+
       - name: Verify Copper contract resolution
         shell: bash
         run: |
