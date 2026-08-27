@@ -454,3 +454,118 @@ async def run_copper_brain_b_experiment(provider, days=30, sample_every_bars=3, 
             "Brain A and Brain B are evaluated on the same fetched candles and chronological holdout.",
         ],
     }
+
+
+def _bucket(value, cuts, labels):
+    x = _f(value)
+    if x is None:
+        return "UNKNOWN"
+    for cut, label in zip(cuts, labels):
+        if x < cut:
+            return label
+    return labels[-1]
+
+
+def _hour_from_timestamp(value):
+    try:
+        from .commodity_time import parse_ist_timestamp
+        return parse_ist_timestamp(value).hour
+    except Exception:
+        return None
+
+
+def _segment_stats(rows):
+    values = [x["net_pct"] for x in rows]
+    wins = [x for x in values if x > 0]
+    losses = [x for x in values if x < 0]
+    gp, gl = sum(wins), abs(sum(losses))
+    return {
+        "signals": len(rows),
+        "win_rate_pct": round(len(wins) / len(rows) * 100.0, 2) if rows else 0.0,
+        "avg_net_return_pct": round(mean(values), 4) if values else 0.0,
+        "net_return_sum_pct": round(sum(values), 4),
+        "profit_factor": round(gp / gl, 3) if gl > 0 else None,
+    }
+
+
+def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
+    """Descriptive attribution only: no threshold search and no strategy mutation."""
+    key = f"forward_{int(horizon_minutes)}m_pct"
+    observations = []
+    for item in experiences:
+        f = item.get("features") or {}
+        forward = _f((item.get("labels") or {}).get(key))
+        signal = brain_a_signal(f)
+        if signal == "NO_TRADE" or forward is None:
+            continue
+        gross = forward if signal == "BUY" else -forward
+        net = gross - max(0.0, float(round_trip_cost_bps)) / 100.0
+        hour = _hour_from_timestamp(f.get("timestamp"))
+        observations.append({
+            "timestamp": f.get("timestamp"),
+            "signal": signal,
+            "net_pct": net,
+            "structure": f.get("structure") or "UNKNOWN",
+            "session": (
+                "MORNING" if hour is not None and hour < 12 else
+                "MIDDAY" if hour is not None and hour < 16 else
+                "EVENING" if hour is not None else "UNKNOWN"
+            ),
+            "atr_bucket": _bucket(f.get("atr_pct"), [0.10, 0.20, 0.35], ["LOW", "NORMAL", "HIGH", "EXTREME"]),
+            "volume_bucket": _bucket(f.get("relative_volume"), [0.75, 1.0, 1.5], ["QUIET", "NORMAL", "ACTIVE", "SURGE"]),
+            "momentum_bucket": _bucket(abs(_f(f.get("return_15m_pct"), 0.0)), [0.03, 0.08, 0.15], ["WEAK", "NORMAL", "STRONG", "EXTREME"]),
+            "oi_bucket": (
+                "UNKNOWN" if _f(f.get("oi_change_15m_pct")) is None else
+                "RISING" if _f(f.get("oi_change_15m_pct")) > 0 else
+                "FALLING" if _f(f.get("oi_change_15m_pct")) < 0 else "FLAT"
+            ),
+        })
+
+    dimensions = ["signal", "structure", "session", "atr_bucket", "volume_bucket", "momentum_bucket", "oi_bucket"]
+    attribution = {}
+    for dim in dimensions:
+        groups = {}
+        for row in observations:
+            groups.setdefault(row[dim], []).append(row)
+        attribution[dim] = {
+            name: _segment_stats(group)
+            for name, group in sorted(groups.items())
+        }
+    return {
+        "mode": "DESCRIPTIVE_EDGE_ATTRIBUTION",
+        "research_only": True,
+        "threshold_optimization": False,
+        "observations": len(observations),
+        "overall": _segment_stats(observations),
+        "dimensions": attribution,
+        "guardrail": "Segments describe where frozen Brain A historically won/lost; they are not trading rules.",
+    }
+
+
+async def run_copper_edge_attribution(provider, days=14, sample_every_bars=3, round_trip_cost_bps=4.0):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from .commodity_backtest import _fetch_chunked
+    from .commodities import resolve_nearest_mcx_future
+
+    days = max(7, min(int(days), 60))
+    step = max(1, min(int(sample_every_bars), 12))
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=days)
+    contract = await resolve_nearest_mcx_future("COPPER")
+    mcx = await _fetch_chunked(provider, contract, 5, start, end)
+    if len(mcx) < 80:
+        raise RuntimeError(f"Insufficient MCX Copper 5m history ({len(mcx)} candles)")
+    experiences = build_copper_experiences(mcx, sample_every_bars=step)
+    train, holdout = chronological_split(experiences, 0.70)
+    return {
+        "mode": "ALPHAPILOT_COPPER_EDGE_ATTRIBUTION_V1",
+        "research_only": True,
+        "production_rules_changed": False,
+        "contract": contract,
+        "coverage": {"mcx_5m_candles": len(mcx), "experiences": len(experiences)},
+        "development_attribution": attribute_brain_a_edges(train, 60, round_trip_cost_bps),
+        "holdout_attribution": attribute_brain_a_edges(holdout, 60, round_trip_cost_bps),
+        "interpretation_rule": "Use development segments to form hypotheses; use holdout only to check whether directionality persists. Do not tune thresholds on holdout.",
+    }
