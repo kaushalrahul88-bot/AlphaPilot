@@ -1,4 +1,4 @@
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, evaluate_brain_a, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -40,3 +40,20 @@ def test_manifest_keeps_research_out_of_production():
     assert manifest["research_only"] is True
     assert manifest["production_rules_changed"] is False
     assert manifest["promotion_order"][-1] == "live_eligible"
+
+
+def test_asof_context_does_not_require_exact_timestamp():
+    rows = _rows()
+    context = [row for i, row in enumerate(rows) if i % 2 == 0]
+    snap = build_copper_snapshot(rows, 55, comex_candles=context)
+    assert snap["comex_return_15m_pct"] is not None
+
+
+def test_brain_a_is_technical_only_and_evaluable():
+    rows = _rows(120)
+    experiences = build_copper_experiences(rows, sample_every_bars=3)
+    assert brain_a_signal(experiences[0]["features"]) in {"BUY", "SELL", "NO_TRADE"}
+    report = evaluate_brain_a(experiences, horizon_minutes=60, round_trip_cost_bps=4)
+    assert report["brain"] == "A"
+    assert report["research_only"] is True
+    assert report["round_trip_cost_bps"] == 4.0
