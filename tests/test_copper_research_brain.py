@@ -1,4 +1,4 @@
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, evaluate_brain_a, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -57,3 +57,23 @@ def test_brain_a_is_technical_only_and_evaluable():
     assert report["brain"] == "A"
     assert report["research_only"] is True
     assert report["round_trip_cost_bps"] == 4.0
+
+
+def test_brain_b_filters_weak_participation():
+    features = {
+        "structure": "UPTREND", "return_15m_pct": 0.1,
+        "ema20_gap_pct": 0.1, "ema50_gap_pct": 0.2,
+        "relative_volume": 0.5, "atr_pct": 0.2, "oi_change_15m_pct": 0.1,
+    }
+    assert brain_a_signal(features) == "BUY"
+    assert brain_b_signal(features) == "NO_TRADE"
+
+
+def test_brain_b_comparison_uses_chronological_holdout():
+    rows = _rows(180)
+    experiences = build_copper_experiences(rows, sample_every_bars=2)
+    report = compare_brains_a_b(experiences, train_fraction=0.70)
+    assert report["split"]["train_experiences"] > report["split"]["holdout_experiences"]
+    assert report["holdout"]["brain_a"]["brain"] == "A"
+    assert report["holdout"]["brain_b"]["brain"] == "B"
+    assert "brain_b_promoted" in report["gate"]
