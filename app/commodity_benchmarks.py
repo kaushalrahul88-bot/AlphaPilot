@@ -12,6 +12,7 @@ IST = ZoneInfo("Asia/Kolkata")
 BENCHMARK_SPECS = {
     "CRUDEOIL": {"symbol": "WTI", "ticker": "CL=F"},
     "NATURALGAS": {"symbol": "HENRY_HUB", "ticker": "NG=F"},
+    "COPPER": {"symbol": "COMEX_COPPER", "ticker": "HG=F"},
 }
 MOMENTUM_BARS = 6
 MOMENTUM_MIN_PCT = 0.10
@@ -70,7 +71,7 @@ def _parse_chart(payload):
 async def fetch_benchmark_candles(symbol, start, end, client=None):
     normalized = str(symbol).upper().strip()
     if normalized not in BENCHMARK_SPECS:
-        raise ValueError("symbol must be CRUDEOIL or NATURALGAS")
+        raise ValueError("symbol must be COPPER, CRUDEOIL or NATURALGAS")
     start_at = _timestamp(start)
     end_at = _timestamp(end)
     if end_at <= start_at:
@@ -108,7 +109,7 @@ async def fetch_benchmark_candles(symbol, start, end, client=None):
 def benchmark_confirmation(symbol, candles, click_at):
     normalized = str(symbol).upper().strip()
     if normalized not in BENCHMARK_SPECS:
-        raise ValueError("symbol must be CRUDEOIL or NATURALGAS")
+        raise ValueError("symbol must be COPPER, CRUDEOIL or NATURALGAS")
     click = _timestamp(click_at)
     rows = []
     for row in candles or []:

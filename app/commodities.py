@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import httpx
 
 INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
-SUPPORTED_COMMODITIES = {"CRUDEOIL", "NATURALGAS"}
-MCX_TICK_SIZE_RUPEES = {"CRUDEOIL": 1.0, "NATURALGAS": 0.10}
+SUPPORTED_COMMODITIES = {"COPPER", "CRUDEOIL", "NATURALGAS"}
+MCX_TICK_SIZE_RUPEES = {"COPPER": 0.05, "CRUDEOIL": 1.0, "NATURALGAS": 0.10}
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _contract_cache = {}
 

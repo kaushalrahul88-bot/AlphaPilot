@@ -14,6 +14,7 @@ from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
+from .copper_research_brain import run_copper_research_baseline
 from .commodity_candle_collector import PostgresCandleStore, collect_completed_commodity_candles
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
@@ -102,7 +103,8 @@ class MarketBrainV7EvaluateRequest(BaseModel): development:list[dict]; holdout:l
 class FNOHistoryProbeRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; interval:Literal["1minute","5minute","10minute","15minute","30minute","1hour","1day"]="5minute"; lookback_days:int=5
 class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; strike:float; option_type:Literal["CE","PE"]; trade_date:str; entry_time:str="09:30"; min_risk_reward:float=1.5
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
-class CommodityBacktestRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; days:int=30; min_risk_reward:float=1.5; strength_threshold:float=65.0; slippage_bps:float=2.0; cost_bps:float=2.0
+class CommodityBacktestRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; days:int=30; min_risk_reward:float=1.5; strength_threshold:float=65.0; slippage_bps:float=2.0; cost_bps:float=2.0
+class CopperResearchBaselineRequest(BaseModel): days:int=30; sample_every_bars:int=3; round_trip_cost_bps:float=4.0
 class CommodityNextSessionRequest(BaseModel): observation_date:str; target_date:str; include_outcome:bool=False; include_news:bool=True
 class CommodityOptionHistoryProbeRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; underlying_price:float=Field(gt=0); option_type:Literal["CE","PE"]
 class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; center_price:float=Field(gt=0); radius:int=Field(default=5,ge=0,le=8)
