@@ -236,3 +236,72 @@ def evaluate_brain_a(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
             "sell": "DOWNTREND + negative 15m return + price below EMA20 and EMA50",
         },
     }
+
+
+async def run_copper_research_baseline(provider, days=30, sample_every_bars=3, round_trip_cost_bps=4.0):
+    """Run Copper Experiment 001 Brain A on the nearest active MCX contract."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from .commodity_backtest import _fetch_chunked
+    from .commodity_benchmarks import fetch_benchmark_candles
+    from .commodities import resolve_nearest_mcx_future
+
+    days = max(7, min(int(days), 60))
+    step = max(1, min(int(sample_every_bars), 12))
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=days)
+    contract = await resolve_nearest_mcx_future("COPPER")
+    mcx = await _fetch_chunked(provider, contract, 5, start, end)
+    if len(mcx) < 80:
+        raise RuntimeError(f"Insufficient MCX Copper 5m history ({len(mcx)} candles)")
+
+    try:
+        comex_result = await fetch_benchmark_candles("COPPER", start, end)
+        comex = comex_result.get("candles", [])
+        comex_status = comex_result.get("status", "UNAVAILABLE")
+    except Exception as exc:
+        comex = []
+        comex_status = f"UNAVAILABLE: {exc.__class__.__name__}"
+
+    experiences = build_copper_experiences(
+        mcx,
+        comex_candles=comex,
+        sample_every_bars=step,
+    )
+    brain_a = evaluate_brain_a(
+        experiences,
+        horizon_minutes=60,
+        round_trip_cost_bps=round_trip_cost_bps,
+    )
+    return {
+        "mode": "ALPHAPILOT_COPPER_EXPERIMENT_001",
+        "research_only": True,
+        "production_rules_changed": False,
+        "contract": contract,
+        "requested_days": days,
+        "sample_every_bars": step,
+        "coverage": {
+            "mcx_5m_candles": len(mcx),
+            "experiences": len(experiences),
+            "start": str(mcx[0][0]) if mcx else None,
+            "end": str(mcx[-1][0]) if mcx else None,
+            "comex_status": comex_status,
+            "comex_5m_candles": len(comex),
+        },
+        "brain_a": brain_a,
+        "next_gate": {
+            "required": "Brain B must beat frozen Brain A on chronological untouched data after costs.",
+            "brain_a_frozen": True,
+            "brain_b_enabled": False,
+            "brain_c_enabled": False,
+            "brain_d_enabled": False,
+        },
+        "limitations": [
+            "Experiment 001 uses the nearest active MCX Copper contract, not a multi-year continuous futures series.",
+            "Brain A intentionally ignores COMEX, LME, FX, OI and event context.",
+            "COMEX is collected only to verify context availability for later experiments; it does not affect Brain A.",
+            "The first run is a research baseline, not a live trading recommendation.",
+        ],
+    }
