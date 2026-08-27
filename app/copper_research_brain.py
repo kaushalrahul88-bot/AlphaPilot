@@ -79,12 +79,27 @@ def _series_return(rows, end, bars):
 
 
 def _aligned_return(context_rows, timestamp, bars=3):
+    """Return context momentum using the latest context bar available at or before timestamp."""
     if not context_rows:
         return None
+    from .commodity_time import parse_ist_timestamp
+
     clean = clean_ohlcv(context_rows)
-    index = {str(r[0]): i for i, r in enumerate(clean)}
-    i = index.get(str(timestamp))
-    return _series_return(clean, i, bars) if i is not None else None
+    target = parse_ist_timestamp(timestamp)
+    eligible = []
+    for i, row in enumerate(clean):
+        try:
+            stamp = parse_ist_timestamp(row[0])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp <= target:
+            eligible.append(i)
+        else:
+            break
+    if not eligible:
+        return None
+    i = eligible[-1]
+    return _series_return(clean, i, bars)
 
 
 def build_copper_snapshot(mcx_candles, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None):
@@ -164,4 +179,60 @@ def experiment_manifest():
             "Chronological out-of-sample validation is required before promotion.",
             "Complexity must outperform the simpler baseline after realistic costs.",
         ],
+    }
+
+
+def brain_a_signal(features):
+    """Frozen technical-only Copper baseline. No OI/global context is allowed."""
+    structure = str(features.get("structure") or "UNKNOWN")
+    ret15 = _f(features.get("return_15m_pct"), 0.0)
+    ema20_gap = _f(features.get("ema20_gap_pct"), 0.0)
+    ema50_gap = _f(features.get("ema50_gap_pct"), 0.0)
+    if structure == "UPTREND" and ret15 > 0 and ema20_gap > 0 and ema50_gap > 0:
+        return "BUY"
+    if structure == "DOWNTREND" and ret15 < 0 and ema20_gap < 0 and ema50_gap < 0:
+        return "SELL"
+    return "NO_TRADE"
+
+
+def evaluate_brain_a(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
+    """Measure the frozen technical baseline on already-built experiences."""
+    key = f"forward_{int(horizon_minutes)}m_pct"
+    decisions = []
+    for item in experiences:
+        features = item.get("features") or {}
+        labels = item.get("labels") or {}
+        signal = brain_a_signal(features)
+        forward = _f(labels.get(key))
+        price = _f(features.get("price"))
+        if signal == "NO_TRADE" or forward is None or not price:
+            continue
+        signed_return = forward if signal == "BUY" else -forward
+        cost_pct = max(0.0, float(round_trip_cost_bps)) / 100.0
+        net_pct = signed_return - cost_pct
+        decisions.append({"timestamp": features.get("timestamp"), "signal": signal, "gross_pct": signed_return, "net_pct": net_pct})
+
+    wins = [x for x in decisions if x["net_pct"] > 0]
+    losses = [x for x in decisions if x["net_pct"] < 0]
+    net = [x["net_pct"] for x in decisions]
+    gross_profit = sum(x for x in net if x > 0)
+    gross_loss = abs(sum(x for x in net if x < 0))
+    return {
+        "brain": "A",
+        "name": "MCX_TECHNICAL_BASELINE",
+        "research_only": True,
+        "horizon_minutes": int(horizon_minutes),
+        "round_trip_cost_bps": float(round_trip_cost_bps),
+        "signals": len(decisions),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate_pct": round(len(wins) / len(decisions) * 100.0, 2) if decisions else 0.0,
+        "avg_net_return_pct": round(mean(net), 4) if net else 0.0,
+        "net_return_sum_pct": round(sum(net), 4),
+        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss > 0 else None,
+        "decisions": decisions[-200:],
+        "rules_frozen": {
+            "buy": "UPTREND + positive 15m return + price above EMA20 and EMA50",
+            "sell": "DOWNTREND + negative 15m return + price below EMA20 and EMA50",
+        },
     }
