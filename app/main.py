@@ -320,6 +320,11 @@ async def mcx_scan(symbol:str,min_risk_reward:float=1.5):return await commodity_
 async def mcx_news(symbol:str,limit:int=4):return await latest_commodity_news(symbol.upper(),max(1,min(int(limit),6)))
 @app.post("/v1/commodity/backtest")
 async def mcx_backtest(request:CommodityBacktestRequest):return await run_commodity_backtest(get_provider(settings),request.symbol,request.days,request.min_risk_reward,request.strength_threshold,request.slippage_bps,request.cost_bps)
+@app.post("/v1/research/copper/baseline-v1")
+async def copper_research_baseline(request:CopperResearchBaselineRequest):
+    try:return await run_copper_research_baseline(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper research baseline",exc)
 @app.post("/v1/commodity/backtest/continuous")
 async def mcx_continuous_backtest(request:CommodityBacktestRequest):return await run_continuous_commodity_backtest(get_provider(settings),request.symbol,request.days,request.min_risk_reward,request.strength_threshold,request.slippage_bps,request.cost_bps)
 @app.post("/v1/commodity/next-session-prototype-v1")

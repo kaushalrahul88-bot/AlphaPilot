@@ -1,4 +1,4 @@
-name: Copper Deployment Smoke
+name: Copper Deployment Smoke # rerun after route fix
 
 on:
   push:
