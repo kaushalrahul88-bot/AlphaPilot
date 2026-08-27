@@ -1,0 +1,77 @@
+name: Copper Deployment Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-deployment-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  copper-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for deployed backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json; then
+              cat health.json
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Render health endpoint did not become available" >&2
+          exit 1
+
+      - name: Verify Copper contract resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 45             "$API_BASE/v1/commodity/contract/COPPER"             -o copper-contract.json
+          python - <<'PY'
+          import json
+          data=json.load(open("copper-contract.json"))
+          assert data.get("underlying") == "COPPER", data
+          assert data.get("exchange") == "MCX", data
+          print(json.dumps(data, indent=2))
+          PY
+
+      - name: Run Copper Brain A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 240             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/baseline-v1"             -d '{"days":14,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-baseline.json
+          python - <<'PY'
+          import json
+          data=json.load(open("copper-baseline.json"))
+          assert data.get("mode") == "ALPHAPILOT_COPPER_EXPERIMENT_001", data
+          assert data.get("research_only") is True, data
+          brain=data.get("brain_a") or {}
+          required=["signals","wins","losses","win_rate_pct","avg_net_return_pct","net_return_sum_pct","profit_factor"]
+          missing=[key for key in required if key not in brain]
+          assert not missing, f"missing Brain A fields: {missing}"
+          print(json.dumps({
+              "coverage": data.get("coverage"),
+              "brain_a": {key: brain.get(key) for key in required},
+              "next_gate": data.get("next_gate"),
+          }, indent=2))
+          PY
+
+      - name: Upload Copper research result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-experiment-001
+          path: |
+            health.json
+            copper-contract.json
+            copper-baseline.json
+          if-no-files-found: warn
