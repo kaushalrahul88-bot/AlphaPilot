@@ -37,6 +37,12 @@ class CommodityBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["symbol"], "HENRY_HUB")
         self.assertEqual(result["direction"], "BEARISH")
 
+    def test_copper_comex_confirmation(self):
+        click = datetime(2026, 8, 25, 18, 35, tzinfo=IST)
+        result = benchmark_confirmation("COPPER", rows(click), click)
+        self.assertEqual(result["symbol"], "COMEX_COPPER")
+        self.assertEqual(result["direction"], "BULLISH")
+
     def test_future_rows_are_excluded(self):
         click = datetime(2026, 8, 25, 18, 35, tzinfo=IST)
         base = benchmark_confirmation("CRUDEOIL", rows(click), click)
