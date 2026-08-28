@@ -569,3 +569,99 @@ async def run_copper_edge_attribution(provider, days=14, sample_every_bars=3, ro
         "holdout_attribution": attribute_brain_a_edges(holdout, 60, round_trip_cost_bps),
         "interpretation_rule": "Use development segments to form hypotheses; use holdout only to check whether directionality persists. Do not tune thresholds on holdout.",
     }
+
+
+def _split_windows(experiences, windows=4):
+    n = len(experiences)
+    windows = max(2, min(int(windows), max(2, n // 20)))
+    base = n // windows
+    out = []
+    start = 0
+    for i in range(windows):
+        end = n if i == windows - 1 else start + base
+        out.append(experiences[start:end])
+        start = end
+    return out
+
+
+def _dimension_candidate_summary(window_reports, dimension):
+    keys = sorted({k for report in window_reports for k in report["dimensions"].get(dimension, {}).keys()})
+    summary = {}
+    for key in keys:
+        rows = []
+        for idx, report in enumerate(window_reports):
+            stats = report["dimensions"].get(dimension, {}).get(key)
+            if stats:
+                rows.append({
+                    "window": idx + 1,
+                    "signals": stats["signals"],
+                    "avg_net_return_pct": stats["avg_net_return_pct"],
+                    "profit_factor": stats["profit_factor"],
+                })
+        positive_expectancy = sum(1 for r in rows if r["avg_net_return_pct"] > 0)
+        pf_over_one = sum(1 for r in rows if (r["profit_factor"] or 0) > 1)
+        summary[key] = {
+            "windows_present": len(rows),
+            "positive_expectancy_windows": positive_expectancy,
+            "pf_over_one_windows": pf_over_one,
+            "consistent_positive": bool(rows) and positive_expectancy == len(rows) and pf_over_one == len(rows),
+            "window_stats": rows,
+        }
+    return summary
+
+
+def regime_stability_study(experiences, windows=4, horizon_minutes=60, round_trip_cost_bps=4.0):
+    chunks = _split_windows(experiences, windows)
+    reports = [attribute_brain_a_edges(chunk, horizon_minutes, round_trip_cost_bps) for chunk in chunks]
+    dimensions = ["signal", "session", "atr_bucket", "volume_bucket", "momentum_bucket"]
+    stability = {dim: _dimension_candidate_summary(reports, dim) for dim in dimensions}
+    recurring = []
+    for dim, entries in stability.items():
+        for name, stats in entries.items():
+            if stats["consistent_positive"] and stats["windows_present"] >= 3:
+                recurring.append({"dimension": dim, "value": name, **stats})
+    return {
+        "mode": "COPPER_REGIME_STABILITY_STUDY",
+        "research_only": True,
+        "threshold_optimization": False,
+        "windows": len(chunks),
+        "window_sizes": [len(x) for x in chunks],
+        "window_reports": reports,
+        "stability": stability,
+        "recurring_positive_candidates": recurring,
+        "guardrail": "Recurring candidates are hypotheses only; no strategy promotion or threshold tuning occurs here.",
+    }
+
+
+async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, round_trip_cost_bps=4.0, windows=4):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from .commodity_backtest import _fetch_chunked
+    from .commodities import resolve_nearest_mcx_future
+
+    days = max(21, min(int(days), 60))
+    step = max(1, min(int(sample_every_bars), 12))
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=days)
+    contract = await resolve_nearest_mcx_future("COPPER")
+    mcx = await _fetch_chunked(provider, contract, 5, start, end)
+    if len(mcx) < 300:
+        raise RuntimeError(f"Insufficient MCX Copper 5m history for stability study ({len(mcx)} candles)")
+    experiences = build_copper_experiences(mcx, sample_every_bars=step)
+    study = regime_stability_study(experiences, windows, 60, round_trip_cost_bps)
+    return {
+        "mode": "ALPHAPILOT_COPPER_REGIME_STABILITY_V1",
+        "research_only": True,
+        "production_rules_changed": False,
+        "contract": contract,
+        "coverage": {
+            "requested_days": days,
+            "mcx_5m_candles": len(mcx),
+            "experiences": len(experiences),
+            "start": str(mcx[0][0]) if mcx else None,
+            "end": str(mcx[-1][0]) if mcx else None,
+        },
+        "study": study,
+        "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
+    }
