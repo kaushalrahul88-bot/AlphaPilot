@@ -39,6 +39,9 @@ class MemoryStore:
     async def latest_candle_at(self, trading_symbol, timeframe_minutes):
         return self.latest.get((trading_symbol, timeframe_minutes))
 
+    async def read_symbol(self, symbol, timeframe_minutes, start, end):
+        return []
+
     async def status(self):
         return {"enabled": True, "series": []}
 
@@ -89,20 +92,21 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         fifteen = rows(datetime(2026, 8, 26, 9, 30, tzinfo=IST), 3, 15)
         hourly = rows(datetime(2026, 8, 26, 8, 0, tzinfo=IST), 3, 60)
         contracts = [
+            {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "COPPERSEP", "groww_symbol": "MCX-COPPER", "expiry_date": "2026-09-30"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "CRUDESEP", "groww_symbol": "MCX-CRUDE", "expiry_date": "2026-09-21"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "NGSEP", "groww_symbol": "MCX-NG", "expiry_date": "2026-09-24"},
         ]
         store = MemoryStore()
         with (
             patch("app.commodity_candle_collector.resolve_nearest_mcx_future", new=AsyncMock(side_effect=contracts)),
-            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly])),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly, five, fifteen, hourly])),
         ):
             result = await collect_completed_commodity_candles(object(), store, now=now)
         self.assertEqual(store.initialized, 1)
-        self.assertEqual(len(store.batches), 6)
-        self.assertEqual([len(batch) for batch in store.batches], [2, 2, 2, 2, 2, 2])
-        self.assertEqual(result["upserted"], 12)
-        self.assertEqual(len(result["series"]), 6)
+        self.assertEqual(len(store.batches), 9)
+        self.assertEqual([len(batch) for batch in store.batches], [2] * 9)
+        self.assertEqual(result["upserted"], 18)
+        self.assertEqual(len(result["series"]), 9)
         self.assertEqual(result["idempotency_key"], "provider+trading_symbol+timeframe_minutes+candle_at")
         self.assertNotIn(now.isoformat(), {record["candle_at"].isoformat() for batch in store.batches for record in batch})
 
@@ -110,6 +114,7 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 8, 26, 10, 2, tzinfo=IST)
         latest = datetime(2026, 8, 26, 9, 55, tzinfo=IST)
         contracts = [
+            {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "COPPERSEP"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "CRUDESEP"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "NGSEP"},
         ]
