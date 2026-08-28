@@ -1,0 +1,59 @@
+name: Copper Regime Stability Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-regime-stability-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  stability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for stability route
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/copper/regime-stability-v1" in (d.get("paths") or {}) else 1)'; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Stability route did not deploy" >&2
+          exit 1
+
+      - name: Run Copper regime stability
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 300             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/regime-stability-v1"             -d '{"days":45,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-regime-stability.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-regime-stability.json"))
+          assert d.get("mode")=="ALPHAPILOT_COPPER_REGIME_STABILITY_V1", d
+          s=d["study"]
+          print(json.dumps({
+            "coverage": d["coverage"],
+            "windows": s["windows"],
+            "window_sizes": s["window_sizes"],
+            "recurring_positive_candidates": s["recurring_positive_candidates"],
+          }, indent=2))
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-regime-stability-v1
+          path: copper-regime-stability.json
+          if-no-files-found: warn
