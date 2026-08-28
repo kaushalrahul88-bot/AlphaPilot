@@ -24,19 +24,7 @@ jobs:
           for attempt in {1..30}; do
             curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json || true
             curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json || true
-            if python - <<'PY'
-import json, os, sys
-try:
-    health=json.load(open("health.json"))
-    api=json.load(open("openapi.json"))
-except Exception:
-    sys.exit(1)
-paths=api.get("paths") or {}
-ok="/v1/internal/commodity-candles/backfill" in paths and "/v1/research/copper/regime-stability-stored-v1" in paths
-print(json.dumps({"health":health,"routes_ready":ok},indent=2))
-sys.exit(0 if ok else 1)
-PY
-            then
+            if python -c 'import json,sys; health=json.load(open("health.json")); api=json.load(open("openapi.json")); paths=api.get("paths") or {}; ok="/v1/internal/commodity-candles/backfill" in paths and "/v1/research/copper/regime-stability-stored-v1" in paths; print(json.dumps({"health":health,"routes_ready":ok},indent=2)); sys.exit(0 if ok else 1)'; then
               exit 0
             fi
             sleep 10
@@ -46,12 +34,4 @@ PY
       - name: Print collector status flag
         shell: bash
         run: |
-          python - <<'PY'
-import json
-health=json.load(open("health.json"))
-print(json.dumps({
-  "commodity_collector_enabled": health.get("commodity_collector_enabled"),
-  "provider": health.get("provider"),
-  "version": health.get("version"),
-}, indent=2))
-PY
+          python -c 'import json; h=json.load(open("health.json")); print(json.dumps({"commodity_collector_enabled":h.get("commodity_collector_enabled"),"provider":h.get("provider"),"version":h.get("version")},indent=2))'
