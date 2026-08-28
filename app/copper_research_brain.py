@@ -697,3 +697,36 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
         "study": study,
         "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
     }
+
+
+async def run_copper_regime_stability_from_store(store, days=45, sample_every_bars=3, round_trip_cost_bps=4.0, windows=4):
+    """Run Copper stability entirely from durable stored candles; no Groww fetch occurs here."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    days = max(21, min(int(days), 3650))
+    step = max(1, min(int(sample_every_bars), 12))
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=days)
+    await store.initialize()
+    mcx = await store.read_symbol("COPPER", 5, start, end)
+    if len(mcx) < 300:
+        raise RuntimeError(f"Insufficient stored MCX Copper 5m history ({len(mcx)} candles)")
+    experiences = build_copper_experiences(mcx, sample_every_bars=step)
+    study = regime_stability_study(experiences, windows, 60, round_trip_cost_bps)
+    return {
+        "mode": "ALPHAPILOT_COPPER_REGIME_STABILITY_STORED_V1",
+        "research_only": True,
+        "production_rules_changed": False,
+        "data_source": "POSTGRES_COMMODITY_CANDLES",
+        "coverage": {
+            "requested_days": days,
+            "mcx_5m_candles": len(mcx),
+            "experiences": len(experiences),
+            "start": str(mcx[0][0]) if mcx else None,
+            "end": str(mcx[-1][0]) if mcx else None,
+        },
+        "study": study,
+        "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
+    }

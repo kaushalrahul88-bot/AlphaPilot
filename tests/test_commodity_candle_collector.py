@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from app.commodity_candle_collector import (
     PostgresCandleStore,
     _records,
+    backfill_commodity_candles,
     collect_completed_commodity_candles,
 )
 from app.main import _collector_store, settings
@@ -37,6 +38,9 @@ class MemoryStore:
 
     async def latest_candle_at(self, trading_symbol, timeframe_minutes):
         return self.latest.get((trading_symbol, timeframe_minutes))
+
+    async def read_symbol(self, symbol, timeframe_minutes, start, end):
+        return []
 
     async def status(self):
         return {"enabled": True, "series": []}
@@ -88,20 +92,21 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         fifteen = rows(datetime(2026, 8, 26, 9, 30, tzinfo=IST), 3, 15)
         hourly = rows(datetime(2026, 8, 26, 8, 0, tzinfo=IST), 3, 60)
         contracts = [
+            {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "COPPERSEP", "groww_symbol": "MCX-COPPER", "expiry_date": "2026-09-30"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "CRUDESEP", "groww_symbol": "MCX-CRUDE", "expiry_date": "2026-09-21"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "NGSEP", "groww_symbol": "MCX-NG", "expiry_date": "2026-09-24"},
         ]
         store = MemoryStore()
         with (
             patch("app.commodity_candle_collector.resolve_nearest_mcx_future", new=AsyncMock(side_effect=contracts)),
-            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly])),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(side_effect=[five, fifteen, hourly, five, fifteen, hourly, five, fifteen, hourly])),
         ):
             result = await collect_completed_commodity_candles(object(), store, now=now)
         self.assertEqual(store.initialized, 1)
-        self.assertEqual(len(store.batches), 6)
-        self.assertEqual([len(batch) for batch in store.batches], [2, 2, 2, 2, 2, 2])
-        self.assertEqual(result["upserted"], 12)
-        self.assertEqual(len(result["series"]), 6)
+        self.assertEqual(len(store.batches), 9)
+        self.assertEqual([len(batch) for batch in store.batches], [2] * 9)
+        self.assertEqual(result["upserted"], 18)
+        self.assertEqual(len(result["series"]), 9)
         self.assertEqual(result["idempotency_key"], "provider+trading_symbol+timeframe_minutes+candle_at")
         self.assertNotIn(now.isoformat(), {record["candle_at"].isoformat() for batch in store.batches for record in batch})
 
@@ -109,6 +114,7 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 8, 26, 10, 2, tzinfo=IST)
         latest = datetime(2026, 8, 26, 9, 55, tzinfo=IST)
         contracts = [
+            {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "COPPERSEP"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "CRUDESEP"},
             {"exchange": "MCX", "segment": "COMMODITY", "trading_symbol": "NGSEP"},
         ]
@@ -127,3 +133,26 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetch.await_args_list[1].args[3], latest - timedelta(minutes=30))
         self.assertEqual(fetch.await_args_list[2].args[3], latest - timedelta(minutes=120))
         self.assertEqual(result["upserted"], 0)
+
+
+    async def test_copper_backfill_persists_one_bounded_range(self):
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        source = rows(now - timedelta(hours=1), 10, 5)
+        store = MemoryStore()
+        contract = {"exchange":"MCX","segment":"COMMODITY","trading_symbol":"COPPERAUG","groww_symbol":"MCX-COPPER","expiry_date":"2026-08-31"}
+        with (
+            patch("app.commodity_candle_collector.resolve_nearest_mcx_future", new=AsyncMock(return_value=contract)),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(return_value=source)),
+        ):
+            result = await backfill_commodity_candles(
+                object(), store, "COPPER", now - timedelta(hours=1), now, 5,
+            )
+        self.assertEqual(result["status"], "BACKFILLED")
+        self.assertEqual(result["symbol"], "COPPER")
+        self.assertGreater(result["upserted"], 0)
+
+    async def test_backfill_rejects_more_than_two_days(self):
+        store = MemoryStore()
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        with self.assertRaisesRegex(ValueError, "must not exceed 2 days"):
+            await backfill_commodity_candles(object(), store, "COPPER", now - timedelta(days=3), now, 5)

@@ -12,7 +12,7 @@ from .commodities import resolve_nearest_mcx_future
 
 
 IST = ZoneInfo("Asia/Kolkata")
-SYMBOLS = ("CRUDEOIL", "NATURALGAS")
+SYMBOLS = ("COPPER", "CRUDEOIL", "NATURALGAS")
 PROVIDER = "GROWW"
 DEFAULT_LOOKBACK_DAYS = 3
 
@@ -67,6 +67,7 @@ class CandleStore(Protocol):
     async def initialize(self) -> None: ...
     async def latest_candle_at(self, trading_symbol: str, timeframe_minutes: int) -> datetime | None: ...
     async def upsert(self, records: list[dict]) -> int: ...
+    async def read_symbol(self, symbol: str, timeframe_minutes: int, start: datetime, end: datetime) -> list[list]: ...
     async def status(self) -> dict: ...
 
 
@@ -117,6 +118,34 @@ class PostgresCandleStore:
 
     async def upsert(self, records):
         return await asyncio.to_thread(self._upsert_sync, records)
+
+
+    def _read_symbol_sync(self, symbol, timeframe_minutes, start, end):
+        sql = """
+            SELECT candle_at, open, high, low, close, volume, open_interest
+            FROM commodity_candles
+            WHERE provider = %s AND symbol = %s AND timeframe_minutes = %s
+              AND candle_at >= %s AND candle_at <= %s
+            ORDER BY candle_at ASC
+        """
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, (PROVIDER, str(symbol).upper(), int(timeframe_minutes), start, end))
+                rows = cursor.fetchall()
+        return [
+            [
+                candle_at.isoformat(),
+                float(open_price), float(high), float(low), float(close),
+                float(volume or 0),
+                float(open_interest) if open_interest is not None else None,
+            ]
+            for candle_at, open_price, high, low, close, volume, open_interest in rows
+        ]
+
+    async def read_symbol(self, symbol, timeframe_minutes, start, end):
+        return await asyncio.to_thread(
+            self._read_symbol_sync, symbol, timeframe_minutes, start, end,
+        )
 
     def _status_sync(self):
         sql = """
@@ -230,4 +259,45 @@ async def collect_completed_commodity_candles(
         "upserted": total,
         "series": series,
         "idempotency_key": "provider+trading_symbol+timeframe_minutes+candle_at",
+    }
+
+
+async def backfill_commodity_candles(
+    provider,
+    store: CandleStore,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    timeframe_minutes: int = 5,
+):
+    """Persist one bounded historical commodity range. Intended for orchestrated backfill."""
+    symbol = str(symbol).upper().strip()
+    if symbol not in SYMBOLS:
+        raise ValueError(f"symbol must be one of {', '.join(SYMBOLS)}")
+    interval = int(timeframe_minutes)
+    if interval not in {5, 15, 60}:
+        raise ValueError("timeframe_minutes must be 5, 15 or 60")
+    start_at, end_at = _ts(start), _ts(end)
+    if end_at <= start_at:
+        raise ValueError("end must be after start")
+    if end_at - start_at > timedelta(days=2, minutes=5):
+        raise ValueError("backfill range must not exceed 2 days")
+    await store.initialize()
+    contract = await resolve_nearest_mcx_future(symbol)
+    fetched = await _fetch_chunked(provider, contract, interval, start_at, end_at)
+    completed = completed_rows(fetched, end_at + timedelta(minutes=interval), interval)
+    collected_at = datetime.now(IST)
+    records = _records(symbol, contract, interval, completed, collected_at)
+    upserted = await store.upsert(records)
+    return {
+        "status": "BACKFILLED",
+        "research_only": True,
+        "symbol": symbol,
+        "contract": contract.get("trading_symbol"),
+        "timeframe_minutes": interval,
+        "start": start_at.isoformat(),
+        "end": end_at.isoformat(),
+        "fetched": len(fetched),
+        "completed": len(completed),
+        "upserted": upserted,
     }
