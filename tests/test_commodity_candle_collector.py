@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 from app.commodity_candle_collector import (
     PostgresCandleStore,
     _records,
-    backfill_commodity_candles,\n    collect_completed_commodity_candles,
+    backfill_commodity_candles,
+    collect_completed_commodity_candles,
 )
 from app.main import _collector_store, settings
 from fastapi import HTTPException
