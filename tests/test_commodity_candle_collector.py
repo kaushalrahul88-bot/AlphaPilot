@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from app.commodity_candle_collector import (
     PostgresCandleStore,
     _records,
-    collect_completed_commodity_candles,
+    backfill_commodity_candles,\n    collect_completed_commodity_candles,
 )
 from app.main import _collector_store, settings
 from fastapi import HTTPException
@@ -127,3 +127,26 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetch.await_args_list[1].args[3], latest - timedelta(minutes=30))
         self.assertEqual(fetch.await_args_list[2].args[3], latest - timedelta(minutes=120))
         self.assertEqual(result["upserted"], 0)
+
+
+    async def test_copper_backfill_persists_one_bounded_range(self):
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        source = rows(now - timedelta(hours=1), 10, 5)
+        store = MemoryStore()
+        contract = {"exchange":"MCX","segment":"COMMODITY","trading_symbol":"COPPERAUG","groww_symbol":"MCX-COPPER","expiry_date":"2026-08-31"}
+        with (
+            patch("app.commodity_candle_collector.resolve_nearest_mcx_future", new=AsyncMock(return_value=contract)),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(return_value=source)),
+        ):
+            result = await backfill_commodity_candles(
+                object(), store, "COPPER", now - timedelta(hours=1), now, 5,
+            )
+        self.assertEqual(result["status"], "BACKFILLED")
+        self.assertEqual(result["symbol"], "COPPER")
+        self.assertGreater(result["upserted"], 0)
+
+    async def test_backfill_rejects_more_than_two_days(self):
+        store = MemoryStore()
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        with self.assertRaisesRegex(ValueError, "must not exceed 2 days"):
+            await backfill_commodity_candles(object(), store, "COPPER", now - timedelta(days=3), now, 5)
