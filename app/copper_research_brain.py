@@ -653,7 +653,7 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
     mcx = []
     failed_chunks = []
     cursor = start
-    chunk_days = 5
+    chunk_days = 2
     while cursor < end:
         chunk_end = min(end, cursor + timedelta(days=chunk_days))
         try:
@@ -666,6 +666,10 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
                 "error": type(exc).__name__,
             })
         cursor = chunk_end + timedelta(seconds=1)
+    # Do not silently accept a mostly-missing long-history study.
+    successful_chunks = max(0, ((days + chunk_days - 1) // chunk_days) - len(failed_chunks))
+    if successful_chunks < 4:
+        raise RuntimeError(f"Too few successful Copper history chunks ({successful_chunks}; failed_chunks={len(failed_chunks)})")
     dedup = {}
     for row in mcx:
         if isinstance(row, (list, tuple)) and len(row) >= 5:
@@ -686,6 +690,9 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
             "experiences": len(experiences),
             "start": str(mcx[0][0]) if mcx else None,
             "end": str(mcx[-1][0]) if mcx else None,
+            "chunk_days": chunk_days,
+            "failed_chunks": failed_chunks,
+            "partial_coverage": bool(failed_chunks),
         },
         "study": study,
         "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
