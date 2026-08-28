@@ -446,6 +446,8 @@ async def run_copper_brain_b_experiment(provider, days=30, sample_every_bars=3, 
             "experiences": len(experiences),
             "start": str(mcx[0][0]) if mcx else None,
             "end": str(mcx[-1][0]) if mcx else None,
+            "failed_chunks": failed_chunks,
+            "partial_coverage": bool(failed_chunks),
         },
         "comparison": comparison,
         "next_gate": "Proceed to Brain C only if Brain B passes the untouched chronological holdout gate.",
@@ -645,9 +647,32 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
     end = datetime.now(ist)
     start = end - timedelta(days=days)
     contract = await resolve_nearest_mcx_future("COPPER")
-    mcx = await _fetch_chunked(provider, contract, 5, start, end)
+    # Long 5m requests can hit intermittent Groww upstream failures. Build the
+    # study from smaller independent chunks and keep successful history rather
+    # than failing the entire research request on one bad range.
+    mcx = []
+    failed_chunks = []
+    cursor = start
+    chunk_days = 5
+    while cursor < end:
+        chunk_end = min(end, cursor + timedelta(days=chunk_days))
+        try:
+            chunk = await _fetch_chunked(provider, contract, 5, cursor, chunk_end)
+            mcx.extend(chunk)
+        except Exception as exc:
+            failed_chunks.append({
+                "start": cursor.isoformat(),
+                "end": chunk_end.isoformat(),
+                "error": type(exc).__name__,
+            })
+        cursor = chunk_end + timedelta(seconds=1)
+    dedup = {}
+    for row in mcx:
+        if isinstance(row, (list, tuple)) and len(row) >= 5:
+            dedup[str(row[0])] = list(row)
+    mcx = sorted(dedup.values(), key=lambda row: str(row[0]))
     if len(mcx) < 300:
-        raise RuntimeError(f"Insufficient MCX Copper 5m history for stability study ({len(mcx)} candles)")
+        raise RuntimeError(f"Insufficient MCX Copper 5m history for stability study ({len(mcx)} candles; failed_chunks={len(failed_chunks)})")
     experiences = build_copper_experiences(mcx, sample_every_bars=step)
     study = regime_stability_study(experiences, windows, 60, round_trip_cost_bps)
     return {
