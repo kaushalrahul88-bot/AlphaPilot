@@ -1,4 +1,4 @@
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, regime_stability_study, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -89,3 +89,15 @@ def test_edge_attribution_is_descriptive_only():
     assert "session" in report["dimensions"]
     assert "volume_bucket" in report["dimensions"]
     assert "oi_bucket" in report["dimensions"]
+
+
+def test_regime_stability_splits_chronologically():
+    rows = _rows(260)
+    experiences = build_copper_experiences(rows, sample_every_bars=2)
+    study = regime_stability_study(experiences, windows=4)
+    assert study["mode"] == "COPPER_REGIME_STABILITY_STUDY"
+    assert study["threshold_optimization"] is False
+    assert study["windows"] == 4
+    assert sum(study["window_sizes"]) == len(experiences)
+    assert "session" in study["stability"]
+    assert isinstance(study["recurring_positive_candidates"], list)
