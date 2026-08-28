@@ -1,0 +1,37 @@
+name: Persistent Store Check
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/persistent-store-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for persistent routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json || true
+            curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json || true
+            if python -c 'import json,sys; health=json.load(open("health.json")); api=json.load(open("openapi.json")); paths=api.get("paths") or {}; ok="/v1/internal/commodity-candles/backfill" in paths and "/v1/research/copper/regime-stability-stored-v1" in paths; print(json.dumps({"health":health,"routes_ready":ok},indent=2)); sys.exit(0 if ok else 1)'; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Print collector status flag
+        shell: bash
+        run: |
+          python -c 'import json; h=json.load(open("health.json")); print(json.dumps({"commodity_collector_enabled":h.get("commodity_collector_enabled"),"provider":h.get("provider"),"version":h.get("version")},indent=2))'
