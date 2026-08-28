@@ -14,8 +14,8 @@ from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
-from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability
-from .commodity_candle_collector import PostgresCandleStore, collect_completed_commodity_candles
+from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability, run_copper_regime_stability_from_store
+from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, collect_completed_commodity_candles
 from .commodity_continuous_backtest import run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -105,6 +105,7 @@ class FNOPremiumReplayRequest(BaseModel): symbol:str="RELIANCE"; expiry:str; str
 class FNOTrueBacktestRequest(BaseModel): symbols:list[str]=Field(default_factory=lambda:["RELIANCE"]); start_date:str; end_date:str; expiry:str|None=None; min_risk_reward:float=1.5; entry_before:str|None=None; max_trades:int=20
 class CommodityBacktestRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; days:int=30; min_risk_reward:float=1.5; strength_threshold:float=65.0; slippage_bps:float=2.0; cost_bps:float=2.0
 class CopperResearchBaselineRequest(BaseModel): days:int=30; sample_every_bars:int=3; round_trip_cost_bps:float=4.0
+class CommodityCandleBackfillRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; start_at:str; end_at:str; timeframe_minutes:Literal[5,15,60]=5
 class CommodityNextSessionRequest(BaseModel): observation_date:str; target_date:str; include_outcome:bool=False; include_news:bool=True
 class CommodityOptionHistoryProbeRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; underlying_price:float=Field(gt=0); option_type:Literal["CE","PE"]
 class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; center_price:float=Field(gt=0); radius:int=Field(default=5,ge=0,le=8)
@@ -120,6 +121,14 @@ def _collector_store(x_collector_token:str|None):
     if not hmac.compare_digest(supplied,expected):
         raise HTTPException(status_code=401,detail="Invalid collector token")
     return PostgresCandleStore(settings.database_url)
+@app.post("/v1/internal/commodity-candles/backfill")
+async def commodity_candles_backfill(request:CommodityCandleBackfillRequest,x_collector_token:str|None=Header(default=None)):
+    store=_collector_store(x_collector_token)
+    try:
+        from datetime import datetime
+        return await backfill_commodity_candles(get_provider(settings),store,request.symbol,datetime.fromisoformat(request.start_at),datetime.fromisoformat(request.end_at),request.timeframe_minutes)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("commodity candle backfill",exc)
 @app.post("/v1/internal/commodity-candles/collect")
 async def commodity_candles_collect(x_collector_token:str|None=Header(default=None)):
     store=_collector_store(x_collector_token)
@@ -335,6 +344,13 @@ async def copper_edge_attribution_v1(request:CopperResearchBaselineRequest):
     try:return await run_copper_edge_attribution(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("Copper edge attribution",exc)
+@app.post("/v1/research/copper/regime-stability-stored-v1")
+async def copper_regime_stability_stored_v1(request:CopperResearchBaselineRequest):
+    if not settings.database_url.strip():
+        raise HTTPException(status_code=503,detail={"code":"RESEARCH_STORE_DISABLED","message":"Configure DATABASE_URL to enable stored Copper research"})
+    try:return await run_copper_regime_stability_from_store(PostgresCandleStore(settings.database_url),request.days,request.sample_every_bars,request.round_trip_cost_bps,4)
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("stored Copper regime stability",exc)
 @app.post("/v1/research/copper/regime-stability-v1")
 async def copper_regime_stability_v1(request:CopperResearchBaselineRequest):
     try:return await run_copper_regime_stability(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps,4)
