@@ -1,4 +1,4 @@
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -77,3 +77,15 @@ def test_brain_b_comparison_uses_chronological_holdout():
     assert report["holdout"]["brain_a"]["brain"] == "A"
     assert report["holdout"]["brain_b"]["brain"] == "B"
     assert "brain_b_promoted" in report["gate"]
+
+
+def test_edge_attribution_is_descriptive_only():
+    rows = _rows(180)
+    experiences = build_copper_experiences(rows, sample_every_bars=2)
+    report = attribute_brain_a_edges(experiences)
+    assert report["mode"] == "DESCRIPTIVE_EDGE_ATTRIBUTION"
+    assert report["threshold_optimization"] is False
+    assert report["observations"] > 0
+    assert "session" in report["dimensions"]
+    assert "volume_bucket" in report["dimensions"]
+    assert "oi_bucket" in report["dimensions"]
