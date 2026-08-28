@@ -1,0 +1,64 @@
+name: Copper Edge Attribution Smoke
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-edge-attribution-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for attribution route
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/copper/edge-attribution-v1" in (d.get("paths") or {}) else 1)'; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Attribution route did not deploy" >&2
+          exit 1
+
+      - name: Run Copper attribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 240             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/edge-attribution-v1"             -d '{"days":14,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-edge-attribution.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-edge-attribution.json"))
+          assert d.get("mode")=="ALPHAPILOT_COPPER_EDGE_ATTRIBUTION_V1", d
+          for section in ("development_attribution","holdout_attribution"):
+              x=d[section]
+              print(section)
+              print(json.dumps({
+                  "overall": x["overall"],
+                  "signal": x["dimensions"]["signal"],
+                  "session": x["dimensions"]["session"],
+                  "atr_bucket": x["dimensions"]["atr_bucket"],
+                  "volume_bucket": x["dimensions"]["volume_bucket"],
+                  "momentum_bucket": x["dimensions"]["momentum_bucket"],
+                  "oi_bucket": x["dimensions"]["oi_bucket"],
+              }, indent=2))
+          PY
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-edge-attribution-v1
+          path: copper-edge-attribution.json
+          if-no-files-found: warn
