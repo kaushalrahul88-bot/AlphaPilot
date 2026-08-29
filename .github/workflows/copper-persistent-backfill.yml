@@ -1,0 +1,131 @@
+name: Copper Persistent Backfill
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-persistent-backfill.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Verify collector enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json
+          python - <<'PY'
+          import json,sys
+          h=json.load(open("health.json"))
+          print(json.dumps(h,indent=2))
+          sys.exit(0 if h.get("commodity_collector_enabled") is True else 1)
+          PY
+
+      - name: Backfill Copper 45 days
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, subprocess
+          from datetime import datetime, timedelta, timezone
+
+          end = datetime.now(timezone.utc)
+          start = end - timedelta(days=45)
+          cursor = start
+          results = []
+          failures = []
+
+          while cursor < end:
+              chunk_end = min(end, cursor + timedelta(days=2))
+              payload = {
+                  "symbol": "COPPER",
+                  "start_at": cursor.isoformat(),
+                  "end_at": chunk_end.isoformat(),
+                  "timeframe_minutes": 5,
+              }
+              cmd = [
+                  "curl","--silent","--show-error","--max-time","90",
+                  "-H","Content-Type: application/json",
+                  "-H",f"X-Collector-Token:{__import__('os').environ['COLLECTOR_TOKEN']}",
+                  "-X","POST",
+                  f"{__import__('os').environ['API_BASE']}/v1/internal/commodity-candles/backfill",
+                  "-d",json.dumps(payload),
+              ]
+              p = subprocess.run(cmd, capture_output=True, text=True)
+              if p.returncode != 0:
+                  failures.append({"start":cursor.isoformat(),"end":chunk_end.isoformat(),"curl_rc":p.returncode,"stderr":p.stderr[-300:]})
+              else:
+                  try:
+                      body=json.loads(p.stdout)
+                      if body.get("status")=="BACKFILLED":
+                          results.append(body)
+                      else:
+                          failures.append({"start":cursor.isoformat(),"end":chunk_end.isoformat(),"body":body})
+                  except Exception:
+                      failures.append({"start":cursor.isoformat(),"end":chunk_end.isoformat(),"raw":p.stdout[-500:]})
+              cursor = chunk_end
+
+          summary = {
+              "chunks_successful": len(results),
+              "chunks_failed": len(failures),
+              "upserted_total": sum(int(x.get("upserted",0)) for x in results),
+              "fetched_total": sum(int(x.get("fetched",0)) for x in results),
+              "failures": failures,
+          }
+          open("copper-backfill-summary.json","w").write(json.dumps(summary,indent=2))
+          print(json.dumps(summary,indent=2))
+          if len(results) < 4:
+              raise SystemExit("Too few successful backfill chunks")
+          PY
+
+      - name: Check stored coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 60             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-candles/status"             -o commodity-store-status.json
+          python - <<'PY'
+          import json
+          d=json.load(open("commodity-store-status.json"))
+          copper=[x for x in d.get("series",[]) if x.get("symbol")=="COPPER" and x.get("timeframe_minutes")==5]
+          print(json.dumps({"copper_5m":copper},indent=2))
+          if not copper or int(copper[0].get("candles",0)) < 300:
+              raise SystemExit("Insufficient stored Copper 5m coverage")
+          PY
+
+      - name: Run stored Copper stability
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 120             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/regime-stability-stored-v1"             -d '{"days":45,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-stored-stability.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-stored-stability.json"))
+          assert d.get("mode")=="ALPHAPILOT_COPPER_REGIME_STABILITY_STORED_V1", d
+          print(json.dumps({
+              "coverage": d["coverage"],
+              "windows": d["study"]["windows"],
+              "window_sizes": d["study"]["window_sizes"],
+              "recurring_positive_candidates": d["study"]["recurring_positive_candidates"],
+          },indent=2))
+          PY
+
+      - name: Upload research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-persistent-history-v1
+          path: |
+            copper-backfill-summary.json
+            commodity-store-status.json
+            copper-stored-stability.json
+          if-no-files-found: warn
