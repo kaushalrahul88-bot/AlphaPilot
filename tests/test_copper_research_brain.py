@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, regime_stability_study, run_copper_regime_stability_from_store, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, interaction_stability_study, regime_stability_study, run_copper_regime_stability_from_store, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -211,3 +211,48 @@ def test_precomputed_information_quality_matches_public_snapshot():
             assert abs(public[key] - built[key]) < 1e-12
         else:
             assert public.get(key) == built.get(key)
+
+
+def _interaction_experience(i, positive=True):
+    features = {
+        "timestamp": f"2026-08-{1 + i // 20:02d}T10:{(i % 12) * 5:02d}:00+05:30",
+        "price": 900.0,
+        "structure": "UPTREND",
+        "return_15m_pct": 0.10,
+        "ema20_gap_pct": 0.10,
+        "ema50_gap_pct": 0.20,
+        "atr_pct": 0.20,
+        "relative_volume": 1.10,
+        "time_adjusted_relative_volume": 1.10,
+        "session_range_position": 0.90,
+        "session_vwap_gap_pct": 0.20,
+        "opening_range_break": "ABOVE",
+        "price_oi_state": "UNKNOWN",
+        "oi_change_15m_pct": None,
+    }
+    forward = 0.20 if positive else -0.20
+    return {"features": features, "labels": {"forward_60m_pct": forward}}
+
+
+def test_interaction_stability_is_preregistered_and_descriptive_only():
+    experiences = [_interaction_experience(i, positive=True) for i in range(80)]
+    study = interaction_stability_study(
+        experiences, windows=4, horizon_minutes=60,
+        round_trip_cost_bps=4.0, minimum_signals_per_window=15,
+    )
+    assert study["mode"] == "COPPER_INFORMATION_INTERACTION_STABILITY_V1"
+    assert study["research_only"] is True
+    assert study["threshold_optimization"] is False
+    assert study["exhaustive_search"] is False
+    assert len(study["interaction_pairs"]) == 6
+    assert study["recurring_positive_interactions"]
+
+
+def test_interaction_stability_detects_consistent_negative_context():
+    experiences = [_interaction_experience(i, positive=False) for i in range(80)]
+    study = interaction_stability_study(
+        experiences, windows=4, horizon_minutes=60,
+        round_trip_cost_bps=4.0, minimum_signals_per_window=15,
+    )
+    assert study["recurring_negative_interactions"]
+    assert not study["recurring_positive_interactions"]
