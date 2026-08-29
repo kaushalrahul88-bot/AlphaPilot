@@ -207,6 +207,113 @@ def _oi_state(rows, index):
     return {"oi_change_15m_pct": change, "price_oi_state": state}
 
 
+def _precompute_information_quality(rows, lookback_sessions=5):
+    """Precompute session/location/participation context once for a clean 5m series."""
+    from bisect import bisect_right
+    from datetime import time
+    from .commodity_time import parse_ist_timestamp
+
+    parsed = []
+    for row in rows:
+        try:
+            parsed.append(parse_ist_timestamp(row[0]))
+        except Exception:
+            parsed.append(None)
+
+    sessions = {}
+    for i, stamp in enumerate(parsed):
+        if stamp is None:
+            continue
+        sessions.setdefault(stamp.date(), []).append(i)
+
+    session_dates = sorted(sessions)
+    cumulative_by_date = {}
+    time_keys_by_date = {}
+    for day in session_dates:
+        indices = sessions[day]
+        cumulative = []
+        time_keys = []
+        total = 0.0
+        for i in indices:
+            total += rows[i][5] if rows[i][5] > 0 else 0.0
+            cumulative.append(total)
+            stamp = parsed[i]
+            time_keys.append(stamp.hour * 60 + stamp.minute if stamp else -1)
+        cumulative_by_date[day] = cumulative
+        time_keys_by_date[day] = time_keys
+
+    day_position = {day: pos for pos, day in enumerate(session_dates)}
+    out = [{} for _ in rows]
+
+    for day in session_dates:
+        indices = sessions[day]
+        running_high = None
+        running_low = None
+        opening_price = None
+        pv = 0.0
+        volume = 0.0
+        opening_high = None
+        opening_low = None
+        pos = day_position[day]
+        prior_days = session_dates[max(0, pos - lookback_sessions):pos]
+
+        for local_idx, i in enumerate(indices):
+            row = rows[i]
+            stamp = parsed[i]
+            close = row[4]
+            if opening_price is None:
+                opening_price = row[1]
+            running_high = row[2] if running_high is None else max(running_high, row[2])
+            running_low = row[3] if running_low is None else min(running_low, row[3])
+            if time(9, 0) <= stamp.time() < time(10, 0):
+                opening_high = row[2] if opening_high is None else max(opening_high, row[2])
+                opening_low = row[3] if opening_low is None else min(opening_low, row[3])
+
+            if row[5] > 0:
+                typical = (row[2] + row[3] + row[4]) / 3.0
+                pv += typical * row[5]
+                volume += row[5]
+            vwap = pv / volume if volume > 0 else None
+
+            session_span = (running_high - running_low) if running_high is not None and running_low is not None else 0.0
+            minute_key = stamp.hour * 60 + stamp.minute
+            prior_cumulative = []
+            for prior_day in prior_days:
+                keys = time_keys_by_date[prior_day]
+                j = bisect_right(keys, minute_key) - 1
+                if j >= 0:
+                    value = cumulative_by_date[prior_day][j]
+                    if value > 0:
+                        prior_cumulative.append(value)
+            baseline = mean(prior_cumulative) if prior_cumulative else 0.0
+            current_cumulative = cumulative_by_date[day][local_idx]
+            tarvol = current_cumulative / baseline if baseline > 0 else None
+
+            if stamp.time() < time(10, 0):
+                or_position = None
+                or_break = "FORMING"
+            elif opening_high is None or opening_low is None:
+                or_position = None
+                or_break = "UNAVAILABLE"
+            else:
+                or_span = opening_high - opening_low
+                or_position = (close - opening_low) / or_span if or_span > 0 else 0.5
+                or_break = "ABOVE" if close > opening_high else "BELOW" if close < opening_low else "INSIDE"
+
+            out[i] = {
+                "session_return_pct": (close / opening_price - 1.0) * 100.0 if opening_price and opening_price > 0 else None,
+                "session_range_position": (close - running_low) / session_span if session_span > 0 else 0.5,
+                "distance_from_session_high_pct": (close / running_high - 1.0) * 100.0 if running_high and running_high > 0 else None,
+                "distance_from_session_low_pct": (close / running_low - 1.0) * 100.0 if running_low and running_low > 0 else None,
+                "session_range_pct": session_span / close * 100.0 if close > 0 else None,
+                "session_vwap_gap_pct": (close / vwap - 1.0) * 100.0 if vwap and vwap > 0 else None,
+                "opening_range_position": or_position,
+                "opening_range_break": or_break,
+                "time_adjusted_relative_volume": tarvol,
+            }
+    return out
+
+
 def _aligned_return(context_rows, timestamp, bars=3):
     """Return context momentum using the latest context bar available at or before timestamp."""
     if not context_rows:
@@ -231,15 +338,34 @@ def _aligned_return(context_rows, timestamp, bars=3):
     return _series_return(clean, i, bars)
 
 
-def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None):
+def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None, information_quality=None):
     if index < 50 or index >= len(rows):
         raise ValueError("Copper snapshot requires at least 50 completed MCX 5m bars")
     close = rows[index][4]
     closes = [r[4] for r in rows[:index + 1]]
     ema20, ema50 = _ema(closes, 20), _ema(closes, 50)
     atr = _atr(rows, index)
-    location = _session_location(rows, index)
-    opening_range = _opening_range_context(rows, index)
+    if information_quality is not None and index < len(information_quality):
+        enriched = dict(information_quality[index] or {})
+        location = {
+            key: enriched.get(key)
+            for key in (
+                "session_return_pct", "session_range_position",
+                "distance_from_session_high_pct", "distance_from_session_low_pct",
+                "session_range_pct",
+            )
+        }
+        opening_range = {
+            "opening_range_position": enriched.get("opening_range_position"),
+            "opening_range_break": enriched.get("opening_range_break"),
+        }
+        session_vwap_gap_pct = enriched.get("session_vwap_gap_pct")
+        time_adjusted_relative_volume = enriched.get("time_adjusted_relative_volume")
+    else:
+        location = _session_location(rows, index)
+        opening_range = _opening_range_context(rows, index)
+        session_vwap_gap_pct = _session_vwap_gap(rows, index)
+        time_adjusted_relative_volume = _time_adjusted_relative_volume(rows, index)
     oi = _oi_state(rows, index)
     return {
         "timestamp": str(rows[index][0]),
@@ -251,8 +377,8 @@ def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles
         "ema50_gap_pct": (close / ema50 - 1.0) * 100.0 if ema50 else None,
         "atr_pct": atr / close * 100.0 if atr and close else None,
         "relative_volume": _relative_volume(rows, index),
-        "time_adjusted_relative_volume": _time_adjusted_relative_volume(rows, index),
-        "session_vwap_gap_pct": _session_vwap_gap(rows, index),
+        "time_adjusted_relative_volume": time_adjusted_relative_volume,
+        "session_vwap_gap_pct": session_vwap_gap_pct,
         **location,
         **opening_range,
         **oi,
@@ -295,11 +421,13 @@ def label_forward_path(mcx_candles, index):
 def build_copper_experiences(mcx_candles, *, lme_candles=None, comex_candles=None, usdinr_candles=None, sample_every_bars=1):
     rows = clean_ohlcv(mcx_candles)
     step = max(1, int(sample_every_bars))
+    information_quality = _precompute_information_quality(rows)
     experiences = []
     for i in range(50, max(50, len(rows) - max(HORIZONS)), step):
         snapshot = _build_copper_snapshot_clean(
             rows, i,
             lme_candles=lme_candles, comex_candles=comex_candles, usdinr_candles=usdinr_candles,
+            information_quality=information_quality,
         )
         experiences.append({"features": snapshot, "labels": _label_forward_path_clean(rows, i)})
     return experiences
