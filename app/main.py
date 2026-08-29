@@ -30,7 +30,7 @@ from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
 from .commodity_option_history import probe_mcx_option_history, scan_mcx_option_history_band
 from .commodity_option_candle_collector import PostgresOptionCandleStore, collect_copper_option_candles
-from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots
+from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots, probe_copper_option_live_quote
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .edge_discovery import run_edge_discovery
@@ -231,6 +231,15 @@ async def commodity_option_snapshots_status(
         await store.initialize()
         return await store.status(symbol.upper())
     except Exception as exc:_safe_upstream_error("commodity option snapshot storage status",exc)
+
+@app.get("/v1/internal/commodity-options/live-quote-probe")
+async def commodity_option_live_quote_probe(
+    x_collector_token:str|None=Header(default=None),
+):
+    candle_store=_collector_store(x_collector_token)
+    try:
+        return await probe_copper_option_live_quote(get_provider(settings),candle_store)
+    except Exception as exc:_safe_upstream_error("Copper option live quote probe",exc)
 
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
