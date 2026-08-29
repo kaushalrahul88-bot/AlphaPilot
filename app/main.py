@@ -16,7 +16,7 @@ from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
 from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability, run_copper_regime_stability_from_store
 from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, backfill_continuous_commodity_candles, collect_completed_commodity_candles
-from .commodity_continuous_backtest import run_continuous_commodity_backtest
+from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
@@ -121,6 +121,23 @@ def _collector_store(x_collector_token:str|None):
     if not hmac.compare_digest(supplied,expected):
         raise HTTPException(status_code=401,detail="Invalid collector token")
     return PostgresCandleStore(settings.database_url)
+@app.get("/v1/internal/commodity-contracts/historical-capability")
+async def commodity_contracts_historical_capability(symbol:str="COPPER",days:int=180,x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token)
+    try:
+        from datetime import datetime,timedelta
+        from zoneinfo import ZoneInfo
+        end=datetime.now(ZoneInfo("Asia/Kolkata"))
+        start=end-timedelta(days=max(30,min(int(days),365)))
+        result=await discover_groww_historical_mcx_contracts(get_provider(settings),symbol,start,end)
+        return {
+            "symbol":symbol.upper(),
+            "requested_days":max(30,min(int(days),365)),
+            **result,
+        }
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("historical MCX contract discovery",exc)
+
 @app.post("/v1/internal/commodity-candles/backfill-continuous")
 async def commodity_candles_backfill_continuous(request:CommodityCandleBackfillRequest,x_collector_token:str|None=Header(default=None)):
     store=_collector_store(x_collector_token)
