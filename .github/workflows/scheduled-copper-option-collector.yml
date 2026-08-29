@@ -3,7 +3,8 @@ name: Scheduled Copper Option Snapshot Collector
 on:
   workflow_dispatch:
   schedule:
-    - cron: "5-55/5 4-17 * * 1-5"
+    - cron: "35-55/5 3 * * 1-5"
+    - cron: "*/5 4-17 * * 1-5"
   push:
     branches: [main]
     paths:
@@ -60,6 +61,8 @@ jobs:
 
           assert result.get("status") in {"COLLECTED","PARTIAL"}, result
           assert result.get("data_type")=="LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC", result
+          assert result.get("underlying_price_source")=="LIVE_MCX_FUTURE_QUOTE", result
+          assert float(result.get("underlying_price") or 0) > 0, result
           assert (result.get("quality") or {}).get("pass") is True, result
           assert int(result.get("ce_snapshots") or 0) >= 3, result
           assert int(result.get("pe_snapshots") or 0) >= 3, result
@@ -67,6 +70,8 @@ jobs:
               "status":result.get("status"),
               "sample_bucket_at":result.get("sample_bucket_at"),
               "underlying_price":result.get("underlying_price"),
+              "underlying_price_source":result.get("underlying_price_source"),
+              "underlying_candle_close":result.get("underlying_candle_close"),
               "ce_snapshots":result.get("ce_snapshots"),
               "pe_snapshots":result.get("pe_snapshots"),
               "upserted":result.get("upserted"),
