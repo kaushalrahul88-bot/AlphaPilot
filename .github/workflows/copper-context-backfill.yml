@@ -29,7 +29,7 @@ jobs:
           cot=fetch_cftc_copper_positioning("2026-05-01","2026-08-29")
           cftc_upserted=s.upsert(cot)
           print({"cftc_upserted":cftc_upserted,"status_after_cftc":s.status("COPPER")})
-          fx=[x for x in fetch_fred_usdinr_daily() if "2026-05-01" <= x.observed_at[:10] <= "2026-08-29"]
+          fx=fetch_fred_usdinr_daily("2026-05-01","2026-08-29")
           usdinr_upserted=s.upsert(fx)
           print({"usdinr_upserted":usdinr_upserted,"status":s.status("COPPER")})
           PY
