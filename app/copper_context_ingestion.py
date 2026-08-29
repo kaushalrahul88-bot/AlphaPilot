@@ -61,8 +61,14 @@ def fetch_cftc_copper_positioning(start_date:str,end_date:str)->list[HistoricalC
     return out
 
 
-def fetch_fred_usdinr_daily()->list[HistoricalContext]:
-    rows=csv.DictReader(io.StringIO(_get(FRED_DEXINUS_CSV).decode()))
+def fetch_fred_usdinr_daily(start_date:str|None=None,end_date:str|None=None)->list[HistoricalContext]:
+    url=FRED_DEXINUS_CSV
+    if start_date or end_date:
+        params={"id":"DEXINUS"}
+        if start_date: params["cosd"]=start_date
+        if end_date: params["coed"]=end_date
+        url="https://fred.stlouisfed.org/graph/fredgraph.csv?"+urlencode(params)
+    rows=csv.DictReader(io.StringIO(_get(url).decode()))
     out=[]
     for row in rows:
         date=row.get("observation_date") or row.get("DATE")
@@ -77,7 +83,7 @@ def fetch_fred_usdinr_daily()->list[HistoricalContext]:
         out.append(HistoricalContext(
             context_id=f"DEXINUS_{date}",commodity="COPPER",kind="FX",
             observed_at=observed.isoformat(),available_at=available.isoformat(),
-            source_name="Federal Reserve H.10 via FRED",source_url=FRED_DEXINUS_CSV,
+            source_name="Federal Reserve H.10 via FRED",source_url=url,
             source_tier="A_PRIMARY",values={"usdinr":value},frequency="daily",
             notes="Daily reference context only; never substitute for intraday USD/INR.",
         ))
