@@ -7,6 +7,7 @@ from app.commodity_candle_collector import (
     PostgresCandleStore,
     _records,
     backfill_commodity_candles,
+    backfill_continuous_commodity_candles,
     collect_completed_commodity_candles,
 )
 from app.main import _collector_store, settings
@@ -156,3 +157,29 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
         with self.assertRaisesRegex(ValueError, "must not exceed 2 days"):
             await backfill_commodity_candles(object(), store, "COPPER", now - timedelta(days=3), now, 5)
+
+
+    async def test_continuous_backfill_uses_historical_contract(self):
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        source = rows(now - timedelta(hours=1), 10, 5)
+        store = MemoryStore()
+        contract = {"exchange":"MCX","segment":"COMMODITY","trading_symbol":"COPPERAUG","groww_symbol":"MCX-COPPER-AUG","expiry_date":"2026-08-31"}
+        with (
+            patch("app.commodity_candle_collector.resolve_historical_mcx_contract", new=AsyncMock(return_value=contract)),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(return_value=source)),
+        ):
+            result = await backfill_continuous_commodity_candles(
+                object(), store, "COPPER", now - timedelta(hours=1), now, 5,
+            )
+        self.assertEqual(result["status"], "BACKFILLED_CONTINUOUS")
+        self.assertEqual(result["contract"], "COPPERAUG")
+        self.assertEqual(result["rollover_method"], "EXPIRY_BOUNDARY_FRONT_MONTH")
+        self.assertGreater(result["upserted"], 0)
+
+    async def test_continuous_backfill_rejects_more_than_one_day(self):
+        store = MemoryStore()
+        now = datetime(2026, 8, 26, 10, 0, tzinfo=IST)
+        with self.assertRaisesRegex(ValueError, "must not exceed 1 day"):
+            await backfill_continuous_commodity_candles(
+                object(), store, "COPPER", now - timedelta(days=2), now, 5,
+            )
