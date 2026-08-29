@@ -1,0 +1,78 @@
+name: Probe Expired MCX Candles
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/probe-expired-mcx-candles.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Probe one-year contract archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 120             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-contracts/historical-capability?symbol=COPPER&days=365"             -o archive-365.json
+          python - <<'PY'
+          import json
+          d=json.load(open("archive-365.json"))
+          print(json.dumps({
+            "supported": d.get("supported"),
+            "expiries_returned": d.get("expiries_returned"),
+            "contracts": [
+              {"trading_symbol":x.get("trading_symbol"),"expiry_date":x.get("expiry_date"),"groww_symbol":x.get("groww_symbol")}
+              for x in d.get("contracts",[])
+            ],
+            "diagnostics": d.get("diagnostics"),
+          },indent=2))
+          PY
+
+      - name: Probe expired-contract intraday candles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          dates=["2026-02-16","2026-03-16","2026-04-15","2026-05-15","2026-06-15","2026-07-15"]
+          out=[]
+          for day in dates:
+              payload={
+                "symbol":"COPPER",
+                "start_at":f"{day}T09:00:00+05:30",
+                "end_at":f"{day}T23:30:00+05:30",
+                "timeframe_minutes":5,
+              }
+              p=subprocess.run([
+                "curl","--silent","--show-error","--max-time","90",
+                "-w","\n%{http_code}",
+                "-H","Content-Type: application/json",
+                "-H",f"X-Collector-Token:{os.environ['COLLECTOR_TOKEN']}",
+                "-X","POST",
+                f"{os.environ['API_BASE']}/v1/internal/commodity-candles/backfill-continuous",
+                "-d",json.dumps(payload),
+              ],capture_output=True,text=True)
+              body,status=(p.stdout.rsplit("\n",1)+[""])[:2] if "\n" in p.stdout else (p.stdout,"")
+              try: parsed=json.loads(body)
+              except Exception: parsed={"raw":body[-500:]}
+              out.append({"date":day,"http_status":status,"response":parsed})
+          open("expired-candle-probe.json","w").write(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload probe artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: expired-mcx-candle-probe
+          path: |
+            archive-365.json
+            expired-candle-probe.json
