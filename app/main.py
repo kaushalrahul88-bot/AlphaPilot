@@ -115,8 +115,8 @@ class CommodityBacktestRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","N
 class CopperResearchBaselineRequest(BaseModel): days:int=30; sample_every_bars:int=3; round_trip_cost_bps:float=4.0
 class CommodityCandleBackfillRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; start_at:str; end_at:str; timeframe_minutes:Literal[5,15,60]=5
 class CommodityNextSessionRequest(BaseModel): observation_date:str; target_date:str; include_outcome:bool=False; include_news:bool=True
-class CommodityOptionHistoryProbeRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; underlying_price:float=Field(gt=0); option_type:Literal["CE","PE"]
-class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["CRUDEOIL","NATURALGAS"]; trade_date:str; center_price:float=Field(gt=0); radius:int=Field(default=5,ge=0,le=8)
+class CommodityOptionHistoryProbeRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; trade_date:str; underlying_price:float=Field(gt=0); option_type:Literal["CE","PE"]
+class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["COPPER","CRUDEOIL","NATURALGAS"]; trade_date:str; center_price:float=Field(gt=0); radius:int=Field(default=5,ge=0,le=8)
 
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
