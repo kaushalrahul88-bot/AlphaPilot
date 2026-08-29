@@ -1,0 +1,79 @@
+name: Verify Copper Usable Window
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/verify-copper-usable-window.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for historical fail-closed deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..30}; do
+            curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json || true
+            if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-candles/backfill-continuous" in (d.get("paths") or {}) else 1)' 2>/dev/null; then
+              sleep 30
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Probe representative Copper dates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          dates=[
+            "2026-05-29","2026-06-05","2026-06-15","2026-06-30",
+            "2026-07-01","2026-07-15","2026-07-31",
+            "2026-08-03","2026-08-10","2026-08-20","2026-08-28"
+          ]
+          out=[]
+          for day in dates:
+              payload={
+                "symbol":"COPPER",
+                "start_at":f"{day}T09:00:00+05:30",
+                "end_at":f"{day}T23:30:00+05:30",
+                "timeframe_minutes":5,
+              }
+              p=subprocess.run([
+                "curl","--silent","--show-error","--max-time","90",
+                "-w","\n%{http_code}",
+                "-H","Content-Type: application/json",
+                "-H",f"X-Collector-Token:{os.environ['COLLECTOR_TOKEN']}",
+                "-X","POST",
+                f"{os.environ['API_BASE']}/v1/internal/commodity-candles/backfill-continuous",
+                "-d",json.dumps(payload),
+              ],capture_output=True,text=True)
+              if "\n" in p.stdout:
+                  body,status=p.stdout.rsplit("\n",1)
+              else:
+                  body,status=p.stdout,""
+              try: parsed=json.loads(body)
+              except Exception: parsed={"raw":body[-600:]}
+              out.append({"date":day,"http_status":status,"response":parsed})
+          open("copper-usable-window.json","w").write(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-usable-window
+          path: copper-usable-window.json
