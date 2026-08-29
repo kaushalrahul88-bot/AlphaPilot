@@ -16,3 +16,8 @@ def test_manifest_requires_option_history_before_option_profit_claims():
     option=[x for x in m["feeds"] if x["kind"]=="OPTION_MARKET"][0]
     assert "option profitability" in option["replay_note"]
     assert m["production_rules_changed"] is False
+
+
+def test_latest_context_is_point_in_time():
+    xs=[_ctx(1,"2026-08-10T10:00:00+05:30",1),_ctx(2,"2026-08-11T10:00:00+05:30",2)]
+    assert latest_available(xs,"2026-08-10T15:00:00+05:30").context_id=="1"
