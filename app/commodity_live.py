@@ -12,6 +12,7 @@ from .commodity_mtf import TIMEFRAMES, completed_mtf_snapshot, completed_rows
 from .commodity_next_session import build_next_session_plan
 from .commodity_option_history import fetch_mcx_option_master, select_mcx_option_contract
 from .commodities import mcx_session_status, resolve_nearest_mcx_future
+from .options_only_policy import assert_option_action, assert_option_contract, options_only_policy
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -104,6 +105,7 @@ def _quote_payload(body):
 
 
 async def fetch_live_mcx_option_quote(provider, contract):
+    assert_option_contract(contract)
     throttle = getattr(provider, "_throttle", None)
     if callable(throttle):
         await throttle()
@@ -262,7 +264,9 @@ async def run_commodity_live_scan(provider, now=None):
             decision_status = directional["status"]
             action = directional["action"]
             if directional["status"] == "READY" and plan:
-                action = "BUY CE" if previous.get("underlying_direction") == "BULLISH" else "BUY PE"
+                action = assert_option_action(
+                    "BUY CE" if previous.get("underlying_direction") == "BULLISH" else "BUY PE"
+                )
                 option_type = action.split()[-1]
                 if option_master is None:
                     option_master = await fetch_mcx_option_master(SYMBOLS)
@@ -277,6 +281,7 @@ async def run_commodity_live_scan(provider, now=None):
                     option_quote = {"status": "CONTRACT_NOT_FOUND", "option_type": option_type}
                 else:
                     try:
+                        assert_option_contract(selected)
                         option_quote = await fetch_live_mcx_option_quote(provider, selected)
                     except Exception as exc:
                         option_quote = {
@@ -319,7 +324,10 @@ async def run_commodity_live_scan(provider, now=None):
                     "stop_loss": plan.get("stop"),
                     "target1": plan.get("target1"),
                     "risk_reward": PREMIUM_RISK_REWARD,
+                    "reference_only": True,
+                    "execution_eligible": False,
                 } if plan else None,
+                "trade_instrument": "OPTIONS",
                 "option_quote": option_quote,
                 "premium_setup": (strict or {}).get("premium_setup"),
                 "gates": gates,
@@ -345,6 +353,8 @@ async def run_commodity_live_scan(provider, now=None):
         "market_session": session,
         "symbols": list(SYMBOLS),
         "premium_risk_reward": PREMIUM_RISK_REWARD,
+        "trade_instrument": "OPTIONS",
+        "options_only_policy": options_only_policy(),
         "results": results,
         "summary": {
             "executable_ready": sum(row.get("decision_status") == "EXECUTABLE_READY" for row in results),
