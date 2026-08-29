@@ -1,0 +1,27 @@
+name: Copper Authoritative Context Backfill
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install "psycopg[binary]>=3.2"
+      - name: Fetch and persist CFTC + USDINR context
+        run: |
+          python - <<'PY'
+          import os
+          from app.copper_context_ingestion import fetch_cftc_copper_positioning,fetch_fred_usdinr_daily
+          from app.historical_context import PostgresHistoricalContextStore
+          s=PostgresHistoricalContextStore(os.environ["DATABASE_URL"]);s.initialize()
+          cot=fetch_cftc_copper_positioning("2026-05-01","2026-08-29")
+          fx=[x for x in fetch_fred_usdinr_daily() if "2026-05-01" <= x.observed_at[:10] <= "2026-08-29"]
+          print({"cftc_upserted":s.upsert(cot),"usdinr_upserted":s.upsert(fx),"status":s.status("COPPER")})
+          PY
