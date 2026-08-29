@@ -1,13 +1,22 @@
 name: Copper Authoritative Context Backfill
+
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 2-6"
   push:
     branches: [main]
     paths:
       - "app/copper_context_ingestion.py"
       - ".github/workflows/copper-context-backfill.yml"
+
 permissions:
   contents: read
+
+concurrency:
+  group: copper-authoritative-context-backfill
+  cancel-in-progress: false
+
 jobs:
   backfill:
     runs-on: ubuntu-latest
@@ -19,17 +28,33 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install "psycopg[binary]>=3.2"
-      - name: Fetch and persist CFTC + USDINR context
+      - name: Fetch and persist recent CFTC + USDINR context
         run: |
           python - <<'PY'
           import os
-          from app.copper_context_ingestion import fetch_cftc_copper_positioning,fetch_fred_usdinr_daily
+          from datetime import datetime, timedelta, timezone
+          from app.copper_context_ingestion import fetch_cftc_copper_positioning, fetch_fred_usdinr_daily
           from app.historical_context import PostgresHistoricalContextStore
-          s=PostgresHistoricalContextStore(os.environ["DATABASE_URL"]);s.initialize()
-          cot=fetch_cftc_copper_positioning("2026-05-01","2026-08-29")
-          cftc_upserted=s.upsert(cot)
-          print({"cftc_upserted":cftc_upserted,"status_after_cftc":s.status("COPPER")})
-          fx=fetch_fred_usdinr_daily("2026-05-01","2026-08-29")
-          usdinr_upserted=s.upsert(fx)
-          print({"usdinr_upserted":usdinr_upserted,"status":s.status("COPPER")})
+
+          end = datetime.now(timezone.utc).date()
+          start = end - timedelta(days=45)
+
+          store = PostgresHistoricalContextStore(os.environ["DATABASE_URL"])
+          store.initialize()
+
+          cot = fetch_cftc_copper_positioning(start.isoformat(), end.isoformat())
+          cftc_upserted = store.upsert(cot)
+
+          fx = fetch_fred_usdinr_daily(start.isoformat(), end.isoformat())
+          usdinr_upserted = store.upsert(fx)
+
+          print({
+              "window_start": start.isoformat(),
+              "window_end": end.isoformat(),
+              "cftc_rows_fetched": len(cot),
+              "cftc_upserted": cftc_upserted,
+              "usdinr_rows_fetched": len(fx),
+              "usdinr_upserted": usdinr_upserted,
+              "status": store.status("COPPER"),
+          })
           PY
