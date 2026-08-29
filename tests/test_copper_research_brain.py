@@ -183,3 +183,31 @@ class CopperInformationQualityV2Tests(unittest.TestCase):
         rows[70][5] = 99999999
         after = build_copper_snapshot(rows, 60)
         self.assertEqual(before, after)
+
+
+def test_precomputed_information_quality_matches_public_snapshot():
+    rows = []
+    base = datetime(2026, 8, 27, 9, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    for day_offset in range(7):
+        for i in range(80):
+            stamp = base + timedelta(days=day_offset, minutes=5*i)
+            price = 900.0 + day_offset * 2 + i * 0.05
+            rows.append([
+                stamp.isoformat(), price - 0.1, price + 0.3, price - 0.2, price,
+                1000 + i * 5 + day_offset * 20, 50000 + i,
+            ])
+    experiences = build_copper_experiences(rows, sample_every_bars=1)
+    target_index = 50
+    public = build_copper_snapshot(rows, target_index)
+    built = experiences[0]["features"]
+    for key in (
+        "session_return_pct", "session_range_position",
+        "distance_from_session_high_pct", "distance_from_session_low_pct",
+        "session_range_pct", "session_vwap_gap_pct",
+        "opening_range_position", "opening_range_break",
+        "time_adjusted_relative_volume",
+    ):
+        if isinstance(public.get(key), float):
+            assert abs(public[key] - built[key]) < 1e-12
+        else:
+            assert public.get(key) == built.get(key)
