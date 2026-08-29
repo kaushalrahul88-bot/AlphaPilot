@@ -78,6 +78,135 @@ def _series_return(rows, end, bars):
     return (rows[end][4] / rows[end - bars][4] - 1.0) * 100.0
 
 
+def _session_rows(rows, index):
+    """Rows from the same IST trading date through index; no future information."""
+    from .commodity_time import parse_ist_timestamp
+    try:
+        target_date = parse_ist_timestamp(rows[index][0]).date()
+    except Exception:
+        return []
+    out = []
+    for row in rows[:index + 1]:
+        try:
+            if parse_ist_timestamp(row[0]).date() == target_date:
+                out.append(row)
+        except Exception:
+            continue
+    return out
+
+
+def _session_location(rows, index):
+    """Describe where price sits inside information known so far this session."""
+    session = _session_rows(rows, index)
+    if not session:
+        return {}
+    close = rows[index][4]
+    high = max(r[2] for r in session)
+    low = min(r[3] for r in session)
+    opening = session[0][1]
+    span = high - low
+    return {
+        "session_return_pct": (close / opening - 1.0) * 100.0 if opening > 0 else None,
+        "session_range_position": (close - low) / span if span > 0 else 0.5,
+        "distance_from_session_high_pct": (close / high - 1.0) * 100.0 if high > 0 else None,
+        "distance_from_session_low_pct": (close / low - 1.0) * 100.0 if low > 0 else None,
+        "session_range_pct": span / close * 100.0 if close > 0 else None,
+    }
+
+
+def _session_vwap_gap(rows, index):
+    session = _session_rows(rows, index)
+    pv = 0.0
+    volume = 0.0
+    for row in session:
+        if row[5] <= 0:
+            continue
+        typical = (row[2] + row[3] + row[4]) / 3.0
+        pv += typical * row[5]
+        volume += row[5]
+    if volume <= 0:
+        return None
+    vwap = pv / volume
+    close = rows[index][4]
+    return (close / vwap - 1.0) * 100.0 if vwap > 0 else None
+
+
+def _opening_range_context(rows, index):
+    """Use only completed 09:00-10:00 bars and only after 10:00 IST."""
+    from .commodity_time import parse_ist_timestamp
+    from datetime import time
+    session = _session_rows(rows, index)
+    try:
+        now = parse_ist_timestamp(rows[index][0])
+    except Exception:
+        return {"opening_range_position": None, "opening_range_break": "UNAVAILABLE"}
+    if now.time() < time(10, 0):
+        return {"opening_range_position": None, "opening_range_break": "FORMING"}
+    opening = []
+    for row in session:
+        try:
+            stamp = parse_ist_timestamp(row[0])
+        except Exception:
+            continue
+        if time(9, 0) <= stamp.time() < time(10, 0):
+            opening.append(row)
+    if not opening:
+        return {"opening_range_position": None, "opening_range_break": "UNAVAILABLE"}
+    high = max(r[2] for r in opening)
+    low = min(r[3] for r in opening)
+    close = rows[index][4]
+    span = high - low
+    return {
+        "opening_range_position": (close - low) / span if span > 0 else 0.5,
+        "opening_range_break": "ABOVE" if close > high else "BELOW" if close < low else "INSIDE",
+    }
+
+
+def _time_adjusted_relative_volume(rows, index, lookback_sessions=5):
+    """Compare cumulative session volume with prior sessions at the same clock time."""
+    from .commodity_time import parse_ist_timestamp
+    try:
+        now = parse_ist_timestamp(rows[index][0])
+    except Exception:
+        return None
+    grouped = {}
+    for row in rows[:index + 1]:
+        try:
+            stamp = parse_ist_timestamp(row[0])
+        except Exception:
+            continue
+        if stamp.date() >= now.date() or stamp.time() > now.time() or row[5] <= 0:
+            continue
+        grouped.setdefault(stamp.date(), 0.0)
+        grouped[stamp.date()] += row[5]
+    samples = [grouped[d] for d in sorted(grouped)[-lookback_sessions:] if grouped[d] > 0]
+    current = sum(r[5] for r in _session_rows(rows, index) if r[5] > 0)
+    baseline = mean(samples) if samples else 0.0
+    return current / baseline if baseline > 0 else None
+
+
+def _oi_state(rows, index):
+    oi_now = rows[index][6]
+    oi_prev = rows[index - 3][6] if index >= 3 else None
+    if oi_now is None or oi_prev in (None, 0):
+        return {"oi_change_15m_pct": None, "price_oi_state": "UNKNOWN"}
+    change = (oi_now / oi_prev - 1.0) * 100.0
+    price_change = _series_return(rows, index, 3)
+    if price_change is None:
+        state = "UNKNOWN"
+    elif price_change > 0 and change > 0:
+        state = "LONG_BUILDUP"
+    elif price_change < 0 and change > 0:
+        state = "SHORT_BUILDUP"
+    elif price_change > 0 and change < 0:
+        state = "SHORT_COVERING"
+    elif price_change < 0 and change < 0:
+        state = "LONG_UNWINDING"
+    else:
+        state = "FLAT"
+    return {"oi_change_15m_pct": change, "price_oi_state": state}
+
+
 def _aligned_return(context_rows, timestamp, bars=3):
     """Return context momentum using the latest context bar available at or before timestamp."""
     if not context_rows:
@@ -109,8 +238,9 @@ def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles
     closes = [r[4] for r in rows[:index + 1]]
     ema20, ema50 = _ema(closes, 20), _ema(closes, 50)
     atr = _atr(rows, index)
-    oi_now = rows[index][6]
-    oi_prev = rows[index - 3][6] if index >= 3 else None
+    location = _session_location(rows, index)
+    opening_range = _opening_range_context(rows, index)
+    oi = _oi_state(rows, index)
     return {
         "timestamp": str(rows[index][0]),
         "price": close,
@@ -121,7 +251,11 @@ def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles
         "ema50_gap_pct": (close / ema50 - 1.0) * 100.0 if ema50 else None,
         "atr_pct": atr / close * 100.0 if atr and close else None,
         "relative_volume": _relative_volume(rows, index),
-        "oi_change_15m_pct": ((oi_now / oi_prev - 1.0) * 100.0) if oi_now is not None and oi_prev not in (None, 0) else None,
+        "time_adjusted_relative_volume": _time_adjusted_relative_volume(rows, index),
+        "session_vwap_gap_pct": _session_vwap_gap(rows, index),
+        **location,
+        **opening_range,
+        **oi,
         "lme_return_15m_pct": _aligned_return(lme_candles, rows[index][0]),
         "comex_return_15m_pct": _aligned_return(comex_candles, rows[index][0]),
         "usdinr_return_15m_pct": _aligned_return(usdinr_candles, rows[index][0]),
@@ -179,7 +313,7 @@ def experiment_manifest():
         "bar_interval": "5m",
         "brains": {
             "A": ["mcx_price", "technical_baseline"],
-            "B": ["mcx_price", "structure", "volume", "open_interest"],
+            "B": ["mcx_price", "structure", "location", "session_vwap", "opening_range", "time_adjusted_volume", "open_interest"],
             "C": ["brain_b", "lme_copper", "comex_copper", "usdinr"],
             "D": ["brain_c", "macro_event_context"],
         },
@@ -189,6 +323,7 @@ def experiment_manifest():
             "Features use information available at the observation timestamp only.",
             "Forward labels are never inputs to the same observation.",
             "Chronological out-of-sample validation is required before promotion.",
+            "New information-quality features are descriptive until separately validated; they do not mutate Brain A or Brain B rules.",
             "Complexity must outperform the simpler baseline after realistic costs.",
         ],
     }
