@@ -1,4 +1,4 @@
-from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, regime_stability_study, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
+from app.copper_research_brain import build_copper_experiences, build_copper_snapshot, brain_a_signal, attribute_brain_a_edges, regime_stability_study, run_copper_regime_stability_from_store, brain_b_signal, compare_brains_a_b, evaluate_brain_a, evaluate_brain_b, experiment_manifest, label_forward_path
 
 
 def _rows(n=90, start=800.0):
@@ -109,3 +109,31 @@ def test_experience_builder_matches_public_snapshot_and_labels():
     first_index = 50
     assert experiences[0]["features"] == build_copper_snapshot(rows, first_index)
     assert experiences[0]["labels"] == label_forward_path(rows, first_index)
+
+
+class _SegmentStore:
+    async def initialize(self):
+        return None
+
+    async def read_symbol_contract_segments(self, symbol, timeframe_minutes, start, end):
+        a = _rows(150, start=800.0)
+        b = _rows(150, start=1200.0)
+        return [
+            {"trading_symbol":"COPPERA","expiry_date":"2026-01-31","candles":a},
+            {"trading_symbol":"COPPERB","expiry_date":"2026-02-28","candles":b},
+        ]
+
+
+async def _run_segmented_store():
+    return await run_copper_regime_stability_from_store(
+        _SegmentStore(), days=45, sample_every_bars=3, round_trip_cost_bps=4.0, windows=4,
+    )
+
+
+def test_stored_stability_never_crosses_contract_boundaries():
+    import asyncio
+    result = asyncio.run(_run_segmented_store())
+    assert result["rollover_guard"] == "EXPERIENCES_NEVER_CROSS_CONTRACT_BOUNDARIES"
+    assert result["coverage"]["contracts"] == 2
+    expected = sum(len(build_copper_experiences(segment, sample_every_bars=3)) for segment in (_rows(150,800.0), _rows(150,1200.0)))
+    assert result["coverage"]["experiences"] == expected
