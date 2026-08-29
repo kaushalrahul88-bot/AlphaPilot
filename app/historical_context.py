@@ -150,3 +150,28 @@ class PostgresHistoricalContextStore:
                 cur.execute(sql,(commodity,))
                 rows=cur.fetchall()
         return [{"kind":k,"records":n,"first_observed":a.isoformat(),"last_observed":b.isoformat(),"last_available":c.isoformat()} for k,n,a,b,c in rows]
+
+
+    def read_available(self, commodity, decision_at, kinds=None):
+        kinds = tuple(kinds or ())
+        sql = """
+        SELECT context_id, commodity, kind, observed_at, available_at, source_name,
+               source_url, source_tier, values_json, frequency, notes
+        FROM commodity_historical_context
+        WHERE commodity=%s AND available_at <= %s
+        """
+        params=[commodity,decision_at]
+        if kinds:
+            sql += " AND kind = ANY(%s)"
+            params.append(list(kinds))
+        sql += " ORDER BY kind ASC, available_at ASC"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql,params)
+                rows=cur.fetchall()
+        return [HistoricalContext(
+            context_id=r[0],commodity=r[1],kind=r[2],
+            observed_at=r[3].isoformat(),available_at=r[4].isoformat(),
+            source_name=r[5],source_url=r[6],source_tier=r[7],
+            values=r[8],frequency=r[9],notes=r[10],
+        ) for r in rows]
