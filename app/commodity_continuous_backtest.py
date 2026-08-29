@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .commodities import MCX_TICK_SIZE_RUPEES, _download_instrument_master_to_tempfile, _parse_expiry, SUPPORTED_COMMODITIES, analyze_commodity_candles
 from .commodity_backtest import _fetch_chunked, _slice_until, _plan_at, _resolve_trade, _summary, _ts
+from .mcx_calendar import mcx_metal_day_schedule
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -25,11 +26,12 @@ def _matches(row, symbol):
 
 
 def _weekday_count(start, end):
+    """Count MCX metal trading days, excluding weekends and full exchange holidays."""
     current = start.date()
     finish = end.date()
     count = 0
     while current <= finish:
-        if current.weekday() < 5:
+        if mcx_metal_day_schedule(current)["expected_open"]:
             count += 1
         current += timedelta(days=1)
     return count
@@ -269,7 +271,7 @@ async def run_continuous_commodity_backtest(provider, symbol, days=180, min_rr=1
         "Historical contract discovery uses Groww's historical expiry/contracts APIs and never treats the current instrument master as an archive of expired MCX contracts.",
         "Contract handoff is expiry-boundary based: AlphaPilot keeps each discovered contract through its expiry window and starts the next contract immediately after the prior expiry. This is a deterministic synthetic front-month series, not a volume/open-interest based institutional rollover model.",
         "Historical span, observed session-day coverage and rollover validity are reported separately; elapsed time between first and last candle is not treated as proof that every trading day is present.",
-        "Coverage percentage uses unique weekdays with at least one in-window 5m candle. Exchange holidays are not removed from the denominator, so the percentage is intentionally conservative.",
+        "Coverage percentage uses official MCX metal trading-calendar days; weekends and fully closed exchange holidays are excluded from the denominator, while partial-session holidays remain expected trading days.",
         "Coverage depends on expired MCX contracts still being discoverable through Groww's current instrument master and historical candle API.",
         "AlphaPilot requires at least two distinct contracts before labeling a result as a valid continuous rollover backtest.",
         "The frozen baseline exits 100% at T1; brokerage, taxes and slippage remain basis-point approximations.",
