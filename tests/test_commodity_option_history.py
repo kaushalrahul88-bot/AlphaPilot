@@ -179,9 +179,9 @@ class CommodityOptionHistoryTests(unittest.TestCase):
 
     def test_ranked_copper_contracts_start_nearest_to_atm(self):
         rows = [
-            contract("COPPER", "CE", "2026-09-30", 900),
-            contract("COPPER", "CE", "2026-09-30", 925),
-            contract("COPPER", "CE", "2026-09-30", 950),
+            contract("COPPER", "CE", "2026-09-29", 900),
+            contract("COPPER", "CE", "2026-09-29", 925),
+            contract("COPPER", "CE", "2026-09-29", 950),
             contract("COPPER", "CE", "2026-10-30", 925),
         ]
         ranked = ranked_mcx_option_contracts(rows, "COPPER", "2026-08-25", 932, "CE")
@@ -189,8 +189,8 @@ class CommodityOptionHistoryTests(unittest.TestCase):
 
     def test_affordable_selector_moves_outward_when_atm_is_too_expensive(self):
         rows = [
-            contract("COPPER", "CE", "2026-09-30", 925),
-            contract("COPPER", "CE", "2026-09-30", 950),
+            contract("COPPER", "CE", "2026-09-29", 925),
+            contract("COPPER", "CE", "2026-09-29", 950),
         ]
         click = datetime(2026, 8, 25, 10, 55, tzinfo=IST)
 
