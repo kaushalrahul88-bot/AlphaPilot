@@ -1,0 +1,58 @@
+name: Probe Historical MCX Archive
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/probe-historical-mcx-archive.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for capability endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..30}; do
+            curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json || true
+            if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-contracts/historical-capability" in (d.get("paths") or {}) else 1)' 2>/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Probe archived Copper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 120             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-contracts/historical-capability?symbol=COPPER&days=180"             -o historical-mcx-capability.json
+          python - <<'PY'
+          import json
+          d=json.load(open("historical-mcx-capability.json"))
+          print(json.dumps({
+            "symbol": d.get("symbol"),
+            "requested_days": d.get("requested_days"),
+            "supported": d.get("supported"),
+            "source": d.get("source"),
+            "expiries_returned": d.get("expiries_returned"),
+            "contracts": d.get("contracts"),
+            "diagnostics": d.get("diagnostics"),
+          }, indent=2))
+          PY
+
+      - name: Upload capability result
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-mcx-capability
+          path: historical-mcx-capability.json
