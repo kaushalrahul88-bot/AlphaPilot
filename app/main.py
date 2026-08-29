@@ -29,6 +29,7 @@ from .commodity_click_replay import audit_identified_setups, run_frozen_extended
 from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
 from .commodity_option_history import probe_mcx_option_history, scan_mcx_option_history_band
+from .commodity_option_candle_collector import PostgresOptionCandleStore, collect_copper_option_candles
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .edge_discovery import run_edge_discovery
@@ -172,6 +173,35 @@ async def commodity_candles_status(x_collector_token:str|None=Header(default=Non
     store=_collector_store(x_collector_token)
     try:return await store.status()
     except Exception as exc:_safe_upstream_error("commodity candle storage status",exc)
+@app.post("/v1/internal/commodity-options/collect")
+async def commodity_options_collect(
+    strikes_per_type:int=12,
+    x_collector_token:str|None=Header(default=None),
+):
+    candle_store=_collector_store(x_collector_token)
+    try:
+        option_store=PostgresOptionCandleStore(settings.database_url)
+        return await collect_copper_option_candles(
+            get_provider(settings),
+            candle_store,
+            option_store,
+            strikes_per_type=max(1,min(int(strikes_per_type),20)),
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper option candle collection",exc)
+
+@app.get("/v1/internal/commodity-options/status")
+async def commodity_options_status(
+    symbol:str="COPPER",
+    x_collector_token:str|None=Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        store=PostgresOptionCandleStore(settings.database_url)
+        await store.initialize()
+        return await store.status(symbol.upper())
+    except Exception as exc:_safe_upstream_error("commodity option candle storage status",exc)
+
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
     try:return evaluate_risk_discipline(request)
