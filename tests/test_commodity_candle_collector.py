@@ -186,3 +186,27 @@ class CommodityCandleCollectorTests(unittest.IsolatedAsyncioTestCase):
             await backfill_continuous_commodity_candles(
                 object(), store, "COPPER", now - timedelta(days=2), now, 5,
             )
+
+
+    async def test_continuous_backfill_marks_zero_archived_candles_unusable(self):
+        now = datetime(2026, 4, 15, 10, 0, tzinfo=IST)
+        store = MemoryStore()
+        contract = {
+            "exchange":"MCX",
+            "segment":"COMMODITY",
+            "trading_symbol":"COPPER30APR26FUT",
+            "groww_symbol":"MCX-COPPER-30Apr26-FUT",
+            "expiry_date":"2026-04-30",
+            "discovery_source":"GROWW_HISTORICAL_CONTRACTS_API",
+        }
+        with (
+            patch("app.commodity_candle_collector.resolve_historical_mcx_contract", new=AsyncMock(return_value=contract)),
+            patch("app.commodity_candle_collector._fetch_chunked", new=AsyncMock(return_value=[])),
+        ):
+            result = await backfill_continuous_commodity_candles(
+                object(), store, "COPPER", now - timedelta(hours=1), now, 5,
+            )
+        self.assertEqual(result["status"], "NO_ARCHIVED_INTRADAY_DATA")
+        self.assertFalse(result["usable_for_continuous_research"])
+        self.assertEqual(result["fetched"], 0)
+        self.assertEqual(result["upserted"], 0)
