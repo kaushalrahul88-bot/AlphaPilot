@@ -1,0 +1,163 @@
+name: Copper 180D Continuous Backfill
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-180d-continuous-backfill.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          sleep 60
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); p=d.get("paths") or {}; sys.exit(0 if "/v1/internal/commodity-candles/backfill-continuous" in p and "/v1/research/copper/regime-stability-stored-v1" in p else 1)'; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Backfill Copper 180 days with historical front month
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess, time
+          from datetime import datetime, timedelta, timezone
+
+          end = datetime.now(timezone.utc)
+          start = end - timedelta(days=180)
+          cursor = start
+          success = []
+          failures = []
+
+          while cursor < end:
+              chunk_end = min(end, cursor + timedelta(days=1))
+              payload = {
+                  "symbol": "COPPER",
+                  "start_at": cursor.isoformat(),
+                  "end_at": chunk_end.isoformat(),
+                  "timeframe_minutes": 5,
+              }
+              cmd = [
+                  "curl","--silent","--show-error","--max-time","60",
+                  "-H","Content-Type: application/json",
+                  "-H",f"X-Collector-Token:{os.environ['COLLECTOR_TOKEN']}",
+                  "-X","POST",
+                  f"{os.environ['API_BASE']}/v1/internal/commodity-candles/backfill-continuous",
+                  "-d",json.dumps(payload),
+              ]
+              body = None
+              for attempt in range(2):
+                  p = subprocess.run(cmd, capture_output=True, text=True)
+                  if p.returncode == 0:
+                      try:
+                          body = json.loads(p.stdout)
+                      except Exception:
+                          body = None
+                      if isinstance(body, dict) and body.get("status") == "BACKFILLED_CONTINUOUS":
+                          break
+                  time.sleep(1)
+              if isinstance(body, dict) and body.get("status") == "BACKFILLED_CONTINUOUS":
+                  success.append(body)
+              else:
+                  failures.append({
+                      "start": cursor.isoformat(),
+                      "end": chunk_end.isoformat(),
+                      "curl_rc": p.returncode,
+                      "stderr": p.stderr[-300:],
+                      "raw": p.stdout[-500:],
+                  })
+              cursor = chunk_end
+
+          contracts = {}
+          for row in success:
+              key = row.get("contract") or "UNKNOWN"
+              item = contracts.setdefault(key, {
+                  "contract": key,
+                  "expiry": row.get("contract_expiry"),
+                  "chunks": 0,
+                  "fetched": 0,
+                  "upserted": 0,
+              })
+              item["chunks"] += 1
+              item["fetched"] += int(row.get("fetched") or 0)
+              item["upserted"] += int(row.get("upserted") or 0)
+
+          summary = {
+              "requested_days": 180,
+              "chunks_successful": len(success),
+              "chunks_failed": len(failures),
+              "contracts": sorted(contracts.values(), key=lambda x: str(x.get("expiry") or "")),
+              "fetched_total": sum(int(x.get("fetched") or 0) for x in success),
+              "upserted_total": sum(int(x.get("upserted") or 0) for x in success),
+              "failures": failures,
+          }
+          open("copper-180d-backfill-summary.json","w").write(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          if len(success) < 30:
+              raise SystemExit("Too little successful historical coverage for a useful multi-contract study")
+          PY
+
+      - name: Check stored coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 60             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-candles/status"             -o commodity-store-status-180d.json
+          python - <<'PY'
+          import json
+          d=json.load(open("commodity-store-status-180d.json"))
+          copper=[x for x in d.get("series",[]) if x.get("symbol")=="COPPER" and x.get("timeframe_minutes")==5]
+          print(json.dumps({"copper_5m":copper}, indent=2))
+          if not copper or int(copper[0].get("candles",0)) < 1000:
+              raise SystemExit("Stored Copper coverage is unexpectedly small")
+          PY
+
+      - name: Run rollover-safe 180 day stability
+        shell: bash
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          curl --fail --silent --show-error --max-time 180             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/regime-stability-stored-v1"             -d '{"days":180,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-180d-stability.json
+          finished=$(date +%s)
+          echo "elapsed_seconds=$((finished-started))"
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-180d-stability.json"))
+          assert d.get("rollover_guard")=="EXPERIENCES_NEVER_CROSS_CONTRACT_BOUNDARIES", d
+          s=d["study"]
+          print(json.dumps({
+              "coverage": d["coverage"],
+              "windows": s["windows"],
+              "window_sizes": s["window_sizes"],
+              "recurring_positive_candidates": s["recurring_positive_candidates"],
+          }, indent=2))
+          PY
+
+      - name: Upload research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-180d-continuous-research
+          path: |
+            copper-180d-backfill-summary.json
+            commodity-store-status-180d.json
+            copper-180d-stability.json
+          if-no-files-found: warn
