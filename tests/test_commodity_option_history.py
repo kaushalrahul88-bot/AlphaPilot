@@ -155,10 +155,6 @@ class CommodityOptionHistoryTests(unittest.TestCase):
         self.assertFalse(result["live_execution_enabled"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_copper_option_rows_are_supported(self):
         row = {
             "exchange": "MCX", "segment": "COMMODITY", "underlying_symbol": "COPPER",
@@ -183,9 +179,9 @@ if __name__ == "__main__":
 
     def test_ranked_copper_contracts_start_nearest_to_atm(self):
         rows = [
-            contract("COPPER", "CE", "2026-09-30", 900),
-            contract("COPPER", "CE", "2026-09-30", 925),
-            contract("COPPER", "CE", "2026-09-30", 950),
+            contract("COPPER", "CE", "2026-09-29", 900),
+            contract("COPPER", "CE", "2026-09-29", 925),
+            contract("COPPER", "CE", "2026-09-29", 950),
             contract("COPPER", "CE", "2026-10-30", 925),
         ]
         ranked = ranked_mcx_option_contracts(rows, "COPPER", "2026-08-25", 932, "CE")
@@ -193,8 +189,8 @@ if __name__ == "__main__":
 
     def test_affordable_selector_moves_outward_when_atm_is_too_expensive(self):
         rows = [
-            contract("COPPER", "CE", "2026-09-30", 925),
-            contract("COPPER", "CE", "2026-09-30", 950),
+            contract("COPPER", "CE", "2026-09-29", 925),
+            contract("COPPER", "CE", "2026-09-29", 950),
         ]
         click = datetime(2026, 8, 25, 10, 55, tzinfo=IST)
 
@@ -223,3 +219,7 @@ if __name__ == "__main__":
         self.assertEqual(result["affordability"]["deployed_amount_rupees"], 10000.0)
         self.assertEqual(result["attempts"][0]["status"], "TOO_EXPENSIVE")
         self.assertEqual(result["attempts"][1]["status"], "AFFORDABLE")
+
+
+if __name__ == "__main__":
+    unittest.main()

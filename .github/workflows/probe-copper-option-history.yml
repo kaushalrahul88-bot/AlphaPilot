@@ -5,6 +5,9 @@ on:
     branches:
       - main
     paths:
+      - "app/main.py"
+      - "app/commodity_option_history.py"
+      - "tests/test_commodity_option_history.py"
       - ".github/workflows/probe-copper-option-history.yml"
 
 permissions:
@@ -23,7 +26,7 @@ jobs:
           set -euo pipefail
           for attempt in {1..36}; do
             if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
-              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/commodity-option-history-band" in (d.get("paths") or {}) else 1)'; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); s=((d.get("components") or {}).get("schemas") or {}).get("CommodityOptionHistoryBandRequest") or {}; e=(((s.get("properties") or {}).get("symbol") or {}).get("enum") or []); sys.exit(0 if "COPPER" in e else 1)'; then
                 sleep 30
                 exit 0
               fi
@@ -59,6 +62,9 @@ jobs:
               out.append({"request":payload,"http_status":status,"response":parsed})
           open("copper-option-history-probe.json","w").write(json.dumps(out,indent=2))
           print(json.dumps(out,indent=2))
+          failed=[x for x in out if x.get("http_status")!="200"]
+          if failed:
+              raise SystemExit(f"Copper option-history probe failed: {len(failed)} non-200 response(s)")
           PY
 
       - name: Upload probe result
