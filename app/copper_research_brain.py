@@ -765,8 +765,8 @@ def _segment_stats(rows):
     }
 
 
-def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
-    """Descriptive attribution only: no threshold search and no strategy mutation."""
+def _brain_a_attribution_observations(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
+    """Canonical descriptive rows used by single-feature and interaction attribution."""
     key = f"forward_{int(horizon_minutes)}m_pct"
     observations = []
     for item in experiences:
@@ -817,7 +817,14 @@ def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps
                 "FALLING" if _f(f.get("oi_change_15m_pct")) < 0 else "FLAT"
             ),
         })
+    return observations
 
+
+def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps=4.0):
+    """Descriptive attribution only: no threshold search and no strategy mutation."""
+    observations = _brain_a_attribution_observations(
+        experiences, horizon_minutes, round_trip_cost_bps,
+    )
     dimensions = [
         "signal", "structure", "session", "atr_bucket", "volume_bucket",
         "time_adjusted_volume_bucket", "momentum_bucket", "session_location_bucket",
@@ -840,6 +847,123 @@ def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps
         "overall": _segment_stats(observations),
         "dimensions": attribution,
         "guardrail": "Segments describe where frozen Brain A historically won/lost; they are not trading rules.",
+    }
+
+
+INTERACTION_PAIRS = (
+    ("signal", "session_location_bucket"),
+    ("signal", "vwap_location_bucket"),
+    ("signal", "opening_range_break"),
+    ("signal", "time_adjusted_volume_bucket"),
+    ("session_location_bucket", "vwap_location_bucket"),
+    ("opening_range_break", "time_adjusted_volume_bucket"),
+)
+
+
+def _interaction_key(row, dimensions):
+    return " | ".join(f"{name}={row.get(name, 'UNKNOWN')}" for name in dimensions)
+
+
+def _interaction_window_summary(window_rows, dimensions, minimum_signals=15):
+    groups = {}
+    for row in window_rows:
+        groups.setdefault(_interaction_key(row, dimensions), []).append(row)
+    return {
+        key: {**_segment_stats(group), "minimum_sample_passed": len(group) >= minimum_signals}
+        for key, group in sorted(groups.items())
+        if len(group) >= minimum_signals
+    }
+
+
+def interaction_stability_study(
+    experiences,
+    windows=4,
+    horizon_minutes=60,
+    round_trip_cost_bps=4.0,
+    minimum_signals_per_window=15,
+):
+    """
+    Preregistered pairwise interaction study.
+
+    Only six economically interpretable feature pairs are tested. There is no
+    exhaustive combinatorial search, no threshold tuning, and no strategy mutation.
+    """
+    chunks = _split_windows(experiences, windows)
+    observation_windows = [
+        _brain_a_attribution_observations(chunk, horizon_minutes, round_trip_cost_bps)
+        for chunk in chunks
+    ]
+    pairs = {}
+    recurring_positive = []
+    recurring_negative = []
+    three_of_four_positive = []
+
+    for dimensions in INTERACTION_PAIRS:
+        pair_name = " x ".join(dimensions)
+        reports = [
+            _interaction_window_summary(rows, dimensions, minimum_signals_per_window)
+            for rows in observation_windows
+        ]
+        keys = sorted({key for report in reports for key in report})
+        entries = {}
+        for key in keys:
+            window_stats = []
+            for idx, report in enumerate(reports):
+                stats = report.get(key)
+                if not stats:
+                    continue
+                window_stats.append({
+                    "window": idx + 1,
+                    "signals": stats["signals"],
+                    "avg_net_return_pct": stats["avg_net_return_pct"],
+                    "profit_factor": stats["profit_factor"],
+                })
+            positive = sum(
+                1 for row in window_stats
+                if row["avg_net_return_pct"] > 0 and (row["profit_factor"] or 0) > 1
+            )
+            negative = sum(
+                1 for row in window_stats
+                if row["avg_net_return_pct"] < 0 and (row["profit_factor"] or 999) < 1
+            )
+            stats = {
+                "windows_present": len(window_stats),
+                "positive_windows": positive,
+                "negative_windows": negative,
+                "minimum_signals_per_window": int(minimum_signals_per_window),
+                "consistent_positive": len(window_stats) == len(chunks) and positive == len(chunks),
+                "consistent_negative": len(window_stats) == len(chunks) and negative == len(chunks),
+                "window_stats": window_stats,
+            }
+            entries[key] = stats
+            payload = {"interaction": pair_name, "state": key, **stats}
+            if stats["consistent_positive"]:
+                recurring_positive.append(payload)
+            if stats["consistent_negative"]:
+                recurring_negative.append(payload)
+            if len(window_stats) == len(chunks) and positive >= len(chunks) - 1:
+                three_of_four_positive.append(payload)
+        pairs[pair_name] = entries
+
+    return {
+        "mode": "COPPER_INFORMATION_INTERACTION_STABILITY_V1",
+        "research_only": True,
+        "strategy_rules_changed": False,
+        "threshold_optimization": False,
+        "exhaustive_search": False,
+        "interaction_pairs": [" x ".join(pair) for pair in INTERACTION_PAIRS],
+        "windows": len(chunks),
+        "window_sizes": [len(chunk) for chunk in chunks],
+        "minimum_signals_per_window": int(minimum_signals_per_window),
+        "pairs": pairs,
+        "recurring_positive_interactions": recurring_positive,
+        "recurring_negative_interactions": recurring_negative,
+        "three_of_four_positive_interactions": three_of_four_positive,
+        "guardrail": (
+            "Interactions are descriptive hypotheses only. Positive interactions require "
+            "fresh untouched validation before any decision role; negative interactions "
+            "may only be proposed as avoidance hypotheses, not applied automatically."
+        ),
     }
 
 
@@ -999,6 +1123,72 @@ async def run_copper_regime_stability(provider, days=45, sample_every_bars=3, ro
         },
         "study": study,
         "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
+    }
+
+
+async def run_copper_interaction_stability_from_store(
+    store,
+    days=180,
+    sample_every_bars=3,
+    round_trip_cost_bps=4.0,
+    windows=4,
+    minimum_signals_per_window=15,
+):
+    """Run preregistered pairwise interaction stability from durable Copper candles."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    days = max(21, min(int(days), 3650))
+    step = max(1, min(int(sample_every_bars), 12))
+    ist = ZoneInfo("Asia/Kolkata")
+    end = datetime.now(ist)
+    start = end - timedelta(days=days)
+    await store.initialize()
+    segments = await store.read_symbol_contract_segments("COPPER", 5, start, end)
+    experiences = []
+    segment_coverage = []
+    for segment in segments:
+        candles = segment.get("candles") or []
+        segment_experiences = build_copper_experiences(candles, sample_every_bars=step)
+        experiences.extend(segment_experiences)
+        segment_coverage.append({
+            "trading_symbol": segment.get("trading_symbol"),
+            "expiry_date": segment.get("expiry_date"),
+            "candles": len(candles),
+            "experiences": len(segment_experiences),
+            "start": str(candles[0][0]) if candles else None,
+            "end": str(candles[-1][0]) if candles else None,
+        })
+    experiences.sort(key=lambda item: str((item.get("features") or {}).get("timestamp") or ""))
+    if len(experiences) < 80:
+        raise RuntimeError(f"Insufficient rollover-safe Copper experiences ({len(experiences)})")
+    study = interaction_stability_study(
+        experiences,
+        windows=windows,
+        horizon_minutes=60,
+        round_trip_cost_bps=round_trip_cost_bps,
+        minimum_signals_per_window=minimum_signals_per_window,
+    )
+    return {
+        "mode": "ALPHAPILOT_COPPER_INTERACTION_STABILITY_STORED_V1",
+        "research_only": True,
+        "production_rules_changed": False,
+        "data_source": "POSTGRES_COMMODITY_CANDLES",
+        "provenance_warning": (
+            "Current stored historical sample is a single COPPER31AUG26FUT contract proxy; "
+            "do not interpret it as validated continuous-futures history."
+        ),
+        "coverage": {
+            "requested_days": days,
+            "contracts": len(segment_coverage),
+            "contract_segments": segment_coverage,
+            "experiences": len(experiences),
+        },
+        "study": study,
+        "next_gate": (
+            "Only stable interactions may become hypotheses. Any positive interaction still "
+            "requires a fresh untouched validation period before a Market Brain decision role."
+        ),
     }
 
 
