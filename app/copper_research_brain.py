@@ -102,8 +102,7 @@ def _aligned_return(context_rows, timestamp, bars=3):
     return _series_return(clean, i, bars)
 
 
-def build_copper_snapshot(mcx_candles, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None):
-    rows = clean_ohlcv(mcx_candles)
+def _build_copper_snapshot_clean(rows, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None):
     if index < 50 or index >= len(rows):
         raise ValueError("Copper snapshot requires at least 50 completed MCX 5m bars")
     close = rows[index][4]
@@ -129,8 +128,14 @@ def build_copper_snapshot(mcx_candles, index, *, lme_candles=None, comex_candles
     }
 
 
-def label_forward_path(mcx_candles, index):
-    rows = clean_ohlcv(mcx_candles)
+def build_copper_snapshot(mcx_candles, index, *, lme_candles=None, comex_candles=None, usdinr_candles=None):
+    return _build_copper_snapshot_clean(
+        clean_ohlcv(mcx_candles), index,
+        lme_candles=lme_candles, comex_candles=comex_candles, usdinr_candles=usdinr_candles,
+    )
+
+
+def _label_forward_path_clean(rows, index):
     if index < 0 or index >= len(rows):
         raise IndexError(index)
     entry = rows[index][4]
@@ -149,13 +154,20 @@ def label_forward_path(mcx_candles, index):
     return labels
 
 
+def label_forward_path(mcx_candles, index):
+    return _label_forward_path_clean(clean_ohlcv(mcx_candles), index)
+
+
 def build_copper_experiences(mcx_candles, *, lme_candles=None, comex_candles=None, usdinr_candles=None, sample_every_bars=1):
     rows = clean_ohlcv(mcx_candles)
     step = max(1, int(sample_every_bars))
     experiences = []
     for i in range(50, max(50, len(rows) - max(HORIZONS)), step):
-        snapshot = build_copper_snapshot(rows, i, lme_candles=lme_candles, comex_candles=comex_candles, usdinr_candles=usdinr_candles)
-        experiences.append({"features": snapshot, "labels": label_forward_path(rows, i)})
+        snapshot = _build_copper_snapshot_clean(
+            rows, i,
+            lme_candles=lme_candles, comex_candles=comex_candles, usdinr_candles=usdinr_candles,
+        )
+        experiences.append({"features": snapshot, "labels": _label_forward_path_clean(rows, i)})
     return experiences
 
 
