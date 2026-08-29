@@ -102,26 +102,48 @@ def test_market_closed_never_calls_provider_or_storage():
     master.assert_not_awaited()
 
 
-def test_collector_requires_fresh_same_day_underlying_candle():
+def test_stale_stored_underlying_is_diagnostic_not_a_live_snapshot_blocker():
+    underlying=UnderlyingStore([
+        ["2026-08-31T09:00:00+05:30",1380,1382,1379,1381,100],
+    ])
+    snapshots=SnapshotStore()
+    ce=[contract("CE",strike) for strike in (1380,1390,1400)]
+    pe=[contract("PE",strike) for strike in (1380,1370,1360)]
+
+    def ranked(rows,symbol,trade_date,underlying_price,option_type,max_strikes):
+        return ce if option_type=="CE" else pe
+
+    async def option_quote(provider,selected):
+        return {"last_price":6.5,"payload":{"last_price":6.5}}
+
     async def run():
-        underlying=UnderlyingStore([
-            ["2026-08-31T09:00:00+05:30",1380,1382,1379,1381,100],
-        ])
-        snapshots=SnapshotStore()
         with patch(
+            "app.commodity_option_snapshot_collector.commodity_quote",
+            new=AsyncMock(return_value={
+                "contract":{"trading_symbol":"COPPER30SEP26FUT"},
+                "validation":{"last_price":1386.0},
+            }),
+        ), patch(
             "app.commodity_option_snapshot_collector._current_master",
-            new=AsyncMock(),
-        ) as master:
-            result=await collect_copper_option_snapshots(
+            new=AsyncMock(return_value=ce+pe),
+        ), patch(
+            "app.commodity_option_snapshot_collector.ranked_mcx_option_contracts",
+            side_effect=ranked,
+        ), patch(
+            "app.commodity_option_snapshot_collector.fetch_mcx_option_live_quote",
+            new=AsyncMock(side_effect=option_quote),
+        ):
+            return await collect_copper_option_snapshots(
                 object(),underlying,snapshots,
                 now=datetime(2026,8,31,10,0,tzinfo=IST),
             )
-            return result,master
 
-    result,master=asyncio.run(run())
-    assert result["status"]=="STALE_UNDERLYING_CANDLE"
-    assert result["snapshots"]==0
-    master.assert_not_awaited()
+    result=asyncio.run(run())
+    assert result["status"]=="COLLECTED"
+    assert result["snapshots"]==6
+    assert result["underlying_candle_health"]["status"]=="STALE"
+    assert result["underlying_candle_health"]["pass"] is False
+    assert result["underlying_price"]==1386.0
 
 
 def test_live_snapshot_collection_persists_both_ce_and_pe_without_fake_ohlc():
@@ -261,5 +283,49 @@ def test_snapshot_collection_fails_closed_when_live_underlying_quote_is_unavaila
     result,master=asyncio.run(run())
     assert result["status"]=="UNDERLYING_LIVE_QUOTE_ERROR"
     assert result["snapshots"]==0
-    assert result["underlying_candle_close"]==1381.5
+    assert result["underlying_candle_health"]["status"]=="FRESH"
+    assert result["underlying_candle_health"]["close"]==1381.5
     master.assert_not_awaited()
+
+
+def test_missing_stored_underlying_does_not_block_live_snapshot_collection():
+    underlying=UnderlyingStore([])
+    snapshots=SnapshotStore()
+    ce=[contract("CE",strike) for strike in (1380,1390,1400)]
+    pe=[contract("PE",strike) for strike in (1380,1370,1360)]
+
+    def ranked(rows,symbol,trade_date,underlying_price,option_type,max_strikes):
+        assert underlying_price==1386.0
+        return ce if option_type=="CE" else pe
+
+    async def option_quote(provider,selected):
+        return {"last_price":6.5,"payload":{"last_price":6.5}}
+
+    async def run():
+        with patch(
+            "app.commodity_option_snapshot_collector.commodity_quote",
+            new=AsyncMock(return_value={
+                "contract":{"trading_symbol":"COPPER30SEP26FUT"},
+                "validation":{"last_price":1386.0},
+            }),
+        ), patch(
+            "app.commodity_option_snapshot_collector._current_master",
+            new=AsyncMock(return_value=ce+pe),
+        ), patch(
+            "app.commodity_option_snapshot_collector.ranked_mcx_option_contracts",
+            side_effect=ranked,
+        ), patch(
+            "app.commodity_option_snapshot_collector.fetch_mcx_option_live_quote",
+            new=AsyncMock(side_effect=option_quote),
+        ):
+            return await collect_copper_option_snapshots(
+                object(),underlying,snapshots,
+                now=datetime(2026,8,31,9,10,tzinfo=IST),
+            )
+
+    result=asyncio.run(run())
+    assert result["status"]=="COLLECTED"
+    assert result["snapshots"]==6
+    assert result["underlying_candle_health"]["status"]=="MISSING"
+    assert result["underlying_candle_health"]["pass"] is False
+    assert result["underlying_price_source"]=="LIVE_MCX_FUTURE_QUOTE"
