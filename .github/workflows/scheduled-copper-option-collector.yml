@@ -55,9 +55,18 @@ jobs:
           assert result.get("production_rules_changed") is False, result
           assert result.get("live_execution_enabled") is False, result
 
-          if os.environ.get("EVENT_NAME")=="push" and result.get("status")=="MARKET_CLOSED":
-              print(json.dumps({"deploy_smoke":"PASS","status":"MARKET_CLOSED"},indent=2))
-              raise SystemExit(0)
+          if result.get("status")=="MARKET_CLOSED":
+              calendar=((result.get("market_session") or {}).get("calendar") or {})
+              calendar_class=calendar.get("calendar_class")
+              if os.environ.get("EVENT_NAME")=="push" or calendar_class in {"WEEKEND","TRADING_HOLIDAY"}:
+                  print(json.dumps({
+                      "closed_session":"EXPECTED",
+                      "calendar_class":calendar_class,
+                      "holiday_name":calendar.get("holiday_name"),
+                      "observed_at":result.get("observed_at"),
+                  },indent=2))
+                  raise SystemExit(0)
+              raise AssertionError(result)
 
           assert result.get("status") in {"COLLECTED","PARTIAL"}, result
           assert result.get("data_type")=="LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC", result
