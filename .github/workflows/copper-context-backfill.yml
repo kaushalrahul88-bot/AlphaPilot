@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 10
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,7 +30,7 @@ jobs:
           cot=fetch_cftc_copper_positioning("2026-05-01","2026-08-29")
           cftc_upserted=s.upsert(cot)
           print({"cftc_upserted":cftc_upserted,"status_after_cftc":s.status("COPPER")})
-          fx=fetch_fred_usdinr_daily("2026-05-01","2026-08-29")
+          fx=fetch_fred_usdinr_daily("2026-05-01","2026-08-29",os.environ["FRED_API_KEY"])
           usdinr_upserted=s.upsert(fx)
           print({"usdinr_upserted":usdinr_upserted,"status":s.status("COPPER")})
           PY
