@@ -14,9 +14,19 @@ CFTC_DISAGG_FUTURES_ONLY="https://publicreporting.cftc.gov/resource/72hh-3qpy.js
 FRED_DEXINUS_CSV="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DEXINUS"
 
 
-def _get(url:str)->bytes:
+def _get(url:str, attempts:int=3, timeout_seconds:int=30)->bytes:
+    import time
     req=Request(url,headers={"User-Agent":"AlphaPilot research/1.0"})
-    with urlopen(req,timeout=30) as r:return r.read()
+    last=None
+    for attempt in range(max(1,int(attempts))):
+        try:
+            with urlopen(req,timeout=timeout_seconds) as r:
+                return r.read()
+        except Exception as exc:
+            last=exc
+            if attempt + 1 < attempts:
+                time.sleep(2 * (attempt + 1))
+    raise last
 
 
 def fetch_cftc_copper_positioning(start_date:str,end_date:str)->list[HistoricalContext]:
