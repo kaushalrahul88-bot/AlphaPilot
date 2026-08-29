@@ -1,6 +1,6 @@
 import unittest
 from datetime import date, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from app.copper_option_snapshot_readiness import (
@@ -63,21 +63,16 @@ class CopperOptionSnapshotReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["strategy_gate"])
         self.assertFalse(result["promotion_eligible"])
 
-    async def test_readiness_initializes_empty_snapshot_store_before_query(self):
-        fake_store=unittest.mock.MagicMock()
-        fake_store.initialize=AsyncMock(return_value=None)
+    async def test_readiness_returns_no_data_without_mutating_schema(self):
         with patch(
-            "app.copper_option_snapshot_readiness.PostgresOptionSnapshotStore",
-            return_value=fake_store,
-        ) as store_cls, patch(
             "app.copper_option_snapshot_readiness._load_sync",
             return_value=summarize_snapshot_readiness([]),
-        ):
+        ) as load:
             result=await run_snapshot_readiness("postgresql://example","COPPER",60)
 
-        store_cls.assert_called_once_with("postgresql://example")
-        fake_store.initialize.assert_awaited_once()
+        load.assert_called_once_with("postgresql://example","COPPER",60)
         self.assertEqual(result["status"],"NO_DATA")
+        self.assertFalse(result["promotion_eligible"])
 
 
 if __name__=="__main__":
