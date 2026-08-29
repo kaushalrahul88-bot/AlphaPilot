@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from decimal import Decimal
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -486,4 +486,100 @@ async def collect_copper_option_snapshots(
         "contracts": details,
         "idempotency_key": "provider+trading_symbol+sample_bucket_at",
         "guardrail": "These are sampled live LTP observations, not reconstructed 5-minute OHLC candles.",
+    }
+
+
+async def probe_copper_option_live_quote(provider, underlying_store, now: datetime | None = None):
+    """Capability probe for exact MCX Copper option live quotes.
+
+    This may run while the exchange is closed because it only verifies whether
+    Groww exposes the last traded quote for currently active CE/PE contracts.
+    It never persists data or changes a trading decision.
+    """
+    observed_at = _timestamp(now or datetime.now(IST))
+    await underlying_store.initialize()
+    rows = await underlying_store.read_symbol(
+        "COPPER",
+        TIMEFRAME_MINUTES,
+        observed_at - timedelta(days=7),
+        observed_at,
+    )
+    usable = []
+    for row in rows or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            continue
+        try:
+            stamp = _timestamp(row[0])
+            close = float(row[4])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp <= observed_at and close > 0:
+            usable.append((stamp, close))
+    if not usable:
+        return {
+            "mode": "COPPER_OPTION_LIVE_QUOTE_PROBE_V1",
+            "status": "NO_UNDERLYING_REFERENCE",
+            "research_only": True,
+            "production_rules_changed": False,
+            "live_execution_enabled": False,
+            "observed_at": observed_at.isoformat(),
+            "quotes": [],
+        }
+
+    reference_at, underlying_price = max(usable, key=lambda item: item[0])
+    master = await _current_master()
+    contracts = []
+    for option_type in ("CE", "PE"):
+        ranked = ranked_mcx_option_contracts(
+            master,
+            "COPPER",
+            observed_at.date(),
+            underlying_price,
+            option_type,
+            max_strikes=1,
+        )
+        if ranked:
+            contracts.append(ranked[0])
+
+    quotes = []
+    for contract in contracts:
+        try:
+            quote = await fetch_mcx_option_live_quote(provider, contract)
+            quotes.append({
+                "status": "AVAILABLE",
+                "option_type": contract.get("option_type"),
+                "strike": contract.get("strike"),
+                "expiry": contract.get("expiry"),
+                "trading_symbol": contract.get("trading_symbol"),
+                "last_price": quote.get("last_price"),
+                "bid_price": quote.get("bid_price"),
+                "ask_price": quote.get("ask_price"),
+                "volume": quote.get("volume"),
+                "open_interest": quote.get("open_interest"),
+            })
+        except Exception as exc:
+            quotes.append({
+                "status": "DATA_ERROR",
+                "option_type": contract.get("option_type"),
+                "strike": contract.get("strike"),
+                "expiry": contract.get("expiry"),
+                "trading_symbol": contract.get("trading_symbol"),
+                "error": f"{exc.__class__.__name__}: {str(exc)[:200]}",
+            })
+
+    available_types = {
+        row.get("option_type")
+        for row in quotes
+        if row.get("status") == "AVAILABLE" and _number(row.get("last_price")) is not None
+    }
+    return {
+        "mode": "COPPER_OPTION_LIVE_QUOTE_PROBE_V1",
+        "status": "AVAILABLE" if {"CE", "PE"}.issubset(available_types) else "PARTIAL" if available_types else "UNAVAILABLE",
+        "research_only": True,
+        "production_rules_changed": False,
+        "live_execution_enabled": False,
+        "observed_at": observed_at.isoformat(),
+        "underlying_reference_at": reference_at.isoformat(),
+        "underlying_reference_price": underlying_price,
+        "quotes": quotes,
     }

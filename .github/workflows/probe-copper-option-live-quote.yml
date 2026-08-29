@@ -1,0 +1,67 @@
+name: Probe Copper Option Live Quote
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/commodity_option_snapshot_collector.py"
+      - "app/main.py"
+      - ".github/workflows/probe-copper-option-live-quote.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for Copper live quote probe deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-options/live-quote-probe" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Probe active Copper CE and PE live quotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 120             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-options/live-quote-probe"             -o probe-result.json
+          python - <<'PY'
+          import json
+          result=json.load(open("probe-result.json"))
+          assert result.get("status")=="AVAILABLE", result
+          assert result.get("research_only") is True, result
+          assert result.get("production_rules_changed") is False, result
+          assert result.get("live_execution_enabled") is False, result
+          rows=result.get("quotes") or []
+          available={row.get("option_type"):row for row in rows if row.get("status")=="AVAILABLE"}
+          assert {"CE","PE"}.issubset(available), result
+          assert float(available["CE"]["last_price"]) > 0, result
+          assert float(available["PE"]["last_price"]) > 0, result
+          print(json.dumps({
+              "status":result.get("status"),
+              "underlying_reference_price":result.get("underlying_reference_price"),
+              "ce":available["CE"],
+              "pe":available["PE"],
+          },indent=2))
+          PY
+      - name: Upload probe result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-option-live-quote-probe
+          path: probe-result.json
