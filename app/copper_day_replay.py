@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, time
 from hashlib import sha256
@@ -161,6 +162,7 @@ def replay_contract_rows(rows, contract_metadata=None):
     if not clean:
         raise RuntimeError("No usable stored Copper candles")
 
+    timestamps = [row[0] for row in clean]
     by_day = defaultdict(list)
     for row in clean:
         by_day[row[0].date()].append(row)
@@ -185,8 +187,11 @@ def replay_contract_rows(rows, contract_metadata=None):
                 })
                 continue
 
-            history = [row for row in clean if row[0] <= click_at]
-            day_future = [row for row in session_rows if row[0] > click_at]
+            history_end = bisect_right(timestamps, click_at)
+            history = clean[max(0, history_end - 260):history_end]
+            session_stamps = [row[0] for row in session_rows]
+            future_start = bisect_right(session_stamps, click_at)
+            day_future = session_rows[future_start:]
             if len(history) < 60 or not day_future:
                 decisions.append({
                     "clicked_at": click_at.isoformat(),
