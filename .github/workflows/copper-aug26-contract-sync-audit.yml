@@ -1,0 +1,85 @@
+name: Copper Aug26 Contract Sync Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/mcx_calendar.py"
+      - "app/commodities.py"
+      - "app/copper_contract_sync_audit.py"
+      - "app/commodity_continuous_backtest.py"
+      - "app/main.py"
+      - ".github/workflows/copper-aug26-contract-sync-audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-aug26-contract-sync-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for contract sync audit deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..42}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/copper/aug26-contract-sync-audit" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Sync and audit Copper Aug26 contract window
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 720             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/aug26-contract-sync-audit"             -o contract-sync-audit.json
+          python - <<'PY'
+          import json
+          d=json.load(open("contract-sync-audit.json"))
+          assert d.get("mode")=="COPPER_AUG26_CONTRACT_SYNC_AUDIT_V1", d
+          contract=d.get("resolved_reference_contract") or {}
+          assert contract.get("expiry_date")=="2026-08-31", contract
+          assert d.get("trade_instrument")=="OPTIONS", d
+          assert d.get("futures_role")=="REFERENCE_ONLY", d
+          cal=d.get("calendar") or {}
+          assert cal.get("august_declared_trading_holidays")==[], cal
+          weekend=set(cal.get("weekend_days") or [])
+          assert {"2026-08-01","2026-08-02","2026-08-08","2026-08-09","2026-08-15","2026-08-16","2026-08-22","2026-08-23","2026-08-29","2026-08-30"}.issubset(weekend), weekend
+          sync=d.get("sync") or {}
+          assert int(sync.get("sync_failures") or 0)==0, sync
+          print(json.dumps({
+            "status":d.get("status"),
+            "contract":contract.get("trading_symbol"),
+            "expiry":contract.get("expiry_date"),
+            "provider_5m_rows":sync.get("provider_5m_rows"),
+            "stored_5m_rows":sync.get("stored_5m_rows"),
+            "expected_trading_days":sync.get("expected_trading_days"),
+            "partial_sessions":sync.get("partial_sessions"),
+            "underlying_sync_ready":sync.get("underlying_sync_ready"),
+            "option_days_tested":(d.get("historical_option_minimum_gate") or {}).get("days_tested"),
+            "option_days_both_sides":(d.get("historical_option_minimum_gate") or {}).get("days_with_both_ce_pe_history"),
+            "option_history_ready":(d.get("historical_option_minimum_gate") or {}).get("option_history_ready_for_full_window"),
+            "ready_for_options_backtest":d.get("ready_for_options_backtest"),
+          },indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-aug26-contract-sync-audit
+          path: contract-sync-audit.json
