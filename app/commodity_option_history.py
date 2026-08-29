@@ -10,7 +10,7 @@ from .fno_history_probe import INSTRUMENT_CSV_URL
 
 
 IST = ZoneInfo("Asia/Kolkata")
-SUPPORTED = {"CRUDEOIL", "NATURALGAS"}
+SUPPORTED = {"COPPER", "CRUDEOIL", "NATURALGAS"}
 AUTO_EXPIRY_MAX_DTE_DAYS = 35
 
 
@@ -106,7 +106,7 @@ def select_mcx_option_contract(master_rows, symbol, trade_date, underlying_price
     when = trade_date if isinstance(trade_date, date) else datetime.fromisoformat(str(trade_date)[:10]).date()
     price = _number(underlying_price)
     if symbol not in SUPPORTED:
-        raise ValueError("symbol must be CRUDEOIL or NATURALGAS")
+        raise ValueError("symbol must be COPPER, CRUDEOIL or NATURALGAS")
     if option_type not in {"CE", "PE"}:
         raise ValueError("option_type must be CE or PE")
     if price is None or price <= 0:
@@ -135,6 +135,159 @@ def select_mcx_option_contract(master_rows, symbol, trade_date, underlying_price
         "expiry_dte": (nearest_expiry - when).days,
         "strike_selection": "NEAREST_LISTED_STRIKE_TO_POINT_IN_TIME_UNDERLYING",
         "distance_from_underlying": round(distance, 4),
+        "research_only": True,
+    }
+
+
+def ranked_mcx_option_contracts(master_rows, symbol, trade_date, underlying_price, option_type, max_strikes=12):
+    """
+    Rank nearest-expiry MCX options from nearest strike outward.
+
+    Affordability is intentionally not decided here because it depends on the
+    point-in-time option premium, which must come from historical/live data.
+    """
+    symbol = str(symbol).upper().strip()
+    option_type = str(option_type).upper().strip()
+    when = trade_date if isinstance(trade_date, date) else datetime.fromisoformat(str(trade_date)[:10]).date()
+    price = _number(underlying_price)
+    if symbol not in SUPPORTED:
+        raise ValueError("symbol must be COPPER, CRUDEOIL or NATURALGAS")
+    if option_type not in {"CE", "PE"}:
+        raise ValueError("option_type must be CE or PE")
+    if price is None or price <= 0:
+        raise ValueError("underlying_price must be positive")
+
+    candidates = []
+    for row in master_rows or []:
+        if str(row.get("underlying") or "").upper() != symbol:
+            continue
+        if str(row.get("option_type") or "").upper() != option_type:
+            continue
+        expiry_date = _expiry(row.get("expiry"))
+        strike = _number(row.get("strike"))
+        if expiry_date is None or strike is None or expiry_date < when:
+            continue
+        dte = (expiry_date - when).days
+        if dte > AUTO_EXPIRY_MAX_DTE_DAYS:
+            continue
+        candidates.append((expiry_date, abs(strike - price), strike, row))
+    if not candidates:
+        return []
+
+    nearest_expiry = min(item[0] for item in candidates)
+    same_expiry = [item for item in candidates if item[0] == nearest_expiry]
+    ranked = sorted(same_expiry, key=lambda item: (item[1], item[2]))[:max(1, int(max_strikes))]
+    return [
+        {
+            **row,
+            "expiry_dte": (nearest_expiry - when).days,
+            "strike_selection_rank": rank,
+            "distance_from_underlying": round(distance, 4),
+            "research_only": True,
+        }
+        for rank, (_expiry_date, distance, _strike, row) in enumerate(ranked, start=1)
+    ]
+
+
+def option_lot_affordability(entry_premium, lot_size, budget_rupees=15000.0):
+    premium = _number(entry_premium)
+    try:
+        lot = int(lot_size)
+    except (TypeError, ValueError):
+        lot = 0
+    budget = float(budget_rupees)
+    if premium is None or premium <= 0 or lot <= 0 or budget <= 0:
+        return {
+            "affordable": False,
+            "entry_premium": premium,
+            "lot_size": lot or None,
+            "budget_rupees": budget,
+            "cost_per_lot_rupees": None,
+            "lots": 0,
+            "deployed_amount_rupees": 0.0,
+        }
+    cost_per_lot = premium * lot
+    lots = int(budget // cost_per_lot) if cost_per_lot > 0 else 0
+    return {
+        "affordable": lots >= 1,
+        "entry_premium": round(premium, 4),
+        "lot_size": lot,
+        "budget_rupees": round(budget, 2),
+        "cost_per_lot_rupees": round(cost_per_lot, 2),
+        "lots": lots,
+        "deployed_amount_rupees": round(lots * cost_per_lot, 2),
+        "unused_budget_rupees": round(budget - lots * cost_per_lot, 2),
+    }
+
+
+async def select_affordable_historical_mcx_option(
+    provider,
+    master_rows,
+    symbol,
+    trade_date,
+    underlying_price,
+    option_type,
+    click_at,
+    budget_rupees=15000.0,
+    max_strikes=12,
+):
+    """
+    Select the nearest-expiry, closest-to-ATM option that is actually affordable
+    at the next 5m option candle open after the signal.
+
+    Each strike is evaluated using its own point-in-time premium. No option is
+    selected from future premium information.
+    """
+    ranked = ranked_mcx_option_contracts(
+        master_rows, symbol, trade_date, underlying_price, option_type, max_strikes=max_strikes,
+    )
+    attempts = []
+    for contract in ranked:
+        history = await fetch_mcx_option_day(provider, contract, trade_date)
+        candles = history.get("candles", [])
+        entry = premium_entry_after_click(candles, click_at)
+        if entry is None:
+            attempts.append({
+                "strike": contract.get("strike"),
+                "trading_symbol": contract.get("trading_symbol"),
+                "status": "NO_ENTRY_CANDLE",
+                "candles_available": len(candles),
+            })
+            continue
+        affordability = option_lot_affordability(
+            entry["entry_price"], contract.get("lot_size"), budget_rupees,
+        )
+        attempts.append({
+            "strike": contract.get("strike"),
+            "trading_symbol": contract.get("trading_symbol"),
+            "entry_at": entry.get("entry_at"),
+            "entry_premium": entry.get("entry_price"),
+            "lot_size": contract.get("lot_size"),
+            "cost_per_lot_rupees": affordability.get("cost_per_lot_rupees"),
+            "lots": affordability.get("lots"),
+            "status": "AFFORDABLE" if affordability["affordable"] else "TOO_EXPENSIVE",
+        })
+        if affordability["affordable"]:
+            return {
+                "status": "SELECTED",
+                "contract": contract,
+                "entry": entry,
+                "affordability": affordability,
+                "candles": candles,
+                "selection_rule": (
+                    "Nearest expiry; strikes ranked from ATM outward; first strike "
+                    "with at least one whole lot affordable under the daily budget."
+                ),
+                "attempts": attempts,
+                "research_only": True,
+            }
+    return {
+        "status": "NO_AFFORDABLE_OPTION",
+        "symbol": str(symbol).upper(),
+        "trade_date": str(trade_date)[:10],
+        "option_type": str(option_type).upper(),
+        "budget_rupees": float(budget_rupees),
+        "attempts": attempts,
         "research_only": True,
     }
 
