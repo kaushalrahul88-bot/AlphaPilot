@@ -356,31 +356,35 @@ async def collect_copper_option_snapshots(
         if stamp.date() == observed_at.date() and stamp <= observed_at and close > 0:
             usable.append((stamp, row))
 
-    if not usable:
-        return {
-            "status": "NO_ACTIVE_UNDERLYING_SESSION",
-            "research_only": True,
-            "production_rules_changed": False,
-            "live_execution_enabled": False,
-            "observed_at": observed_at.isoformat(),
-            "snapshots": 0,
+    latest_stamp = None
+    underlying_candle_close = None
+    underlying_age_minutes = None
+    if usable:
+        latest_stamp, latest_row = max(usable, key=lambda item: item[0])
+        underlying_candle_close = float(latest_row[4])
+        underlying_age_minutes = (observed_at - latest_stamp).total_seconds() / 60.0
+        candle_health = {
+            "status": (
+                "FRESH"
+                if underlying_age_minutes <= MAX_UNDERLYING_AGE_MINUTES
+                else "STALE"
+            ),
+            "pass": underlying_age_minutes <= MAX_UNDERLYING_AGE_MINUTES,
+            "latest_at": latest_stamp.isoformat(),
+            "age_minutes": round(underlying_age_minutes, 2),
+            "close": underlying_candle_close,
+            "max_age_minutes": MAX_UNDERLYING_AGE_MINUTES,
+        }
+    else:
+        candle_health = {
+            "status": "MISSING",
+            "pass": False,
+            "latest_at": None,
+            "age_minutes": None,
+            "close": None,
+            "max_age_minutes": MAX_UNDERLYING_AGE_MINUTES,
         }
 
-    latest_stamp, latest_row = max(usable, key=lambda item: item[0])
-    underlying_age_minutes = (observed_at - latest_stamp).total_seconds() / 60.0
-    if underlying_age_minutes > MAX_UNDERLYING_AGE_MINUTES:
-        return {
-            "status": "STALE_UNDERLYING_CANDLE",
-            "research_only": True,
-            "production_rules_changed": False,
-            "live_execution_enabled": False,
-            "observed_at": observed_at.isoformat(),
-            "latest_underlying_at": latest_stamp.isoformat(),
-            "underlying_age_minutes": round(underlying_age_minutes, 2),
-            "snapshots": 0,
-        }
-
-    underlying_candle_close = float(latest_row[4])
     try:
         live_underlying = await commodity_quote(provider, "COPPER")
         underlying_price = _number(
@@ -399,9 +403,7 @@ async def collect_copper_option_snapshots(
             "production_rules_changed": False,
             "live_execution_enabled": False,
             "observed_at": observed_at.isoformat(),
-            "latest_underlying_at": latest_stamp.isoformat(),
-            "underlying_candle_close": underlying_candle_close,
-            "underlying_age_minutes": round(underlying_age_minutes, 2),
+            "underlying_candle_health": candle_health,
             "snapshots": 0,
             "error": f"{exc.__class__.__name__}: {str(exc)[:160]}",
         }
@@ -434,6 +436,9 @@ async def collect_copper_option_snapshots(
             "live_execution_enabled": False,
             "observed_at": observed_at.isoformat(),
             "underlying_price": underlying_price,
+            "underlying_price_source": "LIVE_MCX_FUTURE_QUOTE",
+            "underlying_contract": underlying_contract,
+            "underlying_candle_health": candle_health,
             "snapshots": 0,
         }
 
@@ -498,9 +503,10 @@ async def collect_copper_option_snapshots(
         "underlying_price": underlying_price,
         "underlying_price_source": "LIVE_MCX_FUTURE_QUOTE",
         "underlying_contract": underlying_contract,
+        "underlying_candle_health": candle_health,
         "underlying_candle_close": underlying_candle_close,
-        "latest_underlying_at": latest_stamp.isoformat(),
-        "underlying_age_minutes": round(underlying_age_minutes, 2),
+        "latest_underlying_at": latest_stamp.isoformat() if latest_stamp else None,
+        "underlying_age_minutes": round(underlying_age_minutes, 2) if underlying_age_minutes is not None else None,
         "strikes_per_type": strike_count,
         "selected_strike_range": {
             "low": min(strikes) if strikes else None,
@@ -518,5 +524,5 @@ async def collect_copper_option_snapshots(
         },
         "contracts": details,
         "idempotency_key": "provider+trading_symbol+sample_bucket_at",
-        "guardrail": "These are sampled live LTP observations, not reconstructed 5-minute OHLC candles. Strike selection is anchored to the live Copper futures quote; stored 5-minute Copper candles are used independently as a freshness/health gate.",
+        "guardrail": "These are sampled live LTP observations, not reconstructed 5-minute OHLC candles. Strike selection is anchored to the live Copper futures quote. Stored 5-minute Copper candles are an independent health diagnostic and do not suppress otherwise valid live option observations.",
     }
