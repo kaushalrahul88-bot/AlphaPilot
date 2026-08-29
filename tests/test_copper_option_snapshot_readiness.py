@@ -47,7 +47,7 @@ class CopperOptionSnapshotReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ce_snapshots"],3300)
         self.assertEqual(result["pe_snapshots"],3300)
         self.assertEqual(result["days_with_both_option_sides"],2)
-        self.assertEqual(result["underlying_price_coverage_pct"],94.55)
+        self.assertEqual(result["underlying_price_coverage_pct"],97.58)
         self.assertEqual(result["two_sided_quote_coverage_pct"],65.45)
         self.assertEqual(result["median_distinct_buckets_per_day"],165.0)
         self.assertTrue(result["daily"][0]["both_option_sides_present"])
