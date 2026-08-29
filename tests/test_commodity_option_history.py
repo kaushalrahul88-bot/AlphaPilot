@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock, patch
 from app.commodity_option_history import (
     _option_row,
     fetch_mcx_option_day,
+    option_lot_affordability,
     premium_entry_after_click,
     probe_mcx_option_history,
+    ranked_mcx_option_contracts,
+    select_affordable_historical_mcx_option,
     scan_mcx_option_history_band,
     select_mcx_option_contract,
 )
@@ -29,7 +32,7 @@ def contract(symbol, option_type, expiry, strike, groww_symbol=None):
         "strike": float(strike),
         "groww_symbol": groww_symbol or f"MCX-{symbol}-{expiry}-{strike}-{option_type}",
         "trading_symbol": f"{symbol}{strike}{option_type}",
-        "lot_size": 100 if symbol == "CRUDEOIL" else 1250,
+        "lot_size": 100 if symbol == "CRUDEOIL" else 2500 if symbol == "COPPER" else 1250,
         "tick_size": 0.1,
         "buy_allowed": True,
     }
@@ -154,3 +157,69 @@ class CommodityOptionHistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_copper_option_rows_are_supported(self):
+        row = {
+            "exchange": "MCX", "segment": "COMMODITY", "underlying_symbol": "COPPER",
+            "instrument_type": "CE", "expiry_date": "2026-09-30", "strike_price": "950",
+            "groww_symbol": "MCX-COPPER-30Sep26-950-CE", "trading_symbol": "COPPER30SEP26950CE",
+            "lot_size": "2500", "tick_size": "5.0", "buy_allowed": "1",
+        }
+        normalized = _option_row(row, {"COPPER"})
+        self.assertEqual(normalized["underlying"], "COPPER")
+        self.assertEqual(normalized["lot_size"], 2500)
+
+    def test_affordability_uses_whole_lots_under_15000(self):
+        affordable = option_lot_affordability(2.0, 2500, 15000)
+        self.assertTrue(affordable["affordable"])
+        self.assertEqual(affordable["cost_per_lot_rupees"], 5000.0)
+        self.assertEqual(affordable["lots"], 3)
+        self.assertEqual(affordable["deployed_amount_rupees"], 15000.0)
+
+        expensive = option_lot_affordability(7.0, 2500, 15000)
+        self.assertFalse(expensive["affordable"])
+        self.assertEqual(expensive["lots"], 0)
+
+    def test_ranked_copper_contracts_start_nearest_to_atm(self):
+        rows = [
+            contract("COPPER", "CE", "2026-09-30", 900),
+            contract("COPPER", "CE", "2026-09-30", 925),
+            contract("COPPER", "CE", "2026-09-30", 950),
+            contract("COPPER", "CE", "2026-10-30", 925),
+        ]
+        ranked = ranked_mcx_option_contracts(rows, "COPPER", "2026-08-25", 932, "CE")
+        self.assertEqual([x["strike"] for x in ranked[:3]], [925.0, 950.0, 900.0])
+
+    def test_affordable_selector_moves_outward_when_atm_is_too_expensive(self):
+        rows = [
+            contract("COPPER", "CE", "2026-09-30", 925),
+            contract("COPPER", "CE", "2026-09-30", 950),
+        ]
+        click = datetime(2026, 8, 25, 10, 55, tzinfo=IST)
+
+        async def fake_history(provider, selected, trade_date, client=None):
+            premium = 8.0 if selected["strike"] == 925.0 else 4.0
+            candles = [
+                [click.isoformat(), premium, premium, premium, premium, 10],
+                [(click + timedelta(minutes=5)).isoformat(), premium, premium, premium, premium, 10],
+            ]
+            return {"status": "AVAILABLE", "candles": candles}
+
+        async def run():
+            with patch(
+                "app.commodity_option_history.fetch_mcx_option_day",
+                new=AsyncMock(side_effect=fake_history),
+            ):
+                return await select_affordable_historical_mcx_option(
+                    Provider(), rows, "COPPER", "2026-08-25", 932, "CE",
+                    click, budget_rupees=15000,
+                )
+
+        result = asyncio.run(run())
+        self.assertEqual(result["status"], "SELECTED")
+        self.assertEqual(result["contract"]["strike"], 950.0)
+        self.assertEqual(result["affordability"]["lots"], 1)
+        self.assertEqual(result["affordability"]["deployed_amount_rupees"], 10000.0)
+        self.assertEqual(result["attempts"][0]["status"], "TOO_EXPENSIVE")
+        self.assertEqual(result["attempts"][1]["status"], "AFFORDABLE")
