@@ -68,6 +68,7 @@ class CandleStore(Protocol):
     async def latest_candle_at(self, trading_symbol: str, timeframe_minutes: int) -> datetime | None: ...
     async def upsert(self, records: list[dict]) -> int: ...
     async def read_symbol(self, symbol: str, timeframe_minutes: int, start: datetime, end: datetime) -> list[list]: ...
+    async def read_symbol_contract_segments(self, symbol: str, timeframe_minutes: int, start: datetime, end: datetime) -> list[dict]: ...
     async def status(self) -> dict: ...
 
 
@@ -145,6 +146,43 @@ class PostgresCandleStore:
     async def read_symbol(self, symbol, timeframe_minutes, start, end):
         return await asyncio.to_thread(
             self._read_symbol_sync, symbol, timeframe_minutes, start, end,
+        )
+
+
+    def _read_symbol_contract_segments_sync(self, symbol, timeframe_minutes, start, end):
+        sql = """
+            SELECT trading_symbol, expiry_date, candle_at, open, high, low, close, volume, open_interest
+            FROM commodity_candles
+            WHERE provider = %s AND symbol = %s AND timeframe_minutes = %s
+              AND candle_at >= %s AND candle_at <= %s
+            ORDER BY candle_at ASC, trading_symbol ASC
+        """
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, (PROVIDER, str(symbol).upper(), int(timeframe_minutes), start, end))
+                rows = cursor.fetchall()
+        segments = []
+        current = None
+        for trading_symbol, expiry_date, candle_at, open_price, high, low, close, volume, open_interest in rows:
+            if current is None or current["trading_symbol"] != trading_symbol:
+                current = {
+                    "trading_symbol": trading_symbol,
+                    "expiry_date": expiry_date.isoformat() if expiry_date else None,
+                    "candles": [],
+                }
+                segments.append(current)
+            current["candles"].append([
+                candle_at.isoformat(),
+                float(open_price), float(high), float(low), float(close),
+                float(volume or 0),
+                float(open_interest) if open_interest is not None else None,
+            ])
+        return segments
+
+    async def read_symbol_contract_segments(self, symbol, timeframe_minutes, start, end):
+        return await asyncio.to_thread(
+            self._read_symbol_contract_segments_sync,
+            symbol, timeframe_minutes, start, end,
         )
 
     def _status_sync(self):
