@@ -137,3 +137,36 @@ def test_stored_stability_never_crosses_contract_boundaries():
     assert result["coverage"]["contracts"] == 2
     expected = sum(len(build_copper_experiences(segment, sample_every_bars=3)) for segment in (_rows(150,800.0), _rows(150,1200.0)))
     assert result["coverage"]["experiences"] == expected
+
+
+class CopperInformationQualityV2Tests(unittest.TestCase):
+    def test_snapshot_adds_session_location_without_future_data(self):
+        rows = []
+        base = datetime(2026, 8, 28, 9, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        for i in range(70):
+            price = 900.0 + i * 0.25
+            rows.append([
+                (base + timedelta(minutes=5*i)).isoformat(),
+                price - 0.1, price + 0.4, price - 0.3, price,
+                1000 + i * 10, 50000 + i * 5,
+            ])
+        snapshot = build_copper_snapshot(rows, 60)
+        self.assertIn("session_range_position", snapshot)
+        self.assertIn("session_vwap_gap_pct", snapshot)
+        self.assertIn("opening_range_break", snapshot)
+        self.assertIn("time_adjusted_relative_volume", snapshot)
+        self.assertIn("price_oi_state", snapshot)
+        self.assertEqual(snapshot["opening_range_break"], "ABOVE")
+        self.assertEqual(snapshot["price_oi_state"], "LONG_BUILDUP")
+
+    def test_snapshot_is_invariant_to_future_candle_mutation(self):
+        rows = []
+        base = datetime(2026, 8, 28, 9, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        for i in range(80):
+            price = 900.0 + i * 0.1
+            rows.append([(base + timedelta(minutes=5*i)).isoformat(), price, price+0.2, price-0.2, price, 1000, 50000])
+        before = build_copper_snapshot(rows, 60)
+        rows[70][2] = 9999.0
+        rows[70][5] = 99999999
+        after = build_copper_snapshot(rows, 60)
+        self.assertEqual(before, after)
