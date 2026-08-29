@@ -18,6 +18,8 @@ from .copper_research_brain import run_copper_research_baseline, run_copper_brai
 from .copper_avoidance_forward_validation import run_copper_avoidance_forward_validation_from_store
 from .copper_day_replay import run_copper_day_by_day_replay_from_store
 from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, backfill_continuous_commodity_candles, collect_completed_commodity_candles
+from .historical_context import PostgresHistoricalContextStore
+from .copper_context_ablation import build_copper_context_coverage_for_days
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -422,6 +424,38 @@ async def copper_expanding_daily_edge_stored_v1(request:CopperResearchBaselineRe
         )
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("stored Copper expanding daily edge",exc)
+
+@app.post("/v1/research/copper/expanding-daily-edge-context-audit-v1")
+async def copper_expanding_daily_edge_context_audit_v1(request:CopperResearchBaselineRequest):
+    if not settings.database_url.strip():
+        raise HTTPException(status_code=503,detail={"code":"RESEARCH_STORE_DISABLED","message":"Configure DATABASE_URL to enable stored Copper research"})
+    try:
+        replay=await run_copper_expanding_daily_edge_from_store(
+            PostgresCandleStore(settings.database_url),
+            days=request.days,
+            sample_every_bars=request.sample_every_bars,
+            round_trip_cost_bps=request.round_trip_cost_bps,
+            minimum_training_signals=20,
+        )
+        test_days=[row["test_day"] for row in replay["backtest"]["daily_results"]]
+        context_store=PostgresHistoricalContextStore(settings.database_url)
+        context_store.initialize()
+        audit=build_copper_context_coverage_for_days(context_store,test_days,decision_hour=10)
+        return {
+            "mode":"ALPHAPILOT_COPPER_EXPANDING_CONTEXT_AUDIT_V1",
+            "research_only":True,
+            "production_rules_changed":False,
+            "decision_time_policy":"10:00 Asia/Kolkata for day-level context coverage audit",
+            "replay_summary":{
+                "calendar_days_observed":replay["backtest"]["calendar_days_observed"],
+                "test_days":replay["backtest"]["test_days"],
+                "aggregate":replay["backtest"]["aggregate"],
+            },
+            "context_coverage":audit,
+            "guardrail":"Context is reported only when available_at <= simulated decision time. It does not affect the hypothesis in this audit.",
+        }
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("stored Copper context coverage audit",exc)
 
 @app.post("/v1/research/copper/regime-stability-stored-v1")
 async def copper_regime_stability_stored_v1(request:CopperResearchBaselineRequest):
