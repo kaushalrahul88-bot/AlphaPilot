@@ -1,0 +1,67 @@
+name: Copper Information Quality Stability
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-information-quality-stability.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for enriched stability deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/copper/regime-stability-stored-v1" in (d.get("paths") or {}) else 1)'; then
+                sleep 30
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Run enriched stored Copper stability
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 180             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/regime-stability-stored-v1"             -d '{"days":180,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-information-quality-stability.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-information-quality-stability.json"))
+          s=d["study"]
+          wanted=[
+            "session_location_bucket",
+            "vwap_location_bucket",
+            "opening_range_break",
+            "time_adjusted_volume_bucket",
+            "price_oi_state",
+          ]
+          print(json.dumps({
+            "coverage": d.get("coverage"),
+            "windows": s.get("windows"),
+            "window_sizes": s.get("window_sizes"),
+            "new_feature_stability": {k:s.get("stability",{}).get(k,{}) for k in wanted},
+            "recurring_positive_candidates": [
+              x for x in s.get("recurring_positive_candidates",[])
+              if x.get("dimension") in wanted
+            ],
+          }, indent=2))
+          PY
+
+      - name: Upload study result
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-information-quality-stability
+          path: copper-information-quality-stability.json
