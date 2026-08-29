@@ -1,0 +1,68 @@
+name: Copper Market Brain Error Attribution
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_market_brain_error_attribution.py"
+      - "app/main.py"
+      - ".github/workflows/copper-market-brain-error-attribution.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-market-brain-error-attribution
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for attribution endpoint deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/copper/market-brain-error-attribution" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Run descriptive error attribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 300             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/market-brain-error-attribution?sample_every_bars=3"             -o attribution.json
+          python - <<'PY'
+          import json
+          d=json.load(open("attribution.json"))
+          assert d.get("mode")=="COPPER_MARKET_BRAIN_ERROR_ATTRIBUTION_V1", d
+          assert d.get("descriptive_only") is True, d
+          assert d.get("strategy_rules_changed") is False, d
+          print(json.dumps({
+            "brain_a_overall":(d.get("brain_a") or {}).get("overall"),
+            "brain_a_stable_good":(d.get("brain_a") or {}).get("stable_above_50_pct_states"),
+            "brain_a_stable_bad":(d.get("brain_a") or {}).get("stable_below_50_pct_states"),
+            "brain_b_overall":(d.get("brain_b") or {}).get("overall"),
+            "brain_b_stable_good":(d.get("brain_b") or {}).get("stable_above_50_pct_states"),
+            "brain_b_stable_bad":(d.get("brain_b") or {}).get("stable_below_50_pct_states"),
+          },indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-market-brain-error-attribution
+          path: attribution.json
