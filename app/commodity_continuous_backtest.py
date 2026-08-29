@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import datetime, timedelta
+
+import httpx
 from zoneinfo import ZoneInfo
 
 from .commodities import MCX_TICK_SIZE_RUPEES, _download_instrument_master_to_tempfile, _parse_expiry, SUPPORTED_COMMODITIES, analyze_commodity_candles
@@ -32,7 +35,136 @@ def _weekday_count(start, end):
     return count
 
 
-async def discover_mcx_contracts(symbol):
+def _month_keys(start, end):
+    current = start.replace(day=1)
+    finish = end.replace(day=1)
+    out = []
+    while current <= finish:
+        out.append((current.year, current.month))
+        current = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return out
+
+
+def _historical_future_contract(symbol, groww_symbol):
+    """Parse Groww's canonical historical FUT identifier into an MCX contract."""
+    raw = str(groww_symbol or "").strip()
+    pattern = rf"^MCX-{re.escape(symbol)}-(\d{{2}}[A-Za-z]{{3}}\d{{2}})-FUT$"
+    match = re.match(pattern, raw, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        expiry = datetime.strptime(match.group(1), "%d%b%y").date()
+    except ValueError:
+        return None
+    compact = expiry.strftime("%d%b%y").upper()
+    return {
+        "underlying": symbol,
+        "exchange": "MCX",
+        "segment": "COMMODITY",
+        "trading_symbol": f"{symbol}{compact}FUT",
+        "groww_symbol": raw,
+        "expiry_date": expiry.isoformat(),
+        "lot_size": None,
+        "tick_size": MCX_TICK_SIZE_RUPEES[symbol],
+        "provider_tick_size_raw": None,
+        "tick_size_source": "MCX_CONTRACT_SPECIFICATION_2026",
+        "instrument_type": "FUT",
+        "discovery_source": "GROWW_HISTORICAL_CONTRACTS_API",
+    }
+
+
+async def discover_groww_historical_mcx_contracts(provider, symbol, start, end):
+    """
+    Ask Groww's historical expiry/contract APIs for genuine archived MCX futures.
+
+    Groww documents these APIs for NSE/BSE F&O. MCX support is therefore probed
+    at runtime and never assumed. If MCX is rejected or returns no futures,
+    supported=False and callers must fail closed rather than reuse today's
+    instrument master for historical dates.
+    """
+    symbol = str(symbol or "").strip().upper()
+    if symbol not in SUPPORTED_COMMODITIES:
+        raise ValueError(f"Unsupported commodity {symbol}")
+    start = _ts(start).astimezone(IST)
+    end = _ts(end).astimezone(IST)
+    query_start = start - timedelta(days=45)
+    query_end = end + timedelta(days=75)
+    expiries = set()
+    diagnostics = []
+    headers = await provider._headers()
+    async with httpx.AsyncClient(timeout=30) as client:
+        for year, month in _month_keys(query_start, query_end):
+            response = await client.get(
+                f"{provider.BASE_URL}/v1/historical/expiries",
+                headers=headers,
+                params={
+                    "exchange": "MCX",
+                    "underlying_symbol": symbol,
+                    "year": year,
+                    "month": month,
+                },
+            )
+            if response.status_code != 200:
+                diagnostics.append({
+                    "endpoint": "expiries",
+                    "year": year,
+                    "month": month,
+                    "status_code": response.status_code,
+                })
+                continue
+            try:
+                payload = response.json().get("payload", {})
+            except Exception:
+                payload = {}
+            for value in payload.get("expiries", []) if isinstance(payload, dict) else []:
+                try:
+                    expiry = datetime.fromisoformat(str(value)[:10]).date()
+                except ValueError:
+                    continue
+                if query_start.date() <= expiry <= query_end.date():
+                    expiries.add(expiry)
+
+        contracts = []
+        for expiry in sorted(expiries):
+            response = await client.get(
+                f"{provider.BASE_URL}/v1/historical/contracts",
+                headers=headers,
+                params={
+                    "exchange": "MCX",
+                    "underlying_symbol": symbol,
+                    "expiry_date": expiry.isoformat(),
+                },
+            )
+            if response.status_code != 200:
+                diagnostics.append({
+                    "endpoint": "contracts",
+                    "expiry_date": expiry.isoformat(),
+                    "status_code": response.status_code,
+                })
+                continue
+            try:
+                payload = response.json().get("payload", {})
+            except Exception:
+                payload = {}
+            raw_contracts = payload.get("contracts", []) if isinstance(payload, dict) else []
+            for value in raw_contracts:
+                parsed = _historical_future_contract(symbol, value)
+                if parsed:
+                    contracts.append(parsed)
+
+    unique = {row["groww_symbol"]: row for row in contracts}
+    ordered = sorted(unique.values(), key=lambda row: row["expiry_date"])
+    return {
+        "supported": bool(ordered),
+        "source": "GROWW_HISTORICAL_CONTRACTS_API",
+        "contracts": ordered,
+        "expiries_returned": len(expiries),
+        "diagnostics": diagnostics,
+    }
+
+
+async def discover_current_mcx_contracts(symbol):
+    """Current instrument-master contracts only; never proof of expired history."""
     symbol = str(symbol or "").strip().upper()
     if symbol not in SUPPORTED_COMMODITIES: raise ValueError(f"Unsupported commodity {symbol}")
     path = await _download_instrument_master_to_tempfile(); contracts = []
@@ -42,13 +174,27 @@ async def discover_mcx_contracts(symbol):
                 if not _matches(row, symbol): continue
                 expiry = _parse_expiry(row.get("expiry_date"))
                 raw_tick=float(row.get("tick_size") or 0) if str(row.get("tick_size") or "").strip() else None
-                contracts.append({"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":MCX_TICK_SIZE_RUPEES[symbol],"provider_tick_size_raw":raw_tick,"tick_size_source":"MCX_CONTRACT_SPECIFICATION_2026","instrument_type":str(row.get("instrument_type") or "FUT")})
+                contracts.append({"underlying":symbol,"exchange":"MCX","segment":"COMMODITY","trading_symbol":str(row.get("trading_symbol") or ""),"groww_symbol":str(row.get("groww_symbol") or ""),"expiry_date":expiry.isoformat(),"lot_size":int(float(row.get("lot_size") or 0)) if str(row.get("lot_size") or "").strip() else None,"tick_size":MCX_TICK_SIZE_RUPEES[symbol],"provider_tick_size_raw":raw_tick,"tick_size_source":"MCX_CONTRACT_SPECIFICATION_2026","instrument_type":str(row.get("instrument_type") or "FUT"),"discovery_source":"GROWW_CURRENT_INSTRUMENT_MASTER"})
     finally:
         import os
         try: os.remove(path)
         except OSError: pass
     unique = {c["trading_symbol"]: c for c in contracts if c["trading_symbol"]}
     return sorted(unique.values(), key=lambda c: c["expiry_date"])
+
+
+async def discover_mcx_contracts(symbol, provider=None, start=None, end=None):
+    """
+    Historical-safe MCX discovery.
+
+    For historical work, a provider and explicit range are required and only the
+    provider's historical contract archive is accepted. Without those arguments
+    this returns current instrument-master contracts for live/current use.
+    """
+    if provider is not None and start is not None and end is not None:
+        result = await discover_groww_historical_mcx_contracts(provider, symbol, start, end)
+        return result["contracts"]
+    return await discover_current_mcx_contracts(symbol)
 
 
 async def _run_contract_window(provider, symbol, contract, window_start, window_end, min_rr, strength_threshold, slippage_bps, cost_bps):
@@ -83,7 +229,8 @@ async def _run_contract_window(provider, symbol, contract, window_start, window_
 
 async def run_continuous_commodity_backtest(provider, symbol, days=180, min_rr=1.5, strength_threshold=65.0, slippage_bps=2.0, cost_bps=2.0):
     symbol=str(symbol or "").strip().upper(); days=max(30,min(int(days),365)); requested_end=datetime.now(IST); requested_start=requested_end-timedelta(days=days)
-    contracts=await discover_mcx_contracts(symbol)
+    historical_discovery=await discover_groww_historical_mcx_contracts(provider,symbol,requested_start,requested_end)
+    contracts=historical_discovery["contracts"]
     selected=[]
     for c in contracts:
         expiry=datetime.fromisoformat(c["expiry_date"]).replace(tzinfo=IST)
@@ -119,6 +266,7 @@ async def run_continuous_commodity_backtest(provider, symbol, days=180, min_rr=1
     rollover_method="EXPIRY_BOUNDARY_FRONT_MONTH"
 
     limitations=[
+        "Historical contract discovery uses Groww's historical expiry/contracts APIs and never treats the current instrument master as an archive of expired MCX contracts.",
         "Contract handoff is expiry-boundary based: AlphaPilot keeps each discovered contract through its expiry window and starts the next contract immediately after the prior expiry. This is a deterministic synthetic front-month series, not a volume/open-interest based institutional rollover model.",
         "Historical span, observed session-day coverage and rollover validity are reported separately; elapsed time between first and last candle is not treated as proof that every trading day is present.",
         "Coverage percentage uses unique weekdays with at least one in-window 5m candle. Exchange holidays are not removed from the denominator, so the percentage is intentionally conservative.",
@@ -129,4 +277,4 @@ async def run_continuous_commodity_backtest(provider, symbol, days=180, min_rr=1
     if not rollover_valid and distinct_contracts==1:
         limitations.insert(0,"Only one contract contributed. Treat performance as single-contract extended history, NOT as continuous-contract evidence.")
 
-    return {"mode":"MCX_CONTINUOUS_AVAILABLE_CONTRACTS","rollover_method":rollover_method,"classification":classification,"rollover_valid":rollover_valid,"coverage_confidence":confidence,"symbol":symbol,"requested_days":days,"requested_start":requested_start.isoformat(),"requested_end":requested_end.isoformat(),"actual_start":actual_start.isoformat() if actual_start else None,"actual_end":actual_end.isoformat() if actual_end else None,"coverage_days":span_days,"coverage_ratio_pct":historical_coverage_pct,"historical_coverage_days":observed_session_days,"historical_coverage_pct":historical_coverage_pct,"requested_weekdays":requested_weekdays,"observed_session_days":observed_session_days,"contracts_discovered":len(contracts),"contracts_selected":len(selected),"contracts_used":used,"contracts_skipped":skipped,"summary":_summary(all_trades),"by_action":{"BUY":_summary([t for t in all_trades if t["action"]=="BUY"]),"SELL":_summary([t for t in all_trades if t["action"]=="SELL"])},"trades":all_trades[-300:],"limitations":limitations}
+    return {"mode":"MCX_CONTINUOUS_AVAILABLE_CONTRACTS","historical_contract_discovery":historical_discovery,"rollover_method":rollover_method,"classification":classification,"rollover_valid":rollover_valid,"coverage_confidence":confidence,"symbol":symbol,"requested_days":days,"requested_start":requested_start.isoformat(),"requested_end":requested_end.isoformat(),"actual_start":actual_start.isoformat() if actual_start else None,"actual_end":actual_end.isoformat() if actual_end else None,"coverage_days":span_days,"coverage_ratio_pct":historical_coverage_pct,"historical_coverage_days":observed_session_days,"historical_coverage_pct":historical_coverage_pct,"requested_weekdays":requested_weekdays,"observed_session_days":observed_session_days,"contracts_discovered":len(contracts),"contracts_selected":len(selected),"contracts_used":used,"contracts_skipped":skipped,"summary":_summary(all_trades),"by_action":{"BUY":_summary([t for t in all_trades if t["action"]=="BUY"]),"SELL":_summary([t for t in all_trades if t["action"]=="SELL"])},"trades":all_trades[-300:],"limitations":limitations}
