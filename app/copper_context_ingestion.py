@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from .historical_context import HistoricalContext
 
 CFTC_DISAGG_FUTURES_ONLY="https://publicreporting.cftc.gov/resource/72hh-3qpy.json"
-FRED_DEXINUS_CSV="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DEXINUS"
+FRED_DEXINUS_CSV="https://api.stlouisfed.org/fred/series/observations"
 
 
 def _get(url:str, attempts:int=3, timeout_seconds:int=30)->bytes:
@@ -61,29 +61,26 @@ def fetch_cftc_copper_positioning(start_date:str,end_date:str)->list[HistoricalC
     return out
 
 
-def fetch_fred_usdinr_daily(start_date:str|None=None,end_date:str|None=None)->list[HistoricalContext]:
-    url=FRED_DEXINUS_CSV
-    if start_date or end_date:
-        params={"id":"DEXINUS"}
-        if start_date: params["cosd"]=start_date
-        if end_date: params["coed"]=end_date
-        url="https://fred.stlouisfed.org/graph/fredgraph.csv?"+urlencode(params)
-    rows=csv.DictReader(io.StringIO(_get(url).decode()))
+def fetch_fred_usdinr_daily(start_date:str|None=None,end_date:str|None=None,api_key:str|None=None)->list[HistoricalContext]:
+    if not api_key:
+        raise ValueError("FRED_API_KEY is required for authoritative USD/INR ingestion")
+    params={"series_id":"DEXINUS","api_key":api_key,"file_type":"json"}
+    if start_date: params["observation_start"]=start_date
+    if end_date: params["observation_end"]=end_date
+    url=FRED_DEXINUS_CSV+"?"+urlencode(params)
+    payload=json.loads(_get(url).decode())
     out=[]
-    for row in rows:
-        date=row.get("observation_date") or row.get("DATE")
-        raw=row.get("DEXINUS")
+    for row in payload.get("observations",[]):
+        date=row.get("date");raw=row.get("value")
         if not date or raw in (None,"","."):continue
         try:value=float(raw)
         except ValueError:continue
         observed=datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
-        # H.10/FRED is not an intraday FX feed. Conservative rule: prior day's
-        # observation is only usable from the following UTC day in replay.
-        available=(observed+timedelta(days=1))
+        available=observed+timedelta(days=1)
         out.append(HistoricalContext(
             context_id=f"DEXINUS_{date}",commodity="COPPER",kind="FX",
             observed_at=observed.isoformat(),available_at=available.isoformat(),
-            source_name="Federal Reserve H.10 via FRED",source_url=url,
+            source_name="Federal Reserve H.10 via FRED",source_url="https://fred.stlouisfed.org/series/DEXINUS",
             source_tier="A_PRIMARY",values={"usdinr":value},frequency="daily",
             notes="Daily reference context only; never substitute for intraday USD/INR.",
         ))
