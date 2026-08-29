@@ -301,3 +301,62 @@ async def backfill_commodity_candles(
         "completed": len(completed),
         "upserted": upserted,
     }
+
+
+async def resolve_historical_mcx_contract(symbol: str, when: datetime):
+    """Resolve the deterministic front-month contract for a historical timestamp."""
+    from .commodity_continuous_backtest import discover_mcx_contracts
+
+    symbol = str(symbol).upper().strip()
+    target = _ts(when).date()
+    contracts = await discover_mcx_contracts(symbol)
+    eligible = []
+    for contract in contracts:
+        try:
+            expiry = datetime.fromisoformat(str(contract.get("expiry_date"))[:10]).date()
+        except Exception:
+            continue
+        if expiry >= target:
+            eligible.append((expiry, contract))
+    if not eligible:
+        raise RuntimeError(f"No discovered {symbol} contract covers {target.isoformat()}")
+    return dict(min(eligible, key=lambda item: item[0])[1])
+
+
+async def backfill_continuous_commodity_candles(
+    provider,
+    store: CandleStore,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    timeframe_minutes: int = 5,
+):
+    """Persist one bounded range using the historical front-month contract for that date."""
+    symbol = str(symbol).upper().strip()
+    interval = int(timeframe_minutes)
+    start_at, end_at = _ts(start), _ts(end)
+    if end_at <= start_at:
+        raise ValueError("end must be after start")
+    if end_at - start_at > timedelta(days=1, minutes=5):
+        raise ValueError("continuous backfill range must not exceed 1 day")
+    contract = await resolve_historical_mcx_contract(symbol, start_at)
+    await store.initialize()
+    fetched = await _fetch_chunked(provider, contract, interval, start_at, end_at)
+    completed = completed_rows(fetched, end_at + timedelta(minutes=interval), interval)
+    collected_at = datetime.now(IST)
+    records = _records(symbol, contract, interval, completed, collected_at)
+    upserted = await store.upsert(records)
+    return {
+        "status": "BACKFILLED_CONTINUOUS",
+        "research_only": True,
+        "rollover_method": "EXPIRY_BOUNDARY_FRONT_MONTH",
+        "symbol": symbol,
+        "contract": contract.get("trading_symbol"),
+        "contract_expiry": contract.get("expiry_date"),
+        "timeframe_minutes": interval,
+        "start": start_at.isoformat(),
+        "end": end_at.isoformat(),
+        "fetched": len(fetched),
+        "completed": len(completed),
+        "upserted": upserted,
+    }
