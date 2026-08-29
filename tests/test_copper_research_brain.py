@@ -101,3 +101,11 @@ def test_regime_stability_splits_chronologically():
     assert sum(study["window_sizes"]) == len(experiences)
     assert "session" in study["stability"]
     assert isinstance(study["recurring_positive_candidates"], list)
+
+
+def test_experience_builder_matches_public_snapshot_and_labels():
+    rows = _rows(140)
+    experiences = build_copper_experiences(rows, sample_every_bars=3)
+    first_index = 50
+    assert experiences[0]["features"] == build_copper_snapshot(rows, first_index)
+    assert experiences[0]["labels"] == label_forward_path(rows, first_index)
