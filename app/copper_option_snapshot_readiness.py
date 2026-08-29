@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -123,32 +122,53 @@ def _load_sync(database_url, symbol, days):
     import psycopg
 
     cutoff = datetime.now(IST) - timedelta(days=max(1, min(int(days), 3650)))
-    sql = """
-        SELECT
-            (sample_bucket_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
-            COUNT(DISTINCT sample_bucket_at) AS buckets,
-            COUNT(*) AS snapshots,
-            COUNT(*) FILTER (WHERE option_type = 'CE') AS ce,
-            COUNT(*) FILTER (WHERE option_type = 'PE') AS pe,
-            COUNT(*) FILTER (
-                WHERE underlying_price IS NOT NULL AND underlying_price > 0
-            ) AS underlying_count,
-            COUNT(*) FILTER (
-                WHERE bid_price IS NOT NULL AND bid_price > 0
-                  AND ask_price IS NOT NULL AND ask_price >= bid_price
-            ) AS two_sided,
-            MIN(sample_bucket_at) AS first_at,
-            MAX(sample_bucket_at) AS last_at,
-            COUNT(DISTINCT trading_symbol) AS contracts
-        FROM commodity_option_snapshots
-        WHERE provider = %s
-          AND underlying_symbol = %s
-          AND sample_bucket_at >= %s
-        GROUP BY day
-        ORDER BY day ASC
-    """
     with psycopg.connect(str(database_url), connect_timeout=10) as connection:
         with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regclass('public.commodity_option_snapshots')")
+            relation = cursor.fetchone()
+            if not relation or relation[0] is None:
+                return summarize_snapshot_readiness([])
+
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema='public'
+                  AND table_name='commodity_option_snapshots'
+                """
+            )
+            columns = {row[0] for row in cursor.fetchall()}
+
+            underlying_expr = (
+                "COUNT(*) FILTER (WHERE underlying_price IS NOT NULL AND underlying_price > 0)"
+                if "underlying_price" in columns
+                else "0"
+            )
+            two_sided_expr = (
+                "COUNT(*) FILTER (WHERE bid_price IS NOT NULL AND bid_price > 0 "
+                "AND ask_price IS NOT NULL AND ask_price >= bid_price)"
+                if {"bid_price", "ask_price"}.issubset(columns)
+                else "0"
+            )
+            sql = f"""
+                SELECT
+                    (sample_bucket_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
+                    COUNT(DISTINCT sample_bucket_at) AS buckets,
+                    COUNT(*) AS snapshots,
+                    COUNT(*) FILTER (WHERE option_type = 'CE') AS ce,
+                    COUNT(*) FILTER (WHERE option_type = 'PE') AS pe,
+                    {underlying_expr} AS underlying_count,
+                    {two_sided_expr} AS two_sided,
+                    MIN(sample_bucket_at) AS first_at,
+                    MAX(sample_bucket_at) AS last_at,
+                    COUNT(DISTINCT trading_symbol) AS contracts
+                FROM commodity_option_snapshots
+                WHERE provider = %s
+                  AND underlying_symbol = %s
+                  AND sample_bucket_at >= %s
+                GROUP BY 1
+                ORDER BY 1 ASC
+            """
             cursor.execute(sql, (PROVIDER, str(symbol).upper(), cutoff))
             rows = cursor.fetchall()
     return summarize_snapshot_readiness(rows)
@@ -157,6 +177,4 @@ def _load_sync(database_url, symbol, days):
 async def run_snapshot_readiness(database_url, symbol="COPPER", days=60):
     if not str(database_url or "").strip():
         raise ValueError("DATABASE_URL is required for option snapshot readiness")
-    store = PostgresOptionSnapshotStore(str(database_url))
-    await store.initialize()
     return await asyncio.to_thread(_load_sync, database_url, symbol, days)
