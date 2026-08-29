@@ -336,10 +336,11 @@ async def audit_copper_aug26_contract_window(provider, store):
     option_complete_days=sum(1 for x in option_days if x.get("status")=="BOTH_OPTION_SIDES_AVAILABLE")
     option_data_ready=bool(option_days) and option_complete_days==len(option_days)
     underlying_sync_ready=not sync_failures and bool(expected_days)
-    full_backtest_ready=underlying_sync_ready and option_data_ready
+    underlying_backtest_quality_ready=underlying_sync_ready and not partial_days
+    full_backtest_ready=underlying_backtest_quality_ready and option_data_ready
 
     return {
-        "mode":"COPPER_AUG26_CONTRACT_SYNC_AUDIT_V1",
+        "mode":"COPPER_AUG26_CONTRACT_SYNC_AUDIT_V2",
         "status":"READY_FOR_OPTIONS_BACKTEST" if full_backtest_ready else "DATA_GAPS_BLOCK_OPTIONS_BACKTEST",
         "scope":"2026-08 expiry month through Friday 2026-08-28; weekend 29-30 included for calendar verification",
         "trade_instrument":"OPTIONS",
@@ -354,6 +355,7 @@ async def audit_copper_aug26_contract_window(provider, store):
             "sync_failures":len(sync_failures),
             "partial_sessions":len(partial_days),
             "underlying_sync_ready":underlying_sync_ready,
+            "underlying_backtest_quality_ready":underlying_backtest_quality_ready,
             "cross_source_partial_day_checks":cross_source,
         },
         "calendar":{
