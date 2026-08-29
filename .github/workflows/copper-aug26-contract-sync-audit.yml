@@ -51,7 +51,7 @@ jobs:
           python - <<'PY'
           import json
           d=json.load(open("contract-sync-audit.json"))
-          assert d.get("mode")=="COPPER_AUG26_CONTRACT_SYNC_AUDIT_V1", d
+          assert d.get("mode")=="COPPER_AUG26_CONTRACT_SYNC_AUDIT_V2", d
           contract=d.get("resolved_reference_contract") or {}
           assert contract.get("expiry_date")=="2026-08-31", contract
           assert d.get("trade_instrument")=="OPTIONS", d
@@ -71,9 +71,11 @@ jobs:
             "expected_trading_days":sync.get("expected_trading_days"),
             "partial_sessions":sync.get("partial_sessions"),
             "underlying_sync_ready":sync.get("underlying_sync_ready"),
+            "cross_source_partial_day_checks":sync.get("cross_source_partial_day_checks"),
             "option_days_tested":(d.get("historical_option_minimum_gate") or {}).get("days_tested"),
             "option_days_both_sides":(d.get("historical_option_minimum_gate") or {}).get("days_with_both_ce_pe_history"),
             "option_history_ready":(d.get("historical_option_minimum_gate") or {}).get("option_history_ready_for_full_window"),
+            "exact_1400_friday_probe":(d.get("historical_option_minimum_gate") or {}).get("exact_1400_friday_probe"),
             "ready_for_options_backtest":d.get("ready_for_options_backtest"),
           },indent=2))
           PY
