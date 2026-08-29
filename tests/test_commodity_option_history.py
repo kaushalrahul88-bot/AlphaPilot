@@ -155,10 +155,6 @@ class CommodityOptionHistoryTests(unittest.TestCase):
         self.assertFalse(result["live_execution_enabled"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_copper_option_rows_are_supported(self):
         row = {
             "exchange": "MCX", "segment": "COMMODITY", "underlying_symbol": "COPPER",
@@ -223,3 +219,7 @@ if __name__ == "__main__":
         self.assertEqual(result["affordability"]["deployed_amount_rupees"], 10000.0)
         self.assertEqual(result["attempts"][0]["status"], "TOO_EXPENSIVE")
         self.assertEqual(result["attempts"][1]["status"], "AFFORDABLE")
+
+
+if __name__ == "__main__":
+    unittest.main()
