@@ -12,6 +12,7 @@ import httpx
 
 from .commodity_option_history import fetch_mcx_option_master, ranked_mcx_option_contracts
 from .commodities import commodity_quote, mcx_session_status
+from .options_only_policy import assert_option_contract, mark_underlying_reference, options_only_policy
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -424,6 +425,10 @@ async def collect_copper_option_snapshots(
 
     contracts = {}
     for contract in selected:
+        try:
+            assert_option_contract(contract)
+        except ValueError:
+            continue
         trading_symbol = str(contract.get("trading_symbol") or "")
         if trading_symbol:
             contracts[trading_symbol] = contract
@@ -500,6 +505,11 @@ async def collect_copper_option_snapshots(
         "data_type": "LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC",
         "observed_at": observed_at.isoformat(),
         "sample_bucket_at": _bucket_5m(observed_at).isoformat(),
+        "trade_instrument": "OPTIONS",
+        "options_only_policy": options_only_policy(),
+        "underlying_reference": mark_underlying_reference(
+            {"last_price": underlying_price, "trading_symbol": underlying_contract}
+        ),
         "underlying_price": underlying_price,
         "underlying_price_source": "LIVE_MCX_FUTURE_QUOTE",
         "underlying_contract": underlying_contract,
