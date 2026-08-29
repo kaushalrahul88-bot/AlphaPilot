@@ -256,3 +256,31 @@ def test_interaction_stability_detects_consistent_negative_context():
     )
     assert study["recurring_negative_interactions"]
     assert not study["recurring_positive_interactions"]
+
+
+def test_expanding_daily_edge_never_uses_test_day_for_training():
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    ist=ZoneInfo("Asia/Kolkata")
+    experiences=[]
+    start=datetime(2026,8,1,10,0,tzinfo=ist)
+    for d in range(4):
+        for n in range(25):
+            ts=(start+timedelta(days=d,minutes=5*n)).isoformat()
+            experiences.append({
+                "features":{
+                    "timestamp":ts,"price":100.0,"structure":"UPTREND",
+                    "return_15m_pct":0.1,"ema20_gap_pct":0.1,"ema50_gap_pct":0.1,
+                    "atr_pct":0.2,"relative_volume":1.2,"time_adjusted_relative_volume":1.2,
+                    "session_range_position":0.8,"session_vwap_gap_pct":0.1,
+                    "opening_range_break":"ABOVE","price_oi_state":"LONG_BUILDUP",
+                },
+                "labels":{"forward_60m_pct":0.2 if d<3 else -0.2},
+            })
+    report=expanding_daily_edge_backtest(experiences,60,4.0,20)
+    assert report["test_days"]==3
+    assert report["daily_results"][0]["training_days"]==1
+    assert report["daily_results"][0]["train_through"]=="2026-08-01"
+    assert report["daily_results"][0]["test_day"]=="2026-08-02"
+    assert report["daily_results"][-1]["train_through"]=="2026-08-03"
+    assert report["daily_results"][-1]["test_day"]=="2026-08-04"
