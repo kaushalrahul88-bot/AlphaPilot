@@ -3,6 +3,7 @@ from statistics import mean
 from zoneinfo import ZoneInfo
 
 from .commodities import commodity_candles, commodity_quote, mcx_session_status, resolve_nearest_mcx_future, analyze_commodity_candles
+from .options_only_policy import options_only_policy
 
 
 def _f(value, default=0.0):
@@ -150,14 +151,21 @@ async def commodity_mtf_scan(provider, symbol, min_rr=1.5):
     elif session["is_open"] and action != "NO TRADE" and reference and not price_guard["ok"] and price_guard.get("reason"):
         blockers.append(price_guard["reason"])
 
+    directional_bias = (
+        "BULLISH" if action == "BUY"
+        else "BEARISH" if action == "SELL"
+        else "NEUTRAL"
+    )
     return {
         "provider": "GROWW",
-        "mode": "MCX_COMMODITY_MTF",
+        "mode": "MCX_COMMODITY_MTF_REFERENCE_ONLY",
         "symbol": symbol,
         "contract": contract,
         "market_session": session,
         "timeframes": frames,
-        "action": action,
+        "action": "NO TRADE",
+        "underlying_action": action,
+        "directional_bias": directional_bias,
         "alpha_score": strength,
         "raw_timeframe_alpha": {tf: _f(frames[tf].get("alpha_score"), 50) for tf in ("5m", "15m", "1h")},
         "fresh_market_data": fresh_all if session["is_open"] else None,
@@ -165,12 +173,18 @@ async def commodity_mtf_scan(provider, symbol, min_rr=1.5):
         "entry_drift_r": price_guard.get("drift_r"),
         "max_entry_drift_r": 0.50,
         "live_price_guard_passed": bool(price_guard["ok"]) if session["is_open"] and action != "NO TRADE" and reference else None,
-        "execution_ready": bool(executable),
-        "status": "READY" if executable else "SNAPSHOT" if not session["is_open"] else "WATCH",
+        "underlying_signal_ready": bool(executable),
+        "execution_ready": False,
+        "reference_only": True,
+        "execution_eligible": False,
+        "trade_instrument": "OPTIONS",
+        "options_only_policy": options_only_policy(),
+        "status": "REFERENCE_READY" if executable else "SNAPSHOT" if not session["is_open"] else "WATCH",
         "entry": reference.get("entry") if reference else None,
         "stop_loss": reference.get("stop_loss") if reference else None,
         "target1": reference.get("target1") if reference else None,
         "target2": reference.get("target2") if reference else None,
         "risk_reward": reference.get("risk_reward") if reference else None,
         "blockers": blockers,
+        "guardrail": "This endpoint produces underlying commodity context only. Any trade recommendation must be expressed through an exact option contract.",
     }
