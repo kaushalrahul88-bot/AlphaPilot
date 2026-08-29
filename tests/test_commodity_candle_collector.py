@@ -43,6 +43,9 @@ class MemoryStore:
     async def read_symbol(self, symbol, timeframe_minutes, start, end):
         return []
 
+    async def read_symbol_contract_segments(self, symbol, timeframe_minutes, start, end):
+        return []
+
     async def status(self):
         return {"enabled": True, "series": []}
 
