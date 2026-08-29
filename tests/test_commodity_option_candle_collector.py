@@ -255,3 +255,70 @@ def test_collector_rejects_stale_underlying_session():
     assert result["session_age_days"]==6
     master.assert_not_awaited()
 
+
+
+def test_collector_uses_latest_recent_session_on_weekend():
+    friday_rows=[
+        ["2026-08-28T18:00:00+05:30",1150,1160,1148,1155,120],
+    ]
+    ce=contract("CE",1150)
+    pe=contract("PE",1150)
+
+    def ranked(rows,symbol,trade_date,underlying_price,option_type,max_strikes):
+        assert trade_date.isoformat()=="2026-08-28"
+        return [ce] if option_type=="CE" else [pe]
+
+    async def history(provider,selected,trade_date):
+        assert trade_date.isoformat()=="2026-08-28"
+        return {"status":"AVAILABLE","candles":[
+            ["2026-08-28T10:00:00+05:30",6,7,5,6.5,20],
+        ]}
+
+    async def run():
+        underlying=UnderlyingStore(friday_rows)
+        option=OptionStore()
+        with patch(
+            "app.commodity_option_candle_collector.fetch_mcx_option_master",
+            new=AsyncMock(return_value=[ce,pe]),
+        ), patch(
+            "app.commodity_option_candle_collector.ranked_mcx_option_contracts",
+            side_effect=ranked,
+        ), patch(
+            "app.commodity_option_candle_collector.fetch_mcx_option_day",
+            new=AsyncMock(side_effect=history),
+        ):
+            return await collect_copper_option_candles(
+                object(),underlying,option,
+                now=datetime(2026,8,29,18,0,tzinfo=IST),
+            )
+
+    result=asyncio.run(run())
+    assert result["status"]=="COLLECTED"
+    assert result["trade_date"]=="2026-08-28"
+    assert result["session_age_days"]==1
+    assert result["contracts_with_candles"]==2
+
+
+def test_collector_rejects_stale_underlying_session():
+    old_rows=[
+        ["2026-08-20T18:00:00+05:30",1150,1160,1148,1155,120],
+    ]
+
+    async def run():
+        underlying=UnderlyingStore(old_rows)
+        option=OptionStore()
+        with patch(
+            "app.commodity_option_candle_collector.fetch_mcx_option_master",
+            new=AsyncMock(),
+        ) as master:
+            result=await collect_copper_option_candles(
+                object(),underlying,option,
+                now=datetime(2026,8,27,18,0,tzinfo=IST),
+            )
+            return result,master
+
+    result,master=asyncio.run(run())
+    assert result["status"]=="STALE_UNDERLYING_SESSION"
+    assert result["session_age_days"]==7
+    assert result["upserted"]==0
+    master.assert_not_awaited()
