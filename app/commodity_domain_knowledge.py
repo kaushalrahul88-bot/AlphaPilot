@@ -79,6 +79,40 @@ COPPER_KNOWLEDGE_V1 = (
         "Use as background regime/crowding context, never as a standalone CE/PE trigger.",
         "Test whether positioning level/change modifies behaviour-family expectancy.",
     ),
+
+    KnowledgeItem(
+        "CU_GLOBAL_GROWTH", "COPPER", "demand",
+        "Copper demand is strongly linked to global industrial and economic activity.",
+        "Copper is widely used in electrical infrastructure, construction, transport, electronics and machinery.",
+        "Improving growth is a conditional demand tailwind; weakening growth is a conditional headwind.",
+        ("growth information is new relative to expectations",), ("supply or currency shock dominates",),
+        "days_to_months", "Multi Commodity Exchange of India",
+        "https://www.mcxindia.com/products/metals/copper", "A_PRIMARY", "ESTABLISHED_CONTEXT",
+        "Growth repricing can alter both expected direction and option volatility; do not infer CE/PE from growth alone.",
+        "Test growth-surprise regimes against MCX direction, magnitude and volatility.",
+    ),
+    KnowledgeItem(
+        "CU_OPTION_VOL_SEPARATE", "COPPER", "options_volatility",
+        "Copper option-implied volatility is a separate state variable from the direction of the copper underlying.",
+        "Options price forward-looking uncertainty; directional copper drivers need not move implied volatility one-for-one.",
+        "An underlying edge can coexist with unattractive option pricing.",
+        ("option IV is observable",), ("MCX option microstructure may differ from COMEX",),
+        "intraday_to_months", "CME Group",
+        "https://www.cmegroup.com/education/featured-reports/coppers-options-paradox", "B_RESEARCH", "HYPOTHESIS_ONLY",
+        "Option Brain must evaluate IV/vega/expiry rather than assuming correct direction means profitable long premium.",
+        "Condition underlying-edge outcomes on IV regime and test premium translation separately.",
+    ),
+    KnowledgeItem(
+        "CU_FORWARD_VOL_EXPECTATION", "COPPER", "options_volatility",
+        "Copper option markets provide forward-looking implied-volatility information.",
+        "Implied volatility aggregates option-market pricing of future uncertainty.",
+        "IV level and term structure are context for option selection, not directional signals.",
+        ("reliable option quotes exist",), ("illiquidity or wide spreads distort inference",),
+        "intraday_to_months", "CME Group",
+        "https://www.cmegroup.com/markets/metals/base/copper.quotes.options.html", "A_PRIMARY", "ESTABLISHED_CONTEXT",
+        "Compare expected underlying move with IV, term structure, moneyness and spread before buying premium.",
+        "Test whether IV regime predicts option translation quality for otherwise-valid underlying hypotheses.",
+    ),
 )
 
 
