@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from statistics import median
 from zoneinfo import ZoneInfo
 
+from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore
+
 
 IST = ZoneInfo("Asia/Kolkata")
 PROVIDER = "GROWW"
@@ -155,4 +157,6 @@ def _load_sync(database_url, symbol, days):
 async def run_snapshot_readiness(database_url, symbol="COPPER", days=60):
     if not str(database_url or "").strip():
         raise ValueError("DATABASE_URL is required for option snapshot readiness")
+    store = PostgresOptionSnapshotStore(str(database_url))
+    await store.initialize()
     return await asyncio.to_thread(_load_sync, database_url, symbol, days)
