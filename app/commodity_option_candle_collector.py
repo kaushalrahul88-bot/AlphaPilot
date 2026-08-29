@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -17,6 +17,8 @@ IST = ZoneInfo("Asia/Kolkata")
 PROVIDER = "GROWW"
 TIMEFRAME_MINUTES = 5
 DEFAULT_STRIKES_PER_TYPE = 12
+SESSION_LOOKBACK_DAYS = 7
+MAX_SESSION_AGE_DAYS = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS commodity_option_candles (
@@ -227,44 +229,60 @@ async def collect_copper_option_candles(
     used. This is data collection only, not strategy selection.
     """
     collected_at = _timestamp(now or datetime.now(IST))
-    trade_day = collected_at.date()
-    start_at, end_at = _session_bounds(trade_day)
     strike_count = max(1, min(int(strikes_per_type), 20))
 
     await underlying_store.initialize()
     await option_store.initialize()
 
+    lookup_start = collected_at - timedelta(days=SESSION_LOOKBACK_DAYS)
     underlying = await underlying_store.read_symbol(
-        "COPPER", TIMEFRAME_MINUTES, start_at, min(end_at, collected_at),
+        "COPPER", TIMEFRAME_MINUTES, lookup_start, collected_at,
     )
-    if not underlying:
+    usable = []
+    for row in underlying or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            continue
+        try:
+            stamp = _timestamp(row[0])
+            float(row[2]); float(row[3]); float(row[4])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp <= collected_at:
+            usable.append((stamp, row))
+
+    if not usable:
         return {
             "status": "NO_UNDERLYING_CANDLES",
             "research_only": True,
             "production_rules_changed": False,
-            "trade_date": trade_day.isoformat(),
+            "requested_through": collected_at.isoformat(),
             "underlying_symbol": "COPPER",
             "upserted": 0,
             "contracts_requested": 0,
             "contracts_with_candles": 0,
         }
 
-    usable = [row for row in underlying if isinstance(row, (list, tuple)) and len(row) >= 5]
-    if not usable:
+    trade_day = max(stamp.date() for stamp, _row in usable)
+    session_age_days = (collected_at.date() - trade_day).days
+    if session_age_days > MAX_SESSION_AGE_DAYS:
         return {
-            "status": "NO_USABLE_UNDERLYING_CANDLES",
+            "status": "STALE_UNDERLYING_SESSION",
             "research_only": True,
             "production_rules_changed": False,
+            "requested_through": collected_at.isoformat(),
             "trade_date": trade_day.isoformat(),
+            "session_age_days": session_age_days,
+            "max_session_age_days": MAX_SESSION_AGE_DAYS,
             "underlying_symbol": "COPPER",
             "upserted": 0,
             "contracts_requested": 0,
             "contracts_with_candles": 0,
         }
 
-    latest_price = float(usable[-1][4])
-    session_low = min(float(row[3]) for row in usable)
-    session_high = max(float(row[2]) for row in usable)
+    session = [row for stamp, row in usable if stamp.date() == trade_day]
+    latest_price = float(session[-1][4])
+    session_low = min(float(row[3]) for row in session)
+    session_high = max(float(row[2]) for row in session)
 
     master = await fetch_mcx_option_master(["COPPER"])
     selected = []
@@ -354,6 +372,7 @@ async def collect_copper_option_candles(
         "production_rules_changed": False,
         "live_execution_enabled": False,
         "trade_date": trade_day.isoformat(),
+        "session_age_days": session_age_days,
         "underlying_symbol": "COPPER",
         "underlying_close": latest_price,
         "session_low": session_low,
