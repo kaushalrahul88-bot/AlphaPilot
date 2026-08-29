@@ -1,6 +1,11 @@
 name: Copper Authoritative Context Backfill
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_context_ingestion.py"
+      - ".github/workflows/copper-context-backfill.yml"
 permissions:
   contents: read
 jobs:
