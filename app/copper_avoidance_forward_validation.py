@@ -72,6 +72,17 @@ def matched_avoidance_hypotheses(row):
     ]
 
 
+def _effective_profit_factor(stats):
+    """Comparable PF where a positive sample with no losses is effectively unbounded."""
+    raw = _f(stats.get("profit_factor"))
+    if raw is not None:
+        return raw
+    if int(stats.get("signals") or 0) <= 0:
+        return 0.0
+    avg = _f(stats.get("avg_net_return_pct"), 0.0) or 0.0
+    return float("inf") if avg > 0 else 0.0
+
+
 def _dates(rows):
     days = set()
     for row in rows:
@@ -105,8 +116,8 @@ def evaluate_forward_avoidance(experiences, cutoff_at=RESEARCH_CUTOFF_AT):
     days = sorted(_dates(future))
 
     avoided_pf = _f(avoided_stats.get("profit_factor"))
-    all_pf = _f(all_stats.get("profit_factor"), 0.0) or 0.0
-    kept_pf = _f(kept_stats.get("profit_factor"), 0.0) or 0.0
+    all_pf = _effective_profit_factor(all_stats)
+    kept_pf = _effective_profit_factor(kept_stats)
     enough_data = len(days) >= MIN_VALIDATION_TRADING_DAYS and len(avoided) >= MIN_AVOIDED_SIGNALS
     avoided_is_harmful = (
         len(avoided) > 0
