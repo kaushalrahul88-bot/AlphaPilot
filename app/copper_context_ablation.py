@@ -54,3 +54,20 @@ def build_copper_context_coverage(store, experiences):
       "both_days":sum(r["fx_available"] and r["positioning_available"] for r in rows),
       "rows":rows,
     }
+
+
+def build_copper_context_coverage_for_days(store, days, decision_hour=10):
+    rows=[]
+    for raw in days:
+        day=str(raw)[:10]
+        dt=datetime.fromisoformat(day).replace(tzinfo=IST,hour=int(decision_hour))
+        row=coverage_row(store,dt)
+        row["test_day"]=day
+        rows.append(row)
+    return {
+      "days":len(rows),
+      "fx_days":sum(r["fx_available"] for r in rows),
+      "positioning_days":sum(r["positioning_available"] for r in rows),
+      "both_days":sum(r["fx_available"] and r["positioning_available"] for r in rows),
+      "rows":rows,
+    }
