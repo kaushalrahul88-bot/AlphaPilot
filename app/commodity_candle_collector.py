@@ -341,13 +341,20 @@ async def backfill_commodity_candles(
     }
 
 
-async def resolve_historical_mcx_contract(symbol: str, when: datetime):
-    """Resolve the deterministic front-month contract for a historical timestamp."""
-    from .commodity_continuous_backtest import discover_mcx_contracts
+async def resolve_historical_mcx_contract(provider, symbol: str, when: datetime):
+    """Resolve a historical front-month only from Groww's archived contract API."""
+    from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts
 
     symbol = str(symbol).upper().strip()
-    target = _ts(when).date()
-    contracts = await discover_mcx_contracts(symbol)
+    target_dt = _ts(when)
+    target = target_dt.date()
+    discovery = await discover_groww_historical_mcx_contracts(
+        provider,
+        symbol,
+        target_dt - timedelta(days=35),
+        target_dt + timedelta(days=45),
+    )
+    contracts = discovery.get("contracts") or []
     eligible = []
     for contract in contracts:
         try:
@@ -357,7 +364,11 @@ async def resolve_historical_mcx_contract(symbol: str, when: datetime):
         if expiry >= target:
             eligible.append((expiry, contract))
     if not eligible:
-        raise RuntimeError(f"No discovered {symbol} contract covers {target.isoformat()}")
+        raise RuntimeError(
+            f"No archived {symbol} futures contract was returned by Groww for "
+            f"{target.isoformat()}; current instrument-master contracts are not "
+            "accepted as historical evidence"
+        )
     return dict(min(eligible, key=lambda item: item[0])[1])
 
 
@@ -377,7 +388,7 @@ async def backfill_continuous_commodity_candles(
         raise ValueError("end must be after start")
     if end_at - start_at > timedelta(days=1, minutes=5):
         raise ValueError("continuous backfill range must not exceed 1 day")
-    contract = await resolve_historical_mcx_contract(symbol, start_at)
+    contract = await resolve_historical_mcx_contract(provider, symbol, start_at)
     await store.initialize()
     fetched = await _fetch_chunked(provider, contract, interval, start_at, end_at)
     completed = completed_rows(fetched, end_at + timedelta(minutes=interval), interval)
@@ -388,6 +399,7 @@ async def backfill_continuous_commodity_candles(
         "status": "BACKFILLED_CONTINUOUS",
         "research_only": True,
         "rollover_method": "EXPIRY_BOUNDARY_FRONT_MONTH",
+        "contract_discovery_source": contract.get("discovery_source"),
         "symbol": symbol,
         "contract": contract.get("trading_symbol"),
         "contract_expiry": contract.get("expiry_date"),
