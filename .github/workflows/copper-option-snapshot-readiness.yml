@@ -1,0 +1,72 @@
+name: Copper Option Snapshot Readiness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 18 * * 1-5"
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_option_snapshot_readiness.py"
+      - "app/main.py"
+      - ".github/workflows/copper-option-snapshot-readiness.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-option-snapshot-readiness
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for readiness endpoint deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-options/snapshot-readiness" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Audit forward Copper option snapshot readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 180             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/commodity-options/snapshot-readiness?symbol=COPPER&days=60"             -o readiness.json
+          python - <<'PY'
+          import json
+          result=json.load(open("readiness.json"))
+          assert result.get("mode")=="COPPER_OPTION_SNAPSHOT_READINESS_V1", result
+          assert result.get("research_only") is True, result
+          assert result.get("descriptive_only") is True, result
+          assert result.get("strategy_gate") is False, result
+          assert result.get("promotion_eligible") is False, result
+          print(json.dumps({
+              "status":result.get("status"),
+              "trading_days":result.get("trading_days"),
+              "snapshots":result.get("snapshots"),
+              "median_distinct_buckets_per_day":result.get("median_distinct_buckets_per_day"),
+              "median_scheduled_bucket_coverage_pct":result.get("median_scheduled_bucket_coverage_pct"),
+              "both_sides_day_coverage_pct":result.get("both_sides_day_coverage_pct"),
+              "underlying_price_coverage_pct":result.get("underlying_price_coverage_pct"),
+              "two_sided_quote_coverage_pct":result.get("two_sided_quote_coverage_pct"),
+          },indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-option-snapshot-readiness
+          path: readiness.json

@@ -24,6 +24,7 @@ from .copper_context_ablation_v2 import context_ablation
 from .copper_context_feature_audit import descriptive_context_features
 from .copper_context_interaction_audit import descriptive_context_interactions
 from .copper_fx_level_downtrend_forward_validation import validate_fx_level_downtrend
+from .copper_option_snapshot_readiness import run_snapshot_readiness
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -231,6 +232,22 @@ async def commodity_option_snapshots_status(
         await store.initialize()
         return await store.status(symbol.upper())
     except Exception as exc:_safe_upstream_error("commodity option snapshot storage status",exc)
+
+@app.get("/v1/internal/commodity-options/snapshot-readiness")
+async def commodity_option_snapshot_readiness(
+    symbol:str="COPPER",
+    days:int=60,
+    x_collector_token:str|None=Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        return await run_snapshot_readiness(
+            settings.database_url,
+            symbol.upper(),
+            max(1,min(int(days),3650)),
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper option snapshot readiness",exc)
 
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
