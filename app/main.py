@@ -22,6 +22,7 @@ from .historical_context import PostgresHistoricalContextStore
 from .copper_context_ablation import build_copper_context_coverage_for_days
 from .copper_context_ablation_v2 import context_ablation
 from .copper_context_feature_audit import descriptive_context_features
+from .copper_context_interaction_audit import descriptive_context_interactions
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -496,6 +497,24 @@ async def copper_context_feature_audit_v1(request:CopperResearchBaselineRequest)
         context_store=PostgresHistoricalContextStore(settings.database_url); context_store.initialize()
         return descriptive_context_features(experiences,context_store,60,request.round_trip_cost_bps)
     except Exception as exc:_safe_upstream_error("Copper context feature audit",exc)
+
+@app.post("/v1/research/copper/context-interaction-audit-v1")
+async def copper_context_interaction_audit_v1(request:CopperResearchBaselineRequest):
+    if not settings.database_url.strip():
+        raise HTTPException(status_code=503,detail={"code":"RESEARCH_STORE_DISABLED","message":"Configure DATABASE_URL"})
+    try:
+        from datetime import datetime,timedelta
+        from zoneinfo import ZoneInfo
+        from .copper_research_brain import build_copper_experiences
+        candle_store=PostgresCandleStore(settings.database_url); await candle_store.initialize()
+        end=datetime.now(ZoneInfo("Asia/Kolkata")); start=end-timedelta(days=max(7,min(request.days,3650)))
+        segments=await candle_store.read_symbol_contract_segments("COPPER",5,start,end)
+        experiences=[]
+        for segment in segments:experiences.extend(build_copper_experiences(segment.get("candles") or [],sample_every_bars=request.sample_every_bars))
+        experiences.sort(key=lambda x:str((x.get("features") or {}).get("timestamp") or ""))
+        context_store=PostgresHistoricalContextStore(settings.database_url); context_store.initialize()
+        return descriptive_context_interactions(experiences,context_store,60,request.round_trip_cost_bps,8)
+    except Exception as exc:_safe_upstream_error("Copper context interaction audit",exc)
 
 @app.post("/v1/research/copper/regime-stability-stored-v1")
 async def copper_regime_stability_stored_v1(request:CopperResearchBaselineRequest):
