@@ -30,6 +30,7 @@ from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
 from .commodity_option_history import probe_mcx_option_history, scan_mcx_option_history_band
 from .commodity_option_candle_collector import PostgresOptionCandleStore, collect_copper_option_candles
+from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .edge_discovery import run_edge_discovery
@@ -201,6 +202,35 @@ async def commodity_options_status(
         await store.initialize()
         return await store.status(symbol.upper())
     except Exception as exc:_safe_upstream_error("commodity option candle storage status",exc)
+
+@app.post("/v1/internal/commodity-options/snapshot-collect")
+async def commodity_option_snapshots_collect(
+    strikes_per_type:int=10,
+    x_collector_token:str|None=Header(default=None),
+):
+    candle_store=_collector_store(x_collector_token)
+    try:
+        snapshot_store=PostgresOptionSnapshotStore(settings.database_url)
+        return await collect_copper_option_snapshots(
+            get_provider(settings),
+            candle_store,
+            snapshot_store,
+            strikes_per_type=max(1,min(int(strikes_per_type),20)),
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper option snapshot collection",exc)
+
+@app.get("/v1/internal/commodity-options/snapshot-status")
+async def commodity_option_snapshots_status(
+    symbol:str="COPPER",
+    x_collector_token:str|None=Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        store=PostgresOptionSnapshotStore(settings.database_url)
+        await store.initialize()
+        return await store.status(symbol.upper())
+    except Exception as exc:_safe_upstream_error("commodity option snapshot storage status",exc)
 
 @app.post("/v1/risk/discipline/evaluate")
 async def risk_discipline_evaluate(request:RiskDisciplineRequest):
