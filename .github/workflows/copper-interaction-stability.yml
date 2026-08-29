@@ -1,0 +1,59 @@
+name: Copper Interaction Stability
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-interaction-stability.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for interaction endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/copper/interaction-stability-stored-v1" in (d.get("paths") or {}) else 1)'; then
+                sleep 30
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Run stored Copper interaction stability
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 180             -H 'Content-Type: application/json'             -X POST "$API_BASE/v1/research/copper/interaction-stability-stored-v1"             -d '{"days":180,"sample_every_bars":3,"round_trip_cost_bps":4.0}'             -o copper-interaction-stability.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-interaction-stability.json"))
+          s=d["study"]
+          print(json.dumps({
+            "provenance_warning": d.get("provenance_warning"),
+            "coverage": d.get("coverage"),
+            "windows": s.get("windows"),
+            "minimum_signals_per_window": s.get("minimum_signals_per_window"),
+            "recurring_positive_interactions": s.get("recurring_positive_interactions"),
+            "recurring_negative_interactions": s.get("recurring_negative_interactions"),
+            "three_of_four_positive_interactions": s.get("three_of_four_positive_interactions"),
+          }, indent=2))
+          PY
+
+      - name: Upload study result
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-interaction-stability
+          path: copper-interaction-stability.json
