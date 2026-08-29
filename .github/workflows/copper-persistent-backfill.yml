@@ -84,6 +84,8 @@ jobs:
           }
           open("copper-backfill-summary.json","w").write(json.dumps(summary,indent=2))
           print(json.dumps(summary,indent=2))
+          if failures:
+              raise SystemExit("One or more backfill chunks failed")
           if len(results) < 4:
               raise SystemExit("Too few successful backfill chunks")
           PY
