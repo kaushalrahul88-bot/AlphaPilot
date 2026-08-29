@@ -262,12 +262,19 @@ async def run_commodity_live_scan(provider, now=None):
             option_quote = {"status": "NOT_REQUESTED", "reason": "Directional market gates did not all pass."}
             strict = None
             decision_status = directional["status"]
-            action = directional["action"]
+            underlying_action = str(directional.get("action") or "NO TRADE").upper()
+            directional_bias = (
+                "BULLISH" if underlying_action == "BUY"
+                else "BEARISH" if underlying_action == "SELL"
+                else "NEUTRAL"
+            )
+            action = "NO TRADE"
+            option_intent = None
             if directional["status"] == "READY" and plan:
-                action = assert_option_action(
+                option_intent = assert_option_action(
                     "BUY CE" if previous.get("underlying_direction") == "BULLISH" else "BUY PE"
                 )
-                option_type = action.split()[-1]
+                option_type = option_intent.split()[-1]
                 if option_master is None:
                     option_master = await fetch_mcx_option_master(SYMBOLS)
                 selected = select_mcx_option_contract(
@@ -302,7 +309,11 @@ async def run_commodity_live_scan(provider, now=None):
                     premium_risk_reward=PREMIUM_RISK_REWARD,
                     require_option_premium=True,
                 )
-                decision_status = "EXECUTABLE_READY" if strict["status"] == "READY" else "DIRECTIONAL_READY"
+                if strict["status"] == "READY":
+                    decision_status = "EXECUTABLE_READY"
+                    action = option_intent
+                else:
+                    decision_status = "DIRECTIONAL_READY"
 
             gates = (strict or directional)["gates"]
             blockers = (strict or directional)["blockers"]
@@ -311,6 +322,9 @@ async def run_commodity_live_scan(provider, now=None):
                 "click_at": click.isoformat(),
                 "decision_status": decision_status,
                 "action": action,
+                "option_intent": option_intent,
+                "underlying_action": underlying_action,
+                "directional_bias": directional_bias,
                 "previous_session": previous_date.isoformat(),
                 "previous_plan": previous,
                 "current_mtf_action": mtf.get("action"),
@@ -364,8 +378,8 @@ async def run_commodity_live_scan(provider, now=None):
             "data_not_ready": sum(row.get("decision_status") in {"DATA_NOT_READY", "DATA_ERROR"} for row in results),
         },
         "readiness_definition": {
-            "DIRECTIONAL_READY": "All frozen market gates passed, but no verified positive live premium was available.",
-            "EXECUTABLE_READY": "All frozen market gates passed and an exact buy-allowed MCX option contract returned a positive live Groww premium.",
+            "DIRECTIONAL_READY": "Underlying directional context passed, but no option trade action is emitted until an exact option contract and verified live premium pass the strict option gates.",
+            "EXECUTABLE_READY": "An exact buy-allowed MCX option contract returned a verified positive live premium and all strict option gates passed. The emitted action is BUY CE or BUY PE only.",
         },
         "research_only": True,
         "production_rules_changed": False,
