@@ -201,6 +201,9 @@ def test_live_snapshot_collection_persists_both_ce_and_pe_without_fake_ohlc():
     assert result["data_type"]=="LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC"
     assert result["underlying_price"]==1386.0
     assert result["underlying_price_source"]=="LIVE_MCX_FUTURE_QUOTE"
+    assert result["trade_instrument"]=="OPTIONS"
+    assert result["options_only_policy"]["futures_execution_allowed"] is False
+    assert result["underlying_reference"]["execution_eligible"] is False
     assert result["underlying_candle_close"]==1381.5
     assert result["sample_bucket_at"]=="2026-08-31T10:00:00+05:30"
     assert result["snapshots"]==6
