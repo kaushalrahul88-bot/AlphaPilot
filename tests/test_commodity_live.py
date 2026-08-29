@@ -126,6 +126,96 @@ class CommodityLiveTests(unittest.IsolatedAsyncioTestCase):
         master.assert_not_awaited()
         self.assertFalse(result["live_execution_enabled"])
 
+    async def test_directional_ready_never_emits_underlying_buy_sell_action(self):
+        target=date(2026,8,26)
+        click=datetime(2026,8,26,14,0,tzinfo=IST)
+        current=rows(target,count=20)
+        contract={"trading_symbol":"CRUDEOIL30SEP26FUT","tick_size":1}
+        option={"trading_symbol":"CRUDEOIL17SEP267800CE","option_type":"CE","strike":7800,"buy_allowed":True}
+        quality={"status":"VALID","checks":{}}
+        previous_state={
+            "expected_date":date(2026,8,25),
+            "latest_observed_date":date(2026,8,25),
+            "candles":174,
+            "last_at":datetime(2026,8,25,23,25,tzinfo=IST),
+            "checks":{},
+            "complete":True,
+        }
+        previous={"underlying_direction":"BULLISH"}
+        plan={"entry":100,"stop":98,"target1":103}
+        directional={"status":"READY","action":"BUY","gates":{},"blockers":[]}
+        strict={"status":"WAIT","action":"BUY","gates":{},"blockers":["premium unavailable"],"premium_setup":None}
+
+        with (
+            patch("app.commodity_live.resolve_nearest_mcx_future",new=AsyncMock(return_value=contract)),
+            patch("app.commodity_live._fetch_live_rows",new=AsyncMock(return_value=({key:current for key in ("5m","15m","1h")},{"5m":174,"15m":58,"1h":15}))),
+            patch("app.commodity_live._previous_session_state",return_value=previous_state),
+            patch("app.commodity_live._data_quality",return_value=quality),
+            patch("app.commodity_live.build_next_session_plan",return_value=previous),
+            patch("app.commodity_live._live_mtf",return_value=({"5m":{},"15m":{},"1h":{}},plan,{"action":"BUY","alpha_score":75},{})),
+            patch("app.commodity_live.fetch_benchmark_candles",new=AsyncMock(return_value={"candles":[]})),
+            patch("app.commodity_live.benchmark_confirmation",return_value={}),
+            patch("app.commodity_live.evaluate_commodity_click",side_effect=[directional,strict,directional,strict]),
+            patch("app.commodity_live.fetch_mcx_option_master",new=AsyncMock(return_value=[option])),
+            patch("app.commodity_live.select_mcx_option_contract",return_value=option),
+            patch("app.commodity_live.fetch_live_mcx_option_quote",new=AsyncMock(return_value={"status":"UNAVAILABLE"})),
+            patch("app.commodity_live.market_brain_audit",return_value={}),
+            patch("app.commodity_live.mcx_session_status",return_value={"is_open":True,"status":"OPEN"}),
+        ):
+            result=await run_commodity_live_scan(Provider(),click)
+
+        first=result["results"][0]
+        self.assertEqual(first["decision_status"],"DIRECTIONAL_READY")
+        self.assertEqual(first["action"],"NO TRADE")
+        self.assertEqual(first["option_intent"],"BUY CE")
+        self.assertEqual(first["underlying_action"],"BUY")
+        self.assertEqual(first["directional_bias"],"BULLISH")
+        self.assertFalse(first["underlying_setup"]["execution_eligible"])
+
+    async def test_verified_exact_option_is_the_only_emitted_trade_action(self):
+        target=date(2026,8,26)
+        click=datetime(2026,8,26,14,0,tzinfo=IST)
+        current=rows(target,count=20)
+        contract={"trading_symbol":"CRUDEOIL30SEP26FUT","tick_size":1}
+        option={"trading_symbol":"CRUDEOIL17SEP267800CE","option_type":"CE","strike":7800,"buy_allowed":True}
+        quality={"status":"VALID","checks":{}}
+        previous_state={
+            "expected_date":date(2026,8,25),
+            "latest_observed_date":date(2026,8,25),
+            "candles":174,
+            "last_at":datetime(2026,8,25,23,25,tzinfo=IST),
+            "checks":{},
+            "complete":True,
+        }
+        previous={"underlying_direction":"BULLISH"}
+        plan={"entry":100,"stop":98,"target1":103}
+        directional={"status":"READY","action":"BUY","gates":{},"blockers":[]}
+        strict={"status":"READY","action":"BUY","gates":{},"blockers":[],"premium_setup":{"entry":42.0}}
+
+        with (
+            patch("app.commodity_live.resolve_nearest_mcx_future",new=AsyncMock(return_value=contract)),
+            patch("app.commodity_live._fetch_live_rows",new=AsyncMock(return_value=({key:current for key in ("5m","15m","1h")},{"5m":174,"15m":58,"1h":15}))),
+            patch("app.commodity_live._previous_session_state",return_value=previous_state),
+            patch("app.commodity_live._data_quality",return_value=quality),
+            patch("app.commodity_live.build_next_session_plan",return_value=previous),
+            patch("app.commodity_live._live_mtf",return_value=({"5m":{},"15m":{},"1h":{}},plan,{"action":"BUY","alpha_score":75},{})),
+            patch("app.commodity_live.fetch_benchmark_candles",new=AsyncMock(return_value={"candles":[]})),
+            patch("app.commodity_live.benchmark_confirmation",return_value={}),
+            patch("app.commodity_live.evaluate_commodity_click",side_effect=[directional,strict,directional,strict]),
+            patch("app.commodity_live.fetch_mcx_option_master",new=AsyncMock(return_value=[option])),
+            patch("app.commodity_live.select_mcx_option_contract",return_value=option),
+            patch("app.commodity_live.fetch_live_mcx_option_quote",new=AsyncMock(return_value={"status":"AVAILABLE","premium":42.0,"contract":option})),
+            patch("app.commodity_live.market_brain_audit",return_value={}),
+            patch("app.commodity_live.mcx_session_status",return_value={"is_open":True,"status":"OPEN"}),
+        ):
+            result=await run_commodity_live_scan(Provider(),click)
+
+        first=result["results"][0]
+        self.assertEqual(first["decision_status"],"EXECUTABLE_READY")
+        self.assertEqual(first["action"],"BUY CE")
+        self.assertEqual(first["trade_instrument"],"OPTIONS")
+        self.assertFalse(result["options_only_policy"]["futures_execution_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()
