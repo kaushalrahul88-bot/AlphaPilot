@@ -1,0 +1,38 @@
+name: Scheduled Commodity Collector
+
+on:
+  schedule:
+    - cron: "*/30 3-18 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commodity-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Collect completed MCX candles
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 180             -H "X-Collector-Token: $COLLECTOR_TOKEN"             -X POST "$API_BASE/v1/internal/commodity-candles/collect"             -o collector-result.json
+          python - <<'PY'
+          import json
+          d=json.load(open("collector-result.json"))
+          assert d.get("status")=="COLLECTED", d
+          print(json.dumps({
+            "collected_at": d.get("collected_at"),
+            "upserted": d.get("upserted"),
+            "series": d.get("series"),
+          }, indent=2))
+          PY
