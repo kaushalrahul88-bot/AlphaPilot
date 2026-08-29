@@ -1,0 +1,72 @@
+name: Copper Market Brain Direction Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_market_brain_direction_audit.py"
+      - "app/main.py"
+      - ".github/workflows/copper-market-brain-direction-audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-market-brain-direction-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for direction audit deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/copper/market-brain-direction-audit" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Run same-session Market Brain direction audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 300             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/market-brain-direction-audit?sample_every_bars=3"             -o direction-audit.json
+          python - <<'PY'
+          import json
+          d=json.load(open("direction-audit.json"))
+          assert d.get("mode")=="COPPER_MARKET_BRAIN_DIRECTION_AUDIT_V1", d
+          assert d.get("trade_instrument")=="OPTIONS", d
+          assert d.get("underlying_reference_role")=="REFERENCE_ONLY", d
+          assert d.get("futures_pnl_calculated") is False, d
+          assert d.get("synthetic_option_premium_used") is False, d
+          assert d.get("same_session_only") is True, d
+          assert "2026-08-27" in (d.get("excluded_partial_days") or []), d
+          assert "2026-08-28" in (d.get("excluded_partial_days") or []), d
+          print(json.dumps({
+            "reference_contract":d.get("reference_contract"),
+            "primary_score_days":len(d.get("primary_score_days") or []),
+            "excluded_partial_days":d.get("excluded_partial_days"),
+            "brain_a":d.get("brains",{}).get("A"),
+            "brain_b":d.get("brains",{}).get("B"),
+          },indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-market-brain-direction-audit
+          path: direction-audit.json
