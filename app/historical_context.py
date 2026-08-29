@@ -91,3 +91,62 @@ def historical_context_manifest_v1() -> dict:
             "missing_data":"UNKNOWN; never forward-fill from future publications.",
         },
     }
+
+
+CONTEXT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS commodity_historical_context (
+    context_id TEXT PRIMARY KEY,
+    commodity TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    source_name TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    source_tier TEXT NOT NULL,
+    values_json JSONB NOT NULL,
+    frequency TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS commodity_context_lookup_idx
+ON commodity_historical_context (commodity, kind, available_at DESC);
+"""
+
+
+class PostgresHistoricalContextStore:
+    def __init__(self,database_url:str):
+        self.database_url=str(database_url or "").strip()
+        if not self.database_url: raise ValueError("DATABASE_URL is required")
+
+    def _connect(self):
+        import psycopg
+        return psycopg.connect(self.database_url,connect_timeout=10)
+
+    def initialize(self):
+        with self._connect() as conn:
+            with conn.cursor() as cur: cur.execute(CONTEXT_SCHEMA_SQL)
+
+    def upsert(self,items):
+        import json
+        if not items:return 0
+        sql="""INSERT INTO commodity_historical_context
+        (context_id,commodity,kind,observed_at,available_at,source_name,source_url,source_tier,values_json,frequency,notes)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)
+        ON CONFLICT (context_id) DO UPDATE SET
+        observed_at=EXCLUDED.observed_at,available_at=EXCLUDED.available_at,
+        source_name=EXCLUDED.source_name,source_url=EXCLUDED.source_url,
+        source_tier=EXCLUDED.source_tier,values_json=EXCLUDED.values_json,
+        frequency=EXCLUDED.frequency,notes=EXCLUDED.notes"""
+        rows=[(x.context_id,x.commodity,x.kind,x.observed_at,x.available_at,x.source_name,x.source_url,x.source_tier,json.dumps(x.values),x.frequency,x.notes) for x in items]
+        with self._connect() as conn:
+            with conn.cursor() as cur:cur.executemany(sql,rows)
+        return len(rows)
+
+    def status(self,commodity="COPPER"):
+        sql="""SELECT kind,COUNT(*),MIN(observed_at),MAX(observed_at),MAX(available_at)
+        FROM commodity_historical_context WHERE commodity=%s GROUP BY kind ORDER BY kind"""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql,(commodity,))
+                rows=cur.fetchall()
+        return [{"kind":k,"records":n,"first_observed":a.isoformat(),"last_observed":b.isoformat(),"last_available":c.isoformat()} for k,n,a,b,c in rows]
