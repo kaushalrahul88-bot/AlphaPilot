@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from .historical_context import HistoricalContext
 
 CFTC_DISAGG_FUTURES_ONLY="https://publicreporting.cftc.gov/resource/72hh-3qpy.json"
-FRED_DEXINUS_CSV="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DEXINUS"
+FED_H10_INR_HTML="https://www.federalreserve.gov/RELEASES/H10/hist/dat00_in.htm"
 
 
 def _get(url:str, attempts:int=3, timeout_seconds:int=30)->bytes:
@@ -62,30 +62,26 @@ def fetch_cftc_copper_positioning(start_date:str,end_date:str)->list[HistoricalC
 
 
 def fetch_fred_usdinr_daily(start_date:str|None=None,end_date:str|None=None)->list[HistoricalContext]:
-    url=FRED_DEXINUS_CSV
-    if start_date or end_date:
-        params={"id":"DEXINUS"}
-        if start_date: params["cosd"]=start_date
-        if end_date: params["coed"]=end_date
-        url="https://fred.stlouisfed.org/graph/fredgraph.csv?"+urlencode(params)
-    rows=csv.DictReader(io.StringIO(_get(url).decode()))
+    """Fetch official Federal Reserve H.10 historical INR-per-USD rates."""
+    import re
+    html=_get(FED_H10_INR_HTML,attempts=3,timeout_seconds=45).decode("utf-8","ignore")
+    text=re.sub(r"<[^>]+>"," ",html)
+    text=re.sub(r"&nbsp;"," ",text)
+    matches=re.findall(r"\b(\d{1,2}-[A-Z]{3}-\d{2})\s+(ND|\d+(?:\.\d+)?)\b",text,re.I)
     out=[]
-    for row in rows:
-        date=row.get("observation_date") or row.get("DATE")
-        raw=row.get("DEXINUS")
-        if not date or raw in (None,"","."):continue
-        try:value=float(raw)
-        except ValueError:continue
-        observed=datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
-        # H.10/FRED is not an intraday FX feed. Conservative rule: prior day's
-        # observation is only usable from the following UTC day in replay.
-        available=(observed+timedelta(days=1))
+    for raw_date,raw_value in matches:
+        if raw_value.upper()=="ND":continue
+        observed=datetime.strptime(raw_date.upper(),"%d-%b-%y").replace(tzinfo=timezone.utc)
+        date=observed.date().isoformat()
+        if start_date and date < start_date:continue
+        if end_date and date > end_date:continue
+        available=observed+timedelta(days=1)
         out.append(HistoricalContext(
             context_id=f"DEXINUS_{date}",commodity="COPPER",kind="FX",
             observed_at=observed.isoformat(),available_at=available.isoformat(),
-            source_name="Federal Reserve H.10 via FRED",source_url=url,
-            source_tier="A_PRIMARY",values={"usdinr":value},frequency="daily",
-            notes="Daily reference context only; never substitute for intraday USD/INR.",
+            source_name="Federal Reserve Board H.10",source_url=FED_H10_INR_HTML,
+            source_tier="A_PRIMARY",values={"usdinr":float(raw_value)},frequency="daily",
+            notes="Official H.10 historical rate; daily reference context only, not intraday FX. Historical page may incorporate later corrections.",
         ))
     return out
 

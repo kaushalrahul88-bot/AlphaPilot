@@ -16,3 +16,11 @@ def test_fred_daily_is_delayed_for_replay(monkeypatch):
     x=fetch_fred_usdinr_daily()[0]
     assert x.values["usdinr"]==95.38
     assert x.available_at > x.observed_at
+
+
+def test_fed_h10_html_usdinr(monkeypatch):
+    payload=b"<html><body>1-AUG-26 95.3800 4-AUG-26 ND 5-AUG-26 95.4200</body></html>"
+    monkeypatch.setattr(mod,"_get",lambda *args,**kwargs:payload)
+    xs=fetch_fred_usdinr_daily("2026-08-01","2026-08-05")
+    assert [x.values["usdinr"] for x in xs]==[95.38,95.42]
+    assert all(x.available_at > x.observed_at for x in xs)
