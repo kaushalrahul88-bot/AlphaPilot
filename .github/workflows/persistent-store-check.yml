@@ -1,4 +1,4 @@
-name: Persistent Store Check
+name: Persistent Store Check v2
 
 on:
   push:
