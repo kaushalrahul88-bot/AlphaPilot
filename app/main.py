@@ -15,6 +15,7 @@ from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
 from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability, run_copper_regime_stability_from_store, run_copper_interaction_stability_from_store
+from .copper_avoidance_forward_validation import run_copper_avoidance_forward_validation_from_store
 from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, backfill_continuous_commodity_candles, collect_completed_commodity_candles
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
@@ -369,6 +370,18 @@ async def copper_edge_attribution_v1(request:CopperResearchBaselineRequest):
     try:return await run_copper_edge_attribution(get_provider(settings),request.days,request.sample_every_bars,request.round_trip_cost_bps)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("Copper edge attribution",exc)
+@app.post("/v1/research/copper/avoidance-forward-validation-v1")
+async def copper_avoidance_forward_validation_v1(request:CopperResearchBaselineRequest):
+    if not settings.database_url.strip():
+        raise HTTPException(status_code=503,detail={"code":"RESEARCH_STORE_DISABLED","message":"Configure DATABASE_URL to enable stored Copper research"})
+    try:
+        return await run_copper_avoidance_forward_validation_from_store(
+            PostgresCandleStore(settings.database_url),
+            request.days,
+            request.sample_every_bars,
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("Copper avoidance forward validation",exc)
 @app.post("/v1/research/copper/interaction-stability-stored-v1")
 async def copper_interaction_stability_stored_v1(request:CopperResearchBaselineRequest):
     if not settings.database_url.strip():
