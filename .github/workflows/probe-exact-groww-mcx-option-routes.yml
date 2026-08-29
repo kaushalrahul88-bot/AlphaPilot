@@ -1,0 +1,42 @@
+name: Probe Exact Groww MCX Option Routes
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/commodity_option_history.py"
+      - "app/main.py"
+      - ".github/workflows/probe-exact-groww-mcx-option-routes.yml"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deploy
+        run: |
+          set -euo pipefail
+          for i in {1..42}; do
+            curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json || true
+            python - <<'PY' && exit 0 || true
+          import json
+          d=json.load(open("openapi.json"))
+          assert "/v1/internal/copper/exact-option-route-probe" in (d.get("paths") or {})
+          PY
+            sleep 10
+          done
+          exit 1
+      - name: Probe 1400 CE and PE on Friday
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 180             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/exact-option-route-probe?strike=1400&trade_date=2026-08-28"             -o result.json
+          python -m json.tool result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exact-groww-mcx-option-route-probe
+          path: result.json
