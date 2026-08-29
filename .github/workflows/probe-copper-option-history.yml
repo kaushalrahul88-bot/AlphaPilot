@@ -1,0 +1,68 @@
+name: Probe Copper Option History
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/probe-copper-option-history.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for Copper option support deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/commodity-option-history-band" in (d.get("paths") or {}) else 1)'; then
+                sleep 30
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Probe recent Copper CE/PE premium band
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, subprocess, os
+          probes = [
+            {"trade_date":"2026-08-25","center_price":950,"radius":8},
+            {"trade_date":"2026-08-13","center_price":950,"radius":8},
+          ]
+          out=[]
+          for payload in probes:
+              body=json.dumps({"symbol":"COPPER",**payload})
+              p=subprocess.run([
+                "curl","--silent","--show-error","--max-time","180",
+                "-w","\n%{http_code}",
+                "-H","Content-Type: application/json",
+                "-X","POST",
+                os.environ["API_BASE"]+"/v1/research/commodity-option-history-band",
+                "-d",body,
+              ],capture_output=True,text=True)
+              response,status=p.stdout.rsplit("\n",1) if "\n" in p.stdout else (p.stdout,"")
+              try: parsed=json.loads(response)
+              except Exception: parsed={"raw":response[-800:]}
+              out.append({"request":payload,"http_status":status,"response":parsed})
+          open("copper-option-history-probe.json","w").write(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload probe result
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-option-history-probe
+          path: copper-option-history-probe.json
