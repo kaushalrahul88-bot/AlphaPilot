@@ -650,6 +650,9 @@ def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps
         gross = forward if signal == "BUY" else -forward
         net = gross - max(0.0, float(round_trip_cost_bps)) / 100.0
         hour = _hour_from_timestamp(f.get("timestamp"))
+        session_pos = _f(f.get("session_range_position"))
+        vwap_gap = _f(f.get("session_vwap_gap_pct"))
+        tarvol = _f(f.get("time_adjusted_relative_volume"))
         observations.append({
             "timestamp": f.get("timestamp"),
             "signal": signal,
@@ -662,7 +665,24 @@ def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps
             ),
             "atr_bucket": _bucket(f.get("atr_pct"), [0.10, 0.20, 0.35], ["LOW", "NORMAL", "HIGH", "EXTREME"]),
             "volume_bucket": _bucket(f.get("relative_volume"), [0.75, 1.0, 1.5], ["QUIET", "NORMAL", "ACTIVE", "SURGE"]),
+            "time_adjusted_volume_bucket": _bucket(tarvol, [0.75, 1.0, 1.5], ["QUIET", "NORMAL", "ACTIVE", "SURGE"]),
             "momentum_bucket": _bucket(abs(_f(f.get("return_15m_pct"), 0.0)), [0.03, 0.08, 0.15], ["WEAK", "NORMAL", "STRONG", "EXTREME"]),
+            "session_location_bucket": (
+                "UNKNOWN" if session_pos is None else
+                "LOWER_QUARTER" if session_pos < 0.25 else
+                "LOWER_MIDDLE" if session_pos < 0.50 else
+                "UPPER_MIDDLE" if session_pos < 0.75 else
+                "UPPER_QUARTER"
+            ),
+            "vwap_location_bucket": (
+                "UNKNOWN" if vwap_gap is None else
+                "BELOW_FAR" if vwap_gap < -0.15 else
+                "BELOW_NEAR" if vwap_gap < 0 else
+                "ABOVE_NEAR" if vwap_gap < 0.15 else
+                "ABOVE_FAR"
+            ),
+            "opening_range_break": f.get("opening_range_break") or "UNKNOWN",
+            "price_oi_state": f.get("price_oi_state") or "UNKNOWN",
             "oi_bucket": (
                 "UNKNOWN" if _f(f.get("oi_change_15m_pct")) is None else
                 "RISING" if _f(f.get("oi_change_15m_pct")) > 0 else
@@ -670,7 +690,11 @@ def attribute_brain_a_edges(experiences, horizon_minutes=60, round_trip_cost_bps
             ),
         })
 
-    dimensions = ["signal", "structure", "session", "atr_bucket", "volume_bucket", "momentum_bucket", "oi_bucket"]
+    dimensions = [
+        "signal", "structure", "session", "atr_bucket", "volume_bucket",
+        "time_adjusted_volume_bucket", "momentum_bucket", "session_location_bucket",
+        "vwap_location_bucket", "opening_range_break", "price_oi_state", "oi_bucket",
+    ]
     attribution = {}
     for dim in dimensions:
         groups = {}
@@ -762,7 +786,11 @@ def _dimension_candidate_summary(window_reports, dimension):
 def regime_stability_study(experiences, windows=4, horizon_minutes=60, round_trip_cost_bps=4.0):
     chunks = _split_windows(experiences, windows)
     reports = [attribute_brain_a_edges(chunk, horizon_minutes, round_trip_cost_bps) for chunk in chunks]
-    dimensions = ["signal", "session", "atr_bucket", "volume_bucket", "momentum_bucket"]
+    dimensions = [
+        "signal", "session", "atr_bucket", "volume_bucket", "time_adjusted_volume_bucket",
+        "momentum_bucket", "session_location_bucket", "vwap_location_bucket",
+        "opening_range_break", "price_oi_state",
+    ]
     stability = {dim: _dimension_candidate_summary(reports, dim) for dim in dimensions}
     recurring = []
     for dim, entries in stability.items():
