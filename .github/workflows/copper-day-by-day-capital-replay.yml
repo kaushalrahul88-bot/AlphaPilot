@@ -1,0 +1,74 @@
+name: Copper Day By Day Capital Replay
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/copper-day-by-day-capital-replay.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for replay endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/research/copper/day-by-day-capital-replay-v1" in (d.get("paths") or {}) else 1)'; then
+                sleep 30
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Run full stored Copper replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          curl --fail --silent --show-error --max-time 300             -X POST "$API_BASE/v1/research/copper/day-by-day-capital-replay-v1"             -o copper-day-by-day-capital-replay.json
+          finished=$(date +%s)
+          echo "elapsed_seconds=$((finished-started))"
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-day-by-day-capital-replay.json"))
+          if d.get("mode")=="COPPER_DAY_BY_DAY_CAPITAL_REPLAY_MULTI_SEGMENT_V1":
+              print(json.dumps({"mode":d.get("mode"),"segments":len(d.get("segments",[]))},indent=2))
+          else:
+              print(json.dumps({
+                "coverage": d.get("coverage"),
+                "capital_model": d.get("capital_model"),
+                "overall_summary": d.get("overall_summary"),
+                "monthly_summary": d.get("monthly_summary"),
+                "daily_results": [
+                  {
+                    "date":x.get("date"),
+                    "trades":x.get("trades"),
+                    "wins":x.get("wins"),
+                    "losses":x.get("losses"),
+                    "net_pnl_rupees":x.get("net_pnl_rupees"),
+                    "ending_capital_rupees":x.get("ending_capital_rupees"),
+                    "max_intraday_drawdown_rupees":x.get("max_intraday_drawdown_rupees"),
+                    "target_3000_achieved":x.get("target_3000_achieved"),
+                  }
+                  for x in d.get("daily_results",[])
+                ],
+              },indent=2))
+          PY
+
+      - name: Upload replay result
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-day-by-day-capital-replay
+          path: copper-day-by-day-capital-replay.json
