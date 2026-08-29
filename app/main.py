@@ -47,6 +47,7 @@ from .market_regime_research import run_market_regime_research
 from .news import latest_commodity_news, latest_market_news
 from .option_native_research import run_option_native_research
 from .option_native_phase2 import run_option_native_phase2
+from .options_only_policy import options_only_policy
 from .providers.factory import get_provider
 from .risk_discipline import RiskDisciplineRequest, evaluate_risk_discipline
 from .paper_session_quality import PaperSessionAttestationRequest, evaluate_paper_session
@@ -425,6 +426,10 @@ async def fno_true_backtest(request:FNOTrueBacktestRequest):
     try:return await run_true_premium_backtest(get_provider(settings),symbols,request.start_date,request.end_date,request.expiry,request.min_risk_reward,request.entry_before,request.max_trades)
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("true premium F&O backtest",exc)
+@app.get("/v1/policy/options-only")
+async def get_options_only_policy():
+    return options_only_policy()
+
 @app.get("/v1/commodity/contract/{symbol}")
 async def commodity_contract(symbol:str):return await resolve_nearest_mcx_future(symbol.upper())
 @app.get("/v1/commodity/quote/{symbol}")
