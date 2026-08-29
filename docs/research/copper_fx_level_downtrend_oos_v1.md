@@ -42,3 +42,18 @@ Failure of any gate means **NO PROMOTION**. No fallback interaction is substitut
 
 ## Scope
 Research only. Passing this OOS gate still does not change Market Brain or create an option trade rule. A passing underlying-context hypothesis must subsequently undergo option-translation validation before any production consideration.
+
+
+## Methodology correction before evaluation
+The descriptive interaction audit inspected the full stored sample used to select this candidate. Therefore the originally proposed latest-30% split cannot honestly be called untouched OOS after candidate selection.
+
+This correction is made **before evaluating the candidate on that split** and does not change the frozen hypothesis, feature threshold, horizon, cost, or promotion metrics.
+
+The evaluation policy is therefore:
+- the 70/30 chronological split is retained as a **diagnostic temporal stress test only**;
+- it is permanently **ineligible for promotion**;
+- true promotion eligibility begins only with observations whose market timestamp is strictly after the completed discovery audit cutoff: **2026-08-29T12:16:54Z**;
+- the original frozen promotion gates apply to that genuinely forward sample;
+- until at least 20 qualifying LOW-USDINR × DOWNTREND SELL observations exist after the cutoff, status is **WAITING_FOR_FORWARD_SAMPLE**.
+
+This supersedes only the claim that the latest 30% of the already-inspected dataset is untouched OOS. It does not permit selecting a fallback interaction from the discovery audit.
