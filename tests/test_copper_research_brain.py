@@ -92,6 +92,11 @@ def test_edge_attribution_is_descriptive_only():
     assert report["observations"] > 0
     assert "session" in report["dimensions"]
     assert "volume_bucket" in report["dimensions"]
+    assert "time_adjusted_volume_bucket" in report["dimensions"]
+    assert "session_location_bucket" in report["dimensions"]
+    assert "vwap_location_bucket" in report["dimensions"]
+    assert "opening_range_break" in report["dimensions"]
+    assert "price_oi_state" in report["dimensions"]
     assert "oi_bucket" in report["dimensions"]
 
 
@@ -104,6 +109,10 @@ def test_regime_stability_splits_chronologically():
     assert study["windows"] == 4
     assert sum(study["window_sizes"]) == len(experiences)
     assert "session" in study["stability"]
+    assert "session_location_bucket" in study["stability"]
+    assert "vwap_location_bucket" in study["stability"]
+    assert "opening_range_break" in study["stability"]
+    assert "time_adjusted_volume_bucket" in study["stability"]
     assert isinstance(study["recurring_positive_candidates"], list)
 
 
