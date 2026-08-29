@@ -1,0 +1,72 @@
+name: Scheduled Copper Option Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 18 * * 1-5"
+  push:
+    branches: [main]
+    paths:
+      - "app/commodity_option_candle_collector.py"
+      - "app/main.py"
+      - ".github/workflows/scheduled-copper-option-collector.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-option-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for Copper option collector deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-options/collect" in (d.get("paths") or {}) else 1)'; then
+                sleep 30
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Collect completed Copper option candles
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 600             -H "X-Collector-Token: $COLLECTOR_TOKEN"             -X POST "$API_BASE/v1/internal/commodity-options/collect?strikes_per_type=12"             -o collector-result.json
+          python - <<'PY'
+          import json
+          result=json.load(open("collector-result.json"))
+          assert result.get("status")=="COLLECTED", result
+          assert result.get("research_only") is True, result
+          assert result.get("production_rules_changed") is False, result
+          assert result.get("live_execution_enabled") is False, result
+          assert int(result.get("contracts_requested") or 0) > 0, result
+          assert int(result.get("contracts_with_candles") or 0) > 0, result
+          print(json.dumps({
+              "trade_date":result.get("trade_date"),
+              "underlying_close":result.get("underlying_close"),
+              "contracts_requested":result.get("contracts_requested"),
+              "contracts_with_candles":result.get("contracts_with_candles"),
+              "upserted":result.get("upserted"),
+              "strike_coverage":result.get("strike_coverage"),
+          }, indent=2))
+          PY
+      - name: Upload collection result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-option-collector-result
+          path: collector-result.json
