@@ -14,7 +14,7 @@ from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .candlestick_research_v2 import run_candlestick_research_v2
 from .commodity_backtest import run_commodity_backtest
-from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability, run_copper_regime_stability_from_store, run_copper_interaction_stability_from_store
+from .copper_research_brain import run_copper_research_baseline, run_copper_brain_b_experiment, run_copper_edge_attribution, run_copper_regime_stability, run_copper_regime_stability_from_store, run_copper_expanding_daily_edge_from_store, run_copper_interaction_stability_from_store
 from .copper_avoidance_forward_validation import run_copper_avoidance_forward_validation_from_store
 from .copper_day_replay import run_copper_day_by_day_replay_from_store
 from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, backfill_continuous_commodity_candles, collect_completed_commodity_candles
@@ -408,6 +408,21 @@ async def copper_interaction_stability_stored_v1(request:CopperResearchBaselineR
         )
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("stored Copper interaction stability",exc)
+@app.post("/v1/research/copper/expanding-daily-edge-stored-v1")
+async def copper_expanding_daily_edge_stored_v1(request:CopperResearchBaselineRequest):
+    if not settings.database_url.strip():
+        raise HTTPException(status_code=503,detail={"code":"RESEARCH_STORE_DISABLED","message":"Configure DATABASE_URL to enable stored Copper research"})
+    try:
+        return await run_copper_expanding_daily_edge_from_store(
+            PostgresCandleStore(settings.database_url),
+            days=request.days,
+            sample_every_bars=request.sample_every_bars,
+            round_trip_cost_bps=request.round_trip_cost_bps,
+            minimum_training_signals=20,
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("stored Copper expanding daily edge",exc)
+
 @app.post("/v1/research/copper/regime-stability-stored-v1")
 async def copper_regime_stability_stored_v1(request:CopperResearchBaselineRequest):
     if not settings.database_url.strip():

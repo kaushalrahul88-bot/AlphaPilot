@@ -1245,3 +1245,163 @@ async def run_copper_regime_stability_from_store(store, days=45, sample_every_ba
         "study": study,
         "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
     }
+
+
+DAILY_EDGE_DIMENSIONS = (
+    "signal", "session", "atr_bucket", "volume_bucket", "time_adjusted_volume_bucket",
+    "momentum_bucket", "session_location_bucket", "vwap_location_bucket",
+    "opening_range_break", "price_oi_state",
+)
+
+
+def expanding_daily_edge_backtest(experiences, horizon_minutes=60, round_trip_cost_bps=4.0, minimum_training_signals=20):
+    """Learn hypotheses through D-1, freeze them, then score them only on D."""
+    from .commodity_time import parse_ist_timestamp
+
+    observations = _brain_a_attribution_observations(experiences, horizon_minutes, round_trip_cost_bps)
+    by_day = {}
+    for row in observations:
+        try:
+            day = parse_ist_timestamp(row.get("timestamp")).date().isoformat()
+        except Exception:
+            continue
+        by_day.setdefault(day, []).append(row)
+    days = sorted(by_day)
+    daily = []
+    training_rows = []
+
+    for index, day in enumerate(days):
+        today = by_day[day]
+        if index == 0:
+            training_rows.extend(today)
+            continue
+
+        hypotheses = []
+        for dimension in DAILY_EDGE_DIMENSIONS:
+            groups = {}
+            for row in training_rows:
+                groups.setdefault(str(row.get(dimension, "UNKNOWN")), []).append(row)
+            for value, group in groups.items():
+                stats = _segment_stats(group)
+                pf = _f(stats.get("profit_factor"), 0.0) or 0.0
+                if stats["signals"] >= int(minimum_training_signals) and stats["avg_net_return_pct"] > 0 and pf > 1.0:
+                    hypotheses.append({
+                        "dimension": dimension, "value": value,
+                        "training_signals": stats["signals"],
+                        "training_avg_net_return_pct": stats["avg_net_return_pct"],
+                        "training_profit_factor": stats["profit_factor"],
+                    })
+
+        matched = []
+        for row in today:
+            matches = [
+                h for h in hypotheses
+                if str(row.get(h["dimension"], "UNKNOWN")) == h["value"]
+            ]
+            if matches:
+                matched.append({**row, "matched_hypotheses": len(matches)})
+
+        values = [float(row["net_pct"]) for row in matched]
+        wins = [x for x in values if x > 0]
+        losses = [x for x in values if x < 0]
+        gp, gl = sum(wins), abs(sum(losses))
+        daily.append({
+            "train_through": days[index - 1],
+            "test_day": day,
+            "training_days": index,
+            "training_observations": len(training_rows),
+            "hypotheses_available": len(hypotheses),
+            "hypotheses": hypotheses,
+            "test_signals": len(matched),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate_pct": round(len(wins) / len(values) * 100.0, 2) if values else 0.0,
+            "avg_net_return_pct": round(mean(values), 4) if values else 0.0,
+            "net_return_sum_pct": round(sum(values), 4),
+            "profit_factor": round(gp / gl, 3) if gl > 0 else None,
+            "no_edge": len(hypotheses) == 0,
+        })
+        training_rows.extend(today)
+
+    tested = [row for row in daily if row["test_signals"] > 0]
+    all_values_proxy = []
+    total_gp = total_gl = 0.0
+    total_signals = total_wins = total_losses = 0
+    weighted_net = 0.0
+    for row in tested:
+        total_signals += row["test_signals"]
+        total_wins += row["wins"]
+        total_losses += row["losses"]
+        weighted_net += row["avg_net_return_pct"] * row["test_signals"]
+        pf = row["profit_factor"]
+        # Aggregate exact net sum and infer loss/profit only where daily PF is defined.
+        if pf is not None and pf > 0:
+            net = row["net_return_sum_pct"]
+            loss = net / (pf - 1.0) if abs(pf - 1.0) > 1e-12 else 0.0
+            if loss < 0:
+                total_gl += abs(loss)
+                total_gp += abs(loss) * pf
+    return {
+        "mode": "COPPER_EXPANDING_DAILY_EDGE_BACKTEST_V1",
+        "research_only": True,
+        "lookahead_guard": "Hypotheses for test day D use observations dated no later than D-1.",
+        "learning_rule": "Expanding history: day 1 -> day 2; days 1-2 -> day 3; days 1-3 -> day 4; and so on.",
+        "candidate_rule": {
+            "dimensions": list(DAILY_EDGE_DIMENSIONS),
+            "minimum_training_signals": int(minimum_training_signals),
+            "positive_expectancy_required": True,
+            "profit_factor_above_one_required": True,
+            "threshold_optimization": False,
+        },
+        "calendar_days_observed": len(days),
+        "test_days": len(daily),
+        "days_with_hypothesis": sum(1 for row in daily if not row["no_edge"]),
+        "days_with_test_signals": len(tested),
+        "days_without_edge": sum(1 for row in daily if row["no_edge"]),
+        "aggregate": {
+            "signals": total_signals,
+            "wins": total_wins,
+            "losses": total_losses,
+            "win_rate_pct": round(total_wins / total_signals * 100.0, 2) if total_signals else 0.0,
+            "avg_net_return_pct": round(weighted_net / total_signals, 4) if total_signals else 0.0,
+            "net_return_sum_pct": round(sum(row["net_return_sum_pct"] for row in tested), 4),
+        },
+        "daily_results": daily,
+        "guardrail": "This is hypothesis replay, not strategy promotion. Each day's hypothesis is frozen before that day's outcomes are scored.",
+    }
+
+
+async def run_copper_expanding_daily_edge_from_store(store, days=365, sample_every_bars=3, round_trip_cost_bps=4.0, minimum_training_signals=20):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    days = max(7, min(int(days), 3650))
+    step = max(1, min(int(sample_every_bars), 12))
+    end = datetime.now(ZoneInfo("Asia/Kolkata"))
+    start = end - timedelta(days=days)
+    await store.initialize()
+    segments = await store.read_symbol_contract_segments("COPPER", 5, start, end)
+    experiences = []
+    coverage = []
+    for segment in segments:
+        candles = segment.get("candles") or []
+        built = build_copper_experiences(candles, sample_every_bars=step)
+        experiences.extend(built)
+        coverage.append({
+            "trading_symbol": segment.get("trading_symbol"),
+            "expiry_date": segment.get("expiry_date"),
+            "candles": len(candles), "experiences": len(built),
+            "start": str(candles[0][0]) if candles else None,
+            "end": str(candles[-1][0]) if candles else None,
+        })
+    experiences.sort(key=lambda item: str((item.get("features") or {}).get("timestamp") or ""))
+    if len(experiences) < 80:
+        raise RuntimeError(f"Insufficient stored Copper experiences ({len(experiences)})")
+    return {
+        "mode": "ALPHAPILOT_COPPER_EXPANDING_DAILY_EDGE_STORED_V1",
+        "research_only": True,
+        "production_rules_changed": False,
+        "data_source": "POSTGRES_COMMODITY_CANDLES",
+        "coverage": {"requested_days": days, "contracts": len(coverage), "contract_segments": coverage, "experiences": len(experiences)},
+        "backtest": expanding_daily_edge_backtest(experiences, 60, round_trip_cost_bps, minimum_training_signals),
+    }
