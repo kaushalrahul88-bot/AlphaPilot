@@ -7,6 +7,7 @@ from app.commodity_option_snapshot_collector import (
     _bucket_5m,
     _normalize_quote_body,
     collect_copper_option_snapshots,
+    probe_copper_option_live_quote,
 )
 
 
@@ -220,3 +221,54 @@ def test_snapshot_quality_fails_closed_when_one_option_side_is_missing():
     assert result["ce_snapshots"]==3
     assert result["pe_snapshots"]==0
     assert result["quality"]["pass"] is False
+
+def test_live_quote_probe_checks_nearest_ce_and_pe_without_persisting():
+    underlying=UnderlyingStore([
+        ["2026-08-28T23:25:00+05:30",1380,1384,1379,1381.6,100],
+    ])
+    ce=contract("CE",1380)
+    pe=contract("PE",1380)
+    master=[ce,pe]
+
+    def ranked(rows,symbol,trade_date,underlying_price,option_type,max_strikes):
+        assert rows==master
+        assert symbol=="COPPER"
+        assert underlying_price==1381.6
+        assert max_strikes==1
+        return [ce] if option_type=="CE" else [pe]
+
+    async def quote(provider,selected):
+        return {
+            "last_price":6.25 if selected["option_type"]=="CE" else 7.10,
+            "volume":100,
+            "open_interest":200,
+            "bid_price":6.2,
+            "ask_price":6.3,
+            "payload":{"last_price":6.25},
+        }
+
+    async def run():
+        with patch(
+            "app.commodity_option_snapshot_collector._current_master",
+            new=AsyncMock(return_value=master),
+        ), patch(
+            "app.commodity_option_snapshot_collector.ranked_mcx_option_contracts",
+            side_effect=ranked,
+        ), patch(
+            "app.commodity_option_snapshot_collector.fetch_mcx_option_live_quote",
+            new=AsyncMock(side_effect=quote),
+        ):
+            return await probe_copper_option_live_quote(
+                object(),
+                underlying,
+                now=datetime(2026,8,29,12,0,tzinfo=IST),
+            )
+
+    result=asyncio.run(run())
+    assert result["status"]=="AVAILABLE"
+    assert result["underlying_reference_price"]==1381.6
+    assert {row["option_type"] for row in result["quotes"]}=={"CE","PE"}
+    assert all(float(row["last_price"])>0 for row in result["quotes"])
+    assert result["production_rules_changed"] is False
+    assert result["live_execution_enabled"] is False
+
