@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -207,12 +207,6 @@ def _records(contract, candles, collected_at):
         deduplicated[candle_at.isoformat()] = record
     return [deduplicated[key] for key in sorted(deduplicated)]
 
-
-def _session_bounds(day: date):
-    return (
-        datetime.combine(day, time(9, 0), tzinfo=IST),
-        datetime.combine(day, time(23, 59, 59), tzinfo=IST),
-    )
 
 
 async def collect_copper_option_candles(
