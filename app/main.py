@@ -30,7 +30,7 @@ from .commodity_continuous_backtest import discover_groww_historical_mcx_contrac
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
-from .commodity_option_history import probe_mcx_option_history, scan_mcx_option_history_band
+from .commodity_option_history import probe_exact_mcx_option_routes, probe_mcx_option_history, scan_mcx_option_history_band
 from .commodity_option_candle_collector import PostgresOptionCandleStore, collect_copper_option_candles
 from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
@@ -150,6 +150,19 @@ async def commodity_contracts_historical_capability(symbol:str="COPPER",days:int
         }
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("historical MCX contract discovery",exc)
+
+@app.get("/v1/internal/copper/exact-option-route-probe")
+async def copper_exact_option_route_probe(
+    strike:float=1400.0,
+    trade_date:str="2026-08-28",
+    x_collector_token:str|None=Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        return await probe_exact_mcx_option_routes(
+            get_provider(settings),"COPPER",strike,trade_date,
+        )
+    except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
 
 @app.get("/v1/internal/copper/aug26-contract-sync-audit")
 async def copper_aug26_contract_sync_audit(
