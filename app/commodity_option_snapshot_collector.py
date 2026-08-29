@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .commodity_option_history import fetch_mcx_option_master, ranked_mcx_option_contracts
-from .commodities import mcx_session_status
+from .commodities import commodity_quote, mcx_session_status
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS commodity_option_snapshots (
     lot_size INTEGER,
     sample_bucket_at TIMESTAMPTZ NOT NULL,
     observed_at TIMESTAMPTZ NOT NULL,
+    underlying_price NUMERIC,
     last_price NUMERIC NOT NULL,
     volume NUMERIC,
     open_interest NUMERIC,
@@ -48,6 +49,8 @@ CREATE TABLE IF NOT EXISTS commodity_option_snapshots (
     collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (provider, trading_symbol, sample_bucket_at)
 );
+ALTER TABLE commodity_option_snapshots
+    ADD COLUMN IF NOT EXISTS underlying_price NUMERIC;
 CREATE INDEX IF NOT EXISTS commodity_option_snapshots_underlying_time_idx
     ON commodity_option_snapshots (underlying_symbol, sample_bucket_at DESC);
 CREATE INDEX IF NOT EXISTS commodity_option_snapshots_contract_idx
@@ -60,17 +63,18 @@ UPSERT_SQL = """
 INSERT INTO commodity_option_snapshots (
     provider, underlying_symbol, exchange, segment, trading_symbol, groww_symbol,
     expiry_date, strike, option_type, lot_size, sample_bucket_at, observed_at,
-    last_price, volume, open_interest, bid_price, ask_price, raw_payload, collected_at
+    underlying_price, last_price, volume, open_interest, bid_price, ask_price, raw_payload, collected_at
 ) VALUES (
     %(provider)s, %(underlying_symbol)s, %(exchange)s, %(segment)s,
     %(trading_symbol)s, %(groww_symbol)s, %(expiry_date)s, %(strike)s,
     %(option_type)s, %(lot_size)s, %(sample_bucket_at)s, %(observed_at)s,
-    %(last_price)s, %(volume)s, %(open_interest)s, %(bid_price)s,
+    %(underlying_price)s, %(last_price)s, %(volume)s, %(open_interest)s, %(bid_price)s,
     %(ask_price)s, %(raw_payload)s, %(collected_at)s
 )
 ON CONFLICT (provider, trading_symbol, sample_bucket_at)
 DO UPDATE SET
     observed_at = EXCLUDED.observed_at,
+    underlying_price = EXCLUDED.underlying_price,
     last_price = EXCLUDED.last_price,
     volume = EXCLUDED.volume,
     open_interest = EXCLUDED.open_interest,
@@ -288,7 +292,7 @@ def _session_window(day):
     )
 
 
-def _snapshot_record(contract, quote, observed_at):
+def _snapshot_record(contract, quote, observed_at, underlying_price):
     return {
         "provider": PROVIDER,
         "underlying_symbol": "COPPER",
@@ -302,6 +306,7 @@ def _snapshot_record(contract, quote, observed_at):
         "lot_size": contract.get("lot_size"),
         "sample_bucket_at": _bucket_5m(observed_at),
         "observed_at": observed_at,
+        "underlying_price": _decimal(underlying_price),
         "last_price": _decimal(quote.get("last_price")),
         "volume": _decimal(quote.get("volume")),
         "open_interest": _decimal(quote.get("open_interest")),
@@ -375,7 +380,32 @@ async def collect_copper_option_snapshots(
             "snapshots": 0,
         }
 
-    underlying_price = float(latest_row[4])
+    underlying_candle_close = float(latest_row[4])
+    try:
+        live_underlying = await commodity_quote(provider, "COPPER")
+        underlying_price = _number(
+            (live_underlying.get("validation") or {}).get("last_price")
+        )
+        if underlying_price is None or underlying_price <= 0:
+            raise RuntimeError("live Copper future quote has no positive last_price")
+        underlying_contract = (
+            (live_underlying.get("contract") or {}).get("trading_symbol")
+            or None
+        )
+    except Exception as exc:
+        return {
+            "status": "UNDERLYING_LIVE_QUOTE_ERROR",
+            "research_only": True,
+            "production_rules_changed": False,
+            "live_execution_enabled": False,
+            "observed_at": observed_at.isoformat(),
+            "latest_underlying_at": latest_stamp.isoformat(),
+            "underlying_candle_close": underlying_candle_close,
+            "underlying_age_minutes": round(underlying_age_minutes, 2),
+            "snapshots": 0,
+            "error": f"{exc.__class__.__name__}: {str(exc)[:160]}",
+        }
+
     master = await _current_master()
     selected = []
     for option_type in ("CE", "PE"):
@@ -414,7 +444,7 @@ async def collect_copper_option_snapshots(
     for contract in contracts.values():
         try:
             quote = await fetch_mcx_option_live_quote(provider, contract)
-            record = _snapshot_record(contract, quote, observed_at)
+            record = _snapshot_record(contract, quote, observed_at, underlying_price)
             if (
                 not record["trading_symbol"]
                 or not record["groww_symbol"]
@@ -466,6 +496,9 @@ async def collect_copper_option_snapshots(
         "observed_at": observed_at.isoformat(),
         "sample_bucket_at": _bucket_5m(observed_at).isoformat(),
         "underlying_price": underlying_price,
+        "underlying_price_source": "LIVE_MCX_FUTURE_QUOTE",
+        "underlying_contract": underlying_contract,
+        "underlying_candle_close": underlying_candle_close,
         "latest_underlying_at": latest_stamp.isoformat(),
         "underlying_age_minutes": round(underlying_age_minutes, 2),
         "strikes_per_type": strike_count,
@@ -485,5 +518,5 @@ async def collect_copper_option_snapshots(
         },
         "contracts": details,
         "idempotency_key": "provider+trading_symbol+sample_bucket_at",
-        "guardrail": "These are sampled live LTP observations, not reconstructed 5-minute OHLC candles.",
+        "guardrail": "These are sampled live LTP observations, not reconstructed 5-minute OHLC candles. Strike selection is anchored to the live Copper futures quote; stored 5-minute Copper candles are used independently as a freshness/health gate.",
     }
