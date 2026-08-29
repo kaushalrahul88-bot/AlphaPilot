@@ -25,6 +25,7 @@ from .copper_context_feature_audit import descriptive_context_features
 from .copper_context_interaction_audit import descriptive_context_interactions
 from .copper_fx_level_downtrend_forward_validation import validate_fx_level_downtrend
 from .copper_option_snapshot_readiness import run_snapshot_readiness
+from .copper_contract_sync_audit import audit_copper_aug26_contract_window
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -149,6 +150,18 @@ async def commodity_contracts_historical_capability(symbol:str="COPPER",days:int
         }
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("historical MCX contract discovery",exc)
+
+@app.get("/v1/internal/copper/aug26-contract-sync-audit")
+async def copper_aug26_contract_sync_audit(
+    x_collector_token:str|None=Header(default=None),
+):
+    store=_collector_store(x_collector_token)
+    try:
+        return await audit_copper_aug26_contract_window(
+            get_provider(settings),
+            store,
+        )
+    except Exception as exc:_safe_upstream_error("Copper Aug26 contract sync audit",exc)
 
 @app.post("/v1/internal/commodity-candles/backfill-continuous")
 async def commodity_candles_backfill_continuous(request:CommodityCandleBackfillRequest,x_collector_token:str|None=Header(default=None)):
