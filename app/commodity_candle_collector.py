@@ -395,9 +395,15 @@ async def backfill_continuous_commodity_candles(
     collected_at = datetime.now(IST)
     records = _records(symbol, contract, interval, completed, collected_at)
     upserted = await store.upsert(records)
+    status = "BACKFILLED_CONTINUOUS" if records else "NO_ARCHIVED_INTRADAY_DATA"
     return {
-        "status": "BACKFILLED_CONTINUOUS",
+        "status": status,
         "research_only": True,
+        "usable_for_continuous_research": bool(records),
+        "data_limitation": None if records else (
+            "Archived MCX contract resolved successfully, but Groww returned no "
+            "intraday candles for this historical contract/date range."
+        ),
         "rollover_method": "EXPIRY_BOUNDARY_FRONT_MONTH",
         "contract_discovery_source": contract.get("discovery_source"),
         "symbol": symbol,
