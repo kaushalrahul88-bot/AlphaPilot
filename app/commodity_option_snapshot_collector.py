@@ -192,10 +192,20 @@ def _nested_first(mapping, paths):
     for path in paths:
         current = mapping
         for key in path:
-            if not isinstance(current, dict) or key not in current:
+            if isinstance(current, dict):
+                if key not in current:
+                    current = None
+                    break
+                current = current.get(key)
+            elif isinstance(current, list):
+                try:
+                    current = current[int(key)]
+                except (ValueError, IndexError, TypeError):
+                    current = None
+                    break
+            else:
                 current = None
                 break
-            current = current.get(key)
         number = _number(current)
         if number is not None:
             return number
