@@ -6,6 +6,8 @@ from datetime import date, datetime, timedelta, time as dt_time
 from statistics import mean
 from zoneinfo import ZoneInfo
 
+from .mcx_calendar import mcx_metal_session_status
+
 import httpx
 
 INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
@@ -208,10 +210,7 @@ def analyze_commodity_candles(symbol, candles, min_rr=1.5):
 
 
 def mcx_session_status(now=None):
-    now=now or datetime.now(ZoneInfo("Asia/Kolkata"))
-    if now.weekday()>=5: return {"status":"CLOSED","is_open":False,"checked_at":now.isoformat()}
-    current=now.time(); is_open=dt_time(9,0)<=current<=dt_time(23,30)
-    return {"status":"OPEN" if is_open else "CLOSED","is_open":is_open,"checked_at":now.isoformat()}
+    return mcx_metal_session_status(now)
 
 
 def _fresh_enough(timestamp, timeframe, now):
