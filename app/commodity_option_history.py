@@ -351,6 +351,123 @@ async def fetch_mcx_option_day(provider, contract, trade_date, client=None):
     }
 
 
+async def probe_exact_mcx_option_routes(provider, symbol="COPPER", strike=1400.0, trade_date="2026-08-28"):
+    """
+    Diagnose Groww historical support for an exact currently-listed MCX option.
+
+    Tests both Groww historical candle interfaces with the exact instrument
+    identifiers from Groww's own instrument CSV. No synthetic option prices.
+    """
+    symbol=str(symbol).upper().strip()
+    when=datetime.fromisoformat(str(trade_date)[:10]).date()
+    strike=float(strike)
+    master=await fetch_mcx_option_master([symbol])
+    rows=[]
+    for option_type in ("CE","PE"):
+        candidates=[
+            row for row in master
+            if row.get("underlying")==symbol
+            and row.get("option_type")==option_type
+            and float(row.get("strike") or 0)==strike
+            and _expiry(row.get("expiry")) is not None
+            and _expiry(row.get("expiry"))>=when
+        ]
+        candidates.sort(key=lambda row:_expiry(row.get("expiry")))
+        contract=candidates[0] if candidates else None
+        if not contract:
+            rows.append({"option_type":option_type,"status":"CONTRACT_NOT_FOUND"})
+            continue
+        start=datetime.combine(when,time(9,0),tzinfo=IST)
+        end=datetime.combine(when,time(23,30),tzinfo=IST)
+        headers=await provider._headers()
+        route_results=[]
+        tests=[
+            (
+                "NEW_GROWW_SYMBOL",
+                "/v1/historical/candles",
+                {
+                    "exchange":"MCX",
+                    "segment":"COMMODITY",
+                    "groww_symbol":contract["groww_symbol"],
+                    "start_time":start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end_time":end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "candle_interval":"5minute",
+                },
+            ),
+            (
+                "DEPRECATED_TRADING_SYMBOL",
+                "/v1/historical/candle/range",
+                {
+                    "exchange":"MCX",
+                    "segment":"COMMODITY",
+                    "trading_symbol":contract["trading_symbol"],
+                    "start_time":start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end_time":end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "interval_in_minutes":"5",
+                },
+            ),
+        ]
+        async with httpx.AsyncClient(timeout=40) as client:
+            for route_name,path,params in tests:
+                try:
+                    response=await client.get(
+                        f"{provider.BASE_URL}{path}",
+                        headers=headers,
+                        params=params,
+                    )
+                    try:
+                        body=response.json()
+                    except Exception:
+                        body={"raw":response.text[:500]}
+                    payload=body.get("payload",body) if isinstance(body,dict) else {}
+                    candles=_clean_candles(payload.get("candles",[]) if isinstance(payload,dict) else [])
+                    route_results.append({
+                        "route":route_name,
+                        "http_status":response.status_code,
+                        "api_status":body.get("status") if isinstance(body,dict) else None,
+                        "candles":len(candles),
+                        "first_at":candles[0][0] if candles else None,
+                        "last_at":candles[-1][0] if candles else None,
+                        "error":(
+                            body.get("error")
+                            or body.get("message")
+                            or payload.get("message")
+                            if isinstance(body,dict) and isinstance(payload,dict)
+                            else None
+                        ),
+                    })
+                except Exception as exc:
+                    route_results.append({
+                        "route":route_name,
+                        "http_status":None,
+                        "candles":0,
+                        "error":f"{exc.__class__.__name__}: {str(exc)[:240]}",
+                    })
+        rows.append({
+            "option_type":option_type,
+            "contract":{
+                "trading_symbol":contract.get("trading_symbol"),
+                "groww_symbol":contract.get("groww_symbol"),
+                "expiry":contract.get("expiry"),
+                "strike":contract.get("strike"),
+                "segment":contract.get("segment"),
+                "buy_allowed":contract.get("buy_allowed"),
+            },
+            "routes":route_results,
+            "any_history":any(int(x.get("candles") or 0)>0 for x in route_results),
+        })
+    return {
+        "mode":"GROWW_EXACT_MCX_OPTION_ROUTE_PROBE_V2",
+        "symbol":symbol,
+        "strike":strike,
+        "trade_date":when.isoformat(),
+        "results":rows,
+        "historical_option_route_found":any(x.get("any_history") for x in rows),
+        "research_only":True,
+        "synthetic_prices_used":False,
+    }
+
+
 def premium_entry_after_click(candles, click_at):
     click = _timestamp(click_at)
     rows = _clean_candles(candles)
