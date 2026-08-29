@@ -334,6 +334,7 @@ async def collect_copper_option_snapshots(
             "production_rules_changed": False,
             "live_execution_enabled": False,
             "observed_at": observed_at.isoformat(),
+            "market_session": session_state,
             "snapshots": 0,
         }
 
