@@ -722,22 +722,44 @@ async def run_copper_regime_stability_from_store(store, days=45, sample_every_ba
     end = datetime.now(ist)
     start = end - timedelta(days=days)
     await store.initialize()
-    mcx = await store.read_symbol("COPPER", 5, start, end)
-    if len(mcx) < 300:
-        raise RuntimeError(f"Insufficient stored MCX Copper 5m history ({len(mcx)} candles)")
-    experiences = build_copper_experiences(mcx, sample_every_bars=step)
+    segments = await store.read_symbol_contract_segments("COPPER", 5, start, end)
+    mcx_candles = sum(len(segment.get("candles") or []) for segment in segments)
+    if mcx_candles < 300:
+        raise RuntimeError(f"Insufficient stored MCX Copper 5m history ({mcx_candles} candles)")
+    experiences = []
+    segment_coverage = []
+    for segment in segments:
+        candles = segment.get("candles") or []
+        segment_experiences = build_copper_experiences(candles, sample_every_bars=step)
+        experiences.extend(segment_experiences)
+        segment_coverage.append({
+            "trading_symbol": segment.get("trading_symbol"),
+            "expiry_date": segment.get("expiry_date"),
+            "candles": len(candles),
+            "experiences": len(segment_experiences),
+            "start": str(candles[0][0]) if candles else None,
+            "end": str(candles[-1][0]) if candles else None,
+        })
+    experiences.sort(key=lambda item: str((item.get("features") or {}).get("timestamp") or ""))
+    if len(experiences) < 80:
+        raise RuntimeError(f"Insufficient rollover-safe Copper experiences ({len(experiences)})")
     study = regime_stability_study(experiences, windows, 60, round_trip_cost_bps)
+    first_candle = next((s["candles"][0] for s in segments if s.get("candles")), None)
+    last_candle = next((s["candles"][-1] for s in reversed(segments) if s.get("candles")), None)
     return {
         "mode": "ALPHAPILOT_COPPER_REGIME_STABILITY_STORED_V1",
         "research_only": True,
         "production_rules_changed": False,
         "data_source": "POSTGRES_COMMODITY_CANDLES",
+        "rollover_guard": "EXPERIENCES_NEVER_CROSS_CONTRACT_BOUNDARIES",
         "coverage": {
             "requested_days": days,
-            "mcx_5m_candles": len(mcx),
+            "mcx_5m_candles": mcx_candles,
             "experiences": len(experiences),
-            "start": str(mcx[0][0]) if mcx else None,
-            "end": str(mcx[-1][0]) if mcx else None,
+            "contracts": len(segment_coverage),
+            "contract_segments": segment_coverage,
+            "start": str(first_candle[0]) if first_candle else None,
+            "end": str(last_candle[0]) if last_candle else None,
         },
         "study": study,
         "next_gate": "Only recurring candidates may be proposed for Brain B v2, and they still require a fresh untouched validation period.",
