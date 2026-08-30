@@ -14,7 +14,9 @@ STRONG_MARKET_TERMS=(
 GLOBAL_MACRO_TERMS=("china","chinese","pmi","manufacturing","stimulus","tariff","tariffs","trade war","dollar","fed","federal reserve","rates")
 SUPPLY_EVENT_TERMS=("strike","disruption","shutdown","closure","ban","bans","export ban","accident","flood","earthquake","fire")
 MAJOR_SUPPLY_TERMS=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata","freeport","antofagasta","glencore","bhp","rio tinto","southern copper")
-EQUITY_OR_PROJECT_TERMS=("shares","share price","stock","stocks","ofs","ipo","private placement","drilling","drill","exploration","project","earnings","profit","valuation","returns")
+EQUITY_OR_PROJECT_TERMS=("shares","share price","stock","stocks","ofs","ipo","private placement","drilling","drill","exploration","project","earnings","profit","profits","valuation","returns")
+PRICE_RECAP_TERMS=("price surge","prices surge","price rises","prices rise","price rally","prices rally","record-high copper prices","record high copper prices","copper gains","copper jumps","copper climbs","copper falls","copper drops","copper slides")
+PROMOTIONAL_DEMAND_TERMS=("targets rising","targeting rising","sees rising","expects rising","bets on rising","aims to capitalize","positions for rising")
 NON_PRICE_COPPER_TERMS=("wire","cable","antenna","coil","manure","contamination","pig","sports","basketball","mercury beat","school burglary","thief","thieves","stealing","stolen","swan boats")
 
 HARD_IRRELEVANT=(
@@ -47,6 +49,16 @@ def _audit_one(record):
     supply_event=[x for x in SUPPLY_EVENT_TERMS if x in low]
     major_supply=[x for x in MAJOR_SUPPLY_TERMS if x in low]
     equity_project=[x for x in EQUITY_OR_PROJECT_TERMS if x in low]
+    price_recap=[x for x in PRICE_RECAP_TERMS if x in low]
+    promotional=[x for x in PROMOTIONAL_DEMAND_TERMS if x in low]
+    # Price-following stories are consequences/recaps, not independent causal news.
+    # Keep them visible for audit/context, but never let them vote directionally.
+    if price_recap and not (supply_event and major_supply):
+        return "UNCERTAIN",["PRICE_RECAP_OR_MARKET_CONSEQUENCE_NOT_INDEPENDENT_NEWS"]
+    # Company/project assertions about 'rising demand' are promotional claims rather
+    # than independent demand evidence.
+    if promotional:
+        return "REJECT",["PROMOTIONAL_OR_PROJECT_DEMAND_ASSERTION"]
     # Equity/company/project headlines are not commodity-market evidence merely because
     # the company/project name contains Copper. Keep only when a strong commodity
     # transmission channel is explicit in the same headline.

@@ -11,10 +11,10 @@ class HistoricalNewsIntegrityTests(unittest.TestCase):
   r=audit_historical_news_records([self.row("Police arrest suspects in copper theft")])
   self.assertEqual(r["classification_counts"].get("REJECT"),1)
  def test_market_copper_kept(self):
-  r=audit_historical_news_records([self.row("Copper prices rise as LME inventories fall")])
+  r=audit_historical_news_records([self.row("LME copper inventories fall sharply, tightening available supply")])
   self.assertEqual(r["classification_counts"].get("KEEP"),1)
  def test_duplicate_cannot_vote_twice(self):
-  rows=[self.row("Copper prices rise as LME inventories fall"),self.row("Copper prices rise as LME inventories fall","2026-08-10T10:05:00+00:00")]
+  rows=[self.row("LME copper inventories fall sharply, tightening available supply"),self.row("LME copper inventories fall sharply, tightening available supply","2026-08-10T10:05:00+00:00")]
   r=audit_historical_news_records(rows)
   self.assertEqual(r["classification_counts"].get("DUPLICATE"),1)
 if __name__=="__main__":unittest.main()
