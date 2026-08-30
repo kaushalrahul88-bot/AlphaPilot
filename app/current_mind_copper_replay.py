@@ -31,6 +31,7 @@ MISSED_MOVE_PCT=0.40
 TARGET_R=1.5
 RECENT_TRIGGER_BARS=3
 RECENT_INVALIDATION_BARS=6
+NEWS_ACTIVE_TRADING_HOURS=8
 
 
 def _f(value, default=None):
@@ -88,13 +89,39 @@ def _macro_evidence(click):
     return {"lane":"MACRO","stance":stance,"source":"China NBS","detail":[r.get("value") for r in records]}
 
 
-def _news_evidence(click, records):
-    cutoff=click-timedelta(hours=8)
-    visible=[r for r in (records or []) if cutoff<=parse_ist_timestamp(r["available_at"])<=click]
-    bullish=sum((r.get("value") or {}).get("sentiment")=="BULLISH" for r in visible)
-    bearish=sum((r.get("value") or {}).get("sentiment")=="BEARISH" for r in visible)
+def _news_evidence(click, records, session_start=None, previous_market_bar=None):
+    """Return only News-Intelligence-approved evidence visible at the click.
+
+    The frozen eight-hour relevance horizon is measured in market opportunity,
+    not wall-clock downtime. News first observed after the previous market bar
+    (weekends, holidays, or after close) is carried into the next session for
+    the first eight hours of that session. News that was already observable
+    while the market was trading is never revived on a later session.
+    """
+    cutoff=click-timedelta(hours=NEWS_ACTIVE_TRADING_HOURS)
+    visible=[];carried=[]
+    for r in records or []:
+        ts=parse_ist_timestamp(r["available_at"])
+        if ts>click:continue
+        ni=r.get("news_intelligence") or {}
+        if ni.get("disposition")!="ALLOW":continue
+        normal=ts>=cutoff
+        carry=False
+        if not normal and session_start is not None and ts<session_start:
+            carry_deadline=session_start+timedelta(hours=NEWS_ACTIVE_TRADING_HOURS)
+            after_previous_market=(previous_market_bar is None or ts>previous_market_bar)
+            carry=after_previous_market and click<=carry_deadline
+        if normal or carry:
+            visible.append(r)
+            if carry:carried.append(r)
+    bullish=sum((r.get("news_intelligence") or {}).get("effect")=="BULLISH" for r in visible)
+    bearish=sum((r.get("news_intelligence") or {}).get("effect")=="BEARISH" for r in visible)
     stance="BULLISH" if bullish>bearish else "BEARISH" if bearish>bullish else "UNKNOWN"
-    return {"lane":"NEWS","stance":stance,"source":"GDELT_timestamped_headlines","detail":{"visible_8h":len(visible),"bullish":bullish,"bearish":bearish,"latest":[r.get("value") for r in visible[-5:]]}}
+    return {"lane":"NEWS","stance":stance,"source":"news_intelligence",
+            "detail":{"visible":len(visible),"carried_from_closed_market":len(carried),
+                      "active_trading_hours":NEWS_ACTIVE_TRADING_HOURS,
+                      "bullish":bullish,"bearish":bearish,
+                      "latest":[{"value":r.get("value"),"news_intelligence":r.get("news_intelligence")} for r in visible[-5:]]}}
 
 
 def _evidence_items(features, memory_item, macro_item, news_item=None):
@@ -225,6 +252,17 @@ def evaluate_current_mind_replay(candles, news_records=None, news_metadata=None)
     experiences=build_experiences(rows,3)
     decisions=[];memory_cases=[]
     macro_records=china_copper_macro_records()
+    session_first={}
+    for r in rows:
+        ts=parse_ist_timestamp(r[0]);session_first.setdefault(ts.date(),ts)
+    ordered_bar_times=[parse_ist_timestamp(r[0]) for r in rows]
+    previous_bar_before_session={}
+    last_seen=None
+    for ts in ordered_bar_times:
+        day=ts.date()
+        if day not in previous_bar_before_session:
+            previous_bar_before_session[day]=last_seen
+        last_seen=ts
     for click in sorted(click_set):
         index=index_by_ts.get(click)
         if index is None:
@@ -234,7 +272,11 @@ def evaluate_current_mind_replay(candles, news_records=None, news_metadata=None)
         # three valid first-session clicks and broke the 20-click/session contract.
         features=_build_copper_snapshot_clean(rows,index,information_quality=info)
         mem=_memory_evidence(experiences,features,click);macro=_macro_evidence(click)
-        news=_news_evidence(click,news_records) if news_records is not None else None
+        news=_news_evidence(
+            click,news_records,
+            session_start=session_first.get(click.date()),
+            previous_market_bar=previous_bar_before_session.get(click.date()),
+        ) if news_records is not None else None
         evidence=_evidence_items(features,mem,macro,news)
         direction=_dominant_direction(evidence)
         market=_regime_features(features)
@@ -288,7 +330,10 @@ def evaluate_current_mind_replay(candles, news_records=None, news_metadata=None)
       "news_metadata":news_metadata if news_records is not None else None,
       "guardrails":["20 deterministic random clicks per complete trading session.","Provider-confirmed partial sessions excluded from primary replay.",
                     "Every feature uses data no later than the click.","Memory outcomes must resolve before the click before becoming eligible evidence.",
-                    "Future bars are revealed only after the decision is frozen.","No historical option premium, IV, Greeks or option P&L is fabricated."]}
+                    "Future bars are revealed only after the decision is frozen.",
+                    "Closed-market news is carried only into the next session and only for the frozen eight trading-hour relevance horizon; news already observable during a prior market session is never revived.",
+                    "Only News Intelligence ALLOW records and their assessed effect may enter the NEWS evidence lane.",
+                    "No historical option premium, IV, Greeks or option P&L is fabricated."]}
 
 
 async def run_current_mind_replay_from_store(store):
