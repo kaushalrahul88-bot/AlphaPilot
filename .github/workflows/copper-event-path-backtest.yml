@@ -1,0 +1,64 @@
+name: Copper Event Path Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_event_path_backtest.py"
+      - "app/main.py"
+      - ".github/workflows/copper-event-path-backtest.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for event-path endpoint deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/copper/event-path-backtest" in (d.get("paths") or {}) else 1)'; then
+                sleep 20
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Run event-path diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 300             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/event-path-backtest?sample_every_bars=3"             -o event-path.json
+          python - <<'PY'
+          import json
+          d=json.load(open("event-path.json"))
+          assert d.get("mode")=="COPPER_EVENT_PATH_BACKTEST_V1",d
+          assert d.get("trade_instrument")=="OPTIONS",d
+          assert d.get("futures_pnl_calculated") is False,d
+          assert d.get("option_pnl_calculated") is False,d
+          assert d.get("same_session_only") is True,d
+          print(json.dumps({
+            "reference_contract":d.get("reference_contract"),
+            "target_pct":d.get("target_pct"),"stop_pct":d.get("stop_pct"),
+            "brain_a":(d.get("brains") or {}).get("A",{}).get("overall"),
+            "brain_a_buy_ce":(d.get("brains") or {}).get("A",{}).get("BUY_CE"),
+            "brain_a_sell_pe":(d.get("brains") or {}).get("A",{}).get("SELL_PE"),
+            "brain_b":(d.get("brains") or {}).get("B",{}).get("overall"),
+          },indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-event-path-backtest
+          path: event-path.json
