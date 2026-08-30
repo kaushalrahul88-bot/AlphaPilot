@@ -24,10 +24,18 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
-          for i in {1..42}; do
-            if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o o.json && python -c 'import json,sys;d=json.load(open("o.json"));sys.exit(0 if "/v1/internal/copper/current-mind-20-click-replay/start" in d.get("paths",{}) else 1)'; then sleep 20; exit 0; fi
+          for i in {1..60}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ] && curl -fsS --max-time 20 "$API_BASE/openapi.json" -o o.json && python -c 'import json,sys;d=json.load(open("o.json"));sys.exit(0 if "/v1/internal/copper/current-mind-20-click-replay/start" in d.get("paths",{}) else 1)'; then
+                sleep 10
+                exit 0
+              fi
+            fi
             sleep 10
           done
+          echo "Timed out waiting for Render to deploy $GITHUB_SHA"
           exit 1
       - name: Run frozen Current Mind replay
         run: |

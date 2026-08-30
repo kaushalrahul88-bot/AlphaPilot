@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 from typing import Literal
 import logging
 import hmac
+import os
 import traceback
 
 from .backtest import run_backtest
@@ -132,7 +133,7 @@ class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["COPPER","CRU
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.40.0","provider":settings.market_data_provider.upper(),"commodity_collector_enabled":bool(settings.database_url.strip() and settings.commodity_collector_token.strip())}
+async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.40.0","deployment_commit":os.getenv("RENDER_GIT_COMMIT"),"provider":settings.market_data_provider.upper(),"commodity_collector_enabled":bool(settings.database_url.strip() and settings.commodity_collector_token.strip())}
 def _collector_store(x_collector_token:str|None):
     expected=settings.commodity_collector_token.strip(); supplied=str(x_collector_token or "")
     if not settings.database_url.strip() or not expected:
