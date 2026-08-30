@@ -1,0 +1,99 @@
+{
+  "mode": "COPPER_INDEPENDENT_WEB_ACQUISITION_AUG_V2",
+  "status": "QUARANTINED_NOT_MARKET_BRAIN_INPUT",
+  "methodology": "Independently discovered from public web sources; normalized facts only. Admission remains separate.",
+  "events": [
+    {
+      "available_at": "2026-08-04T00:01:00-04:00",
+      "source": "Reuters via Fidelity",
+      "source_url": "https://www.fidelity.com/news/article/default/202608040001RTRSNEWSCOMBINED_L1N441027_1",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "LME/SHFE/COMEX inventory divergence",
+      "fact": "LME copper stocks were 244,025t versus about 400,000t in April; SHFE stocks about 69,300t versus above 430,000t in March; COMEX stocks 717,314 short tons on Aug 3. Chinese downstream consumption was reported weakening at higher prices.",
+      "transmission_channel": "CONFLICTING_GLOBAL_INVENTORY_AND_CHINA_DEMAND",
+      "directional_effect": "MIXED",
+      "effect_basis": "Falling LME/SHFE availability is supportive, while rising COMEX stocks and weaker China downstream consumption offset a clean direction.",
+      "confidence": 0.95,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-06",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/world/africa/congo-bans-exports-copper-cobalt-concentrates-official-order-says-2026-08-06/",
+      "event_type": "TRADE_POLICY",
+      "subject": "DRC copper concentrate export ban",
+      "fact": "DRC issued an immediate ban on copper and cobalt concentrate exports, while permitting one-year strategic waivers and with substantial domestic processing already present.",
+      "transmission_channel": "CONCENTRATE_EXPORT_RESTRICTION_WITH_WAIVERS",
+      "directional_effect": "BULLISH",
+      "effect_basis": "Immediate restriction can tighten tradable concentrate availability, but waivers/domestic processing reduce magnitude.",
+      "confidence": 0.85,
+      "provenance_status": "CANDIDATE_TIMESTAMP_DATE_ONLY"
+    },
+    {
+      "available_at": "2026-08-11",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/coppers-congo-panic-says-more-about-copper-than-congo-2026-08-11/",
+      "event_type": "POLICY_UPDATE",
+      "subject": "DRC ban impact reassessment",
+      "fact": "Follow-up analysis found limited likely global supply impact from the DRC ban because refined copper dominates exports, exemptions recur and domestic smelting capacity has expanded, while broader concentrate tightness and falling LME stocks persisted.",
+      "transmission_channel": "PRIOR_EVENT_IMPACT_DOWNGRADE_WITH_BROADER_TIGHTNESS",
+      "directional_effect": "MIXED",
+      "effect_basis": "Downgrades the DRC-specific bullish shock but confirms broader raw-material tightness.",
+      "confidence": 0.8,
+      "provenance_status": "CANDIDATE_TIMESTAMP_DATE_ONLY"
+    },
+    {
+      "available_at": "2026-08-13T13:06:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "China copper social inventory observation",
+      "fact": "SMM published regional copper social-inventory data at 13:06 China time.",
+      "transmission_channel": "CHINA_VISIBLE_INVENTORY",
+      "directional_effect": "UNKNOWN",
+      "effect_basis": "Timestamp verified, but exact normalized inventory delta still requires extraction from the underlying data record before directional admission.",
+      "confidence": 0.9,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-17T11:29:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "China copper social inventory observation",
+      "fact": "SMM published regional copper social-inventory data at 11:29 China time.",
+      "transmission_channel": "CHINA_VISIBLE_INVENTORY",
+      "directional_effect": "UNKNOWN",
+      "effect_basis": "Timestamp verified; exact delta requires underlying record extraction.",
+      "confidence": 0.9,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-20T11:54:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "China copper social inventory observation",
+      "fact": "SMM published regional copper social-inventory data at 11:54 China time.",
+      "transmission_channel": "CHINA_VISIBLE_INVENTORY",
+      "directional_effect": "UNKNOWN",
+      "effect_basis": "Timestamp verified; exact delta requires underlying record extraction.",
+      "confidence": 0.9,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-24T11:43:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "China copper social inventory observation",
+      "fact": "SMM published regional copper social-inventory data at 11:43 China time.",
+      "transmission_channel": "CHINA_VISIBLE_INVENTORY",
+      "directional_effect": "UNKNOWN",
+      "effect_basis": "Timestamp verified; detailed Aug 24 report is separately preserved as mixed inventory/demand evidence.",
+      "confidence": 0.95,
+      "provenance_status": "VERIFIED"
+    }
+  ],
+  "anti_leakage": "Events with date-only provenance cannot be ALLOW until exact point-in-time availability is verified."
+}
