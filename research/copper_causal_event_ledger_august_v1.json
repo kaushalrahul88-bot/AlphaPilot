@@ -1,0 +1,46 @@
+{
+  "mode": "COPPER_CAUSAL_EVENT_LEDGER_AUGUST_V1",
+  "status": "QUARANTINED_RESEARCH_ONLY",
+  "events": [
+    {
+      "available_at": "2026-08-24T14:40:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/id/newscontent/104076084-copper-cathode-social-inventory-sees-significant-drawdown-all-regions-simultaneously-digest-spot-copper-smm-weekly-data",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "China copper social inventory",
+      "fact": "Mainstream-region copper inventory fell 19,700 mt WoW to 114,200 mt while end-user purchasing remained insufficient.",
+      "transmission_channel": "CONFLICTING_INVENTORY_AND_DEMAND",
+      "directional_effect": "MIXED",
+      "effect_basis": "Lower visible inventory is supportive, but contemporaneous weak end-user purchasing offsets a clean directional inference.",
+      "confidence": 0.95,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-25",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/",
+      "event_type": "TRADE_POLICY",
+      "subject": "US copper tariff-driven trade flow",
+      "fact": "Expected US refined-copper tariffs pulled metal toward the US, increasing COMEX stocks while reducing availability elsewhere.",
+      "transmission_channel": "GEOGRAPHIC_INVENTORY_DISLOCATION",
+      "directional_effect": "MIXED",
+      "effect_basis": "Tightening outside the US is supportive to LME-linked pricing while accumulated US inventory is an offsetting regional supply signal.",
+      "confidence": 0.9,
+      "provenance_status": "VERIFIED"
+    },
+    {
+      "available_at": "2026-08-19",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/lme-gripped-by-flash-squeeze-copper-tensions-boil-over-2026-08-19/",
+      "event_type": "EXCHANGE_INVENTORY",
+      "subject": "LME copper availability squeeze",
+      "fact": "Available LME copper inventory was constrained and backwardation became extreme as physical deliveries responded to tightness.",
+      "transmission_channel": "LME_AVAILABLE_SUPPLY_TIGHTNESS",
+      "directional_effect": "BULLISH",
+      "effect_basis": "Verified shortage of immediately available exchange metal and extreme backwardation are direct tightness signals, independent of the subsequent replay outcome.",
+      "confidence": 0.8,
+      "provenance_status": "CANDIDATE_TIMESTAMP_DATE_ONLY"
+    }
+  ],
+  "policy": "No event is Market Brain input until timestamp precision and source provenance satisfy the causal admission gate."
+}
