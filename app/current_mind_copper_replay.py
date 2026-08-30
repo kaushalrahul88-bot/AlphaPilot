@@ -301,28 +301,36 @@ async def run_current_mind_replay_from_store(store):
     return report
 
 
-async def run_current_mind_news_replay_from_store(store):
+async def run_current_mind_news_replay_from_store(store, prevalidated_news_records=None, prevalidated_news_metadata=None):
     await store.initialize()
     segs=await store.read_symbol_contract_segments("COPPER",5,PRIMARY_START,PRIMARY_END)
     target=next((s for s in segs if str(s.get("trading_symbol") or "").upper()==REFERENCE_CONTRACT),None)
     if not target:raise RuntimeError(f"Stored contract {REFERENCE_CONTRACT} not found")
-    news=await fetch_copper_historical_news(PRIMARY_START,PRIMARY_END)
-    if not news["records"]:raise RuntimeError("Historical Copper news fetch returned no timestamped records")
-    integrity=audit_historical_news_records(news["records"])
-    accepted=integrity.get("accepted_records") or []
-    if not accepted:raise RuntimeError("Historical Copper news integrity audit accepted zero records")
-    intelligence=apply_news_intelligence(accepted)
-    directional=intelligence.get("allowed_records") or []
-    if not directional:raise RuntimeError("News Intelligence allowed zero directional records; replay remains blocked")
-    report=evaluate_current_mind_replay(target.get("candles") or [],news_records=directional,news_metadata={
-      **{k:v for k,v in news.items() if k!="records"},
-      "integrity_audit_mode":integrity.get("mode"),"accepted_record_count":len(accepted),
-      "accepted_dataset_sha256":integrity.get("accepted_dataset_sha256"),
-      "classification_counts":integrity.get("classification_counts"),
-      "news_intelligence_mode":intelligence.get("mode"),
-      "news_intelligence_counts":intelligence.get("counts"),
-      "news_intelligence_policy":intelligence.get("policy"),
-    })
+    if prevalidated_news_records is not None:
+        directional=list(prevalidated_news_records)
+        if not directional:raise RuntimeError("Prevalidated News Intelligence directional set is empty")
+        meta=dict(prevalidated_news_metadata or {})
+        meta["acquisition_mode"]="FROZEN_PREVALIDATED_NEWS_INTELLIGENCE"
+        meta["network_refetch"]=False
+    else:
+        news=await fetch_copper_historical_news(PRIMARY_START,PRIMARY_END)
+        if not news["records"]:raise RuntimeError("Historical Copper news fetch returned no timestamped records")
+        integrity=audit_historical_news_records(news["records"])
+        accepted=integrity.get("accepted_records") or []
+        if not accepted:raise RuntimeError("Historical Copper news integrity audit accepted zero records")
+        intelligence=apply_news_intelligence(accepted)
+        directional=intelligence.get("allowed_records") or []
+        if not directional:raise RuntimeError("News Intelligence allowed zero directional records; replay remains blocked")
+        meta={
+          **{k:v for k,v in news.items() if k!="records"},
+          "integrity_audit_mode":integrity.get("mode"),"accepted_record_count":len(accepted),
+          "accepted_dataset_sha256":integrity.get("accepted_dataset_sha256"),
+          "classification_counts":integrity.get("classification_counts"),
+          "news_intelligence_mode":intelligence.get("mode"),
+          "news_intelligence_counts":intelligence.get("counts"),
+          "news_intelligence_policy":intelligence.get("policy"),
+        }
+    report=evaluate_current_mind_replay(target.get("candles") or [],news_records=directional,news_metadata=meta)
     report["mode"]="COPPER_CURRENT_MIND_20_CLICK_REPLAY_WITH_HISTORICAL_NEWS_V1"
     report["comparison_variant"]="FROZEN_CURRENT_MIND_PLUS_TIMESTAMPED_NEWS"
     report["contract_metadata"]={"trading_symbol":target.get("trading_symbol"),"expiry_date":target.get("expiry_date")}
