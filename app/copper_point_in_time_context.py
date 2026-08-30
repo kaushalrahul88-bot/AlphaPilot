@@ -55,10 +55,10 @@ def acquisition_manifest():
       "principle":"Unavailable historical context stays unavailable; never backfill a simulated click with information published later.",
       "feeds":[
         {"series":"MCX_COPPER","status":"AVAILABLE_INTERNAL","source":"existing stored COPPER31AUG26FUT 5m candles"},
-        {"series":"COMEX_HG","status":"ENTITLEMENT_OR_VENDOR_REQUIRED","preferred_source":"CME DataMine / licensed CME market-data source"},
+        {"series":"COMEX_HG","status":"CME_DATAMINE_ENTITLEMENT_REQUIRED","preferred_source":"CME DataMine","access_note":"Authenticated API downloads only files already purchased/entitled; do not substitute daily web quotes for intraday point-in-time replay."},
         {"series":"LME_COPPER","status":"ENTITLEMENT_OR_VENDOR_REQUIRED","preferred_source":"LME historical data / licensed distributor"},
-        {"series":"USDINR","status":"SOURCE_TO_VALIDATE","requirement":"timestamped intraday observations"},
-        {"series":"DXY","status":"SOURCE_TO_VALIDATE","requirement":"timestamped intraday observations"},
+        {"series":"USDINR","status":"INTRADAY_SOURCE_REQUIRED","requirement":"timestamped intraday observations; daily RBI/Fed reference rates are context-only and cannot stand in for click-time FX"},
+        {"series":"DXY","status":"INTRADAY_SOURCE_REQUIRED","requirement":"timestamped intraday observations; daily Federal Reserve dollar indexes are context-only"},
         {"series":"USDCNY","status":"SOURCE_TO_VALIDATE","requirement":"timestamped intraday observations"},
         {"series":"COPPER_NEWS","status":"SOURCE_TO_VALIDATE","requirement":"publication timestamp plus source and revision-safe text/event metadata"},
         {"series":"MACRO_RELEASE","status":"SOURCE_TO_VALIDATE","requirement":"release timestamp, actual, consensus when available, prior and revision metadata"},
