@@ -4,12 +4,19 @@ from collections import Counter, defaultdict
 from .copper_historical_news import fetch_copper_historical_news
 from .copper_market_brain_direction_audit import PRIMARY_START, PRIMARY_END
 
-MARKET_TERMS=(
- "copper price","copper prices","lme","comex","mcx","mine","mining","smelter","smelting",
- "inventory","inventories","warehouse","stocks","supply","demand","china","chinese","tariff",
- "trade","treatment charge","ore","concentrate","production","output","strike","disruption",
- "refinery","refining","stimulus","manufacturing","pmi","metal prices","metals prices",
+STRONG_MARKET_TERMS=(
+ "copper price","copper prices","lme copper","comex copper","mcx copper",
+ "inventory","inventories","warehouse stocks","treatment charge","treatment charges",
+ "smelter","smelting","refinery","refining","concentrate exports","concentrate export",
+ "copper supply","copper demand","copper production","copper output","copper imports","copper exports",
+ "china copper","chinese copper","copper tariff","copper tariffs","copper shortage",
 )
+GLOBAL_MACRO_TERMS=("china","chinese","pmi","manufacturing","stimulus","tariff","tariffs","trade war","dollar","fed","federal reserve","rates")
+SUPPLY_EVENT_TERMS=("strike","disruption","shutdown","closure","ban","bans","export ban","accident","flood","earthquake","fire")
+MAJOR_SUPPLY_TERMS=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata","freeport","antofagasta","glencore","bhp","rio tinto","southern copper")
+EQUITY_OR_PROJECT_TERMS=("shares","share price","stock","stocks","ofs","ipo","private placement","drilling","drill","exploration","project","earnings","profit","valuation","returns")
+NON_PRICE_COPPER_TERMS=("wire","cable","antenna","coil","manure","contamination","pig","sports","basketball","mercury beat","school burglary","thief","thieves","stealing","stolen","swan boats")
+
 HARD_IRRELEVANT=(
  "copper theft","stolen copper","copper thief","copper thieves","copper cookware","copper pan",
  "copper pot","copper mug","copper bottle","copper pipe repair","plumbing","copper plumbing",
@@ -30,16 +37,30 @@ def _audit_one(record):
     reasons=[]
     if not title:return "REJECT",["MISSING_HEADLINE"]
     if language and language not in {"english","en"}:return "UNCERTAIN",["NON_ENGLISH_HEADLINE"]
-    if any(x in low for x in HARD_IRRELEVANT):return "REJECT",["NON_MARKET_COPPER_MEANING"]
+    if any(x in low for x in HARD_IRRELEVANT) or any(x in low for x in NON_PRICE_COPPER_TERMS):
+        return "REJECT",["NON_MARKET_COPPER_MEANING"]
     explicit="copper" in low
-    channels=[x for x in MARKET_TERMS if x in low]
-    if not explicit and not any(x in low for x in ("lme","comex")):return "REJECT",["NO_EXPLICIT_COPPER_OR_COPPER_EXCHANGE_REFERENCE"]
+    if not explicit and not any(x in low for x in ("lme copper","comex copper","mcx copper")):
+        return "REJECT",["NO_EXPLICIT_COPPER_OR_COPPER_EXCHANGE_REFERENCE"]
+    strong=[x for x in STRONG_MARKET_TERMS if x in low]
+    macro=[x for x in GLOBAL_MACRO_TERMS if x in low]
+    supply_event=[x for x in SUPPLY_EVENT_TERMS if x in low]
+    major_supply=[x for x in MAJOR_SUPPLY_TERMS if x in low]
+    equity_project=[x for x in EQUITY_OR_PROJECT_TERMS if x in low]
+    # Equity/company/project headlines are not commodity-market evidence merely because
+    # the company/project name contains Copper. Keep only when a strong commodity
+    # transmission channel is explicit in the same headline.
+    if equity_project and not strong and not (supply_event and major_supply):
+        return "REJECT",["EQUITY_OR_PROJECT_SPECIFIC_NO_COMMODITY_TRANSMISSION"]
+    channels=strong[:]
+    if macro and explicit and any(x in low for x in ("demand","imports","manufacturing","pmi","stimulus","tariff","tariffs")):
+        channels.extend(macro)
+    if supply_event and major_supply:
+        channels.extend(supply_event);channels.extend(major_supply)
     if not channels:
         reasons.append("NO_CLEAR_MARKET_TRANSMISSION_CHANNEL")
     if any(x in low for x in RETROSPECTIVE):
         reasons.append("POSSIBLE_RETROSPECTIVE_OR_REPUBLISHED_CONTEXT")
-    if explicit and any(x in low for x in ("wire","cable","electrical","grid","ev ","electric vehicle","data center","renewable")):
-        channels.append("end_use_demand")
     classification="KEEP" if channels and "POSSIBLE_RETROSPECTIVE_OR_REPUBLISHED_CONTEXT" not in reasons else "UNCERTAIN"
     return classification,reasons or ["CLEAR_COPPER_MARKET_CHANNEL"]
 
