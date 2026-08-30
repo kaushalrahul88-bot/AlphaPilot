@@ -32,7 +32,7 @@ from .copper_market_brain_error_attribution import run_error_attribution_from_st
 from .copper_event_path_backtest import run_event_path_from_store
 from .copper_experience_memory import run_experience_memory_from_store
 from .copper_memory_evidence_audit import run_memory_evidence_from_store
-from .current_mind_copper_replay import run_current_mind_replay_from_store
+from .current_mind_copper_replay import run_current_mind_replay_from_store, run_current_mind_news_replay_from_store
 from .current_mind_data_integrity_audit import run_copper_replay_data_audit_from_store
 from .current_mind_provider_parity_audit import run_provider_parity_audit
 from .current_mind_provider_discrepancy_audit import run_provider_discrepancy_triangulation
@@ -174,6 +174,19 @@ async def copper_exact_option_route_probe(
         )
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
 
+_copper_current_mind_news_replay_job={"status":"IDLE","result":None,"error":None}
+_copper_current_mind_news_replay_task=None
+
+def _run_copper_current_mind_news_replay_job_sync(database_url:str):
+    import asyncio
+    global _copper_current_mind_news_replay_job
+    try:
+        store=PostgresCandleStore(database_url)
+        result=asyncio.run(run_current_mind_news_replay_from_store(store))
+        _copper_current_mind_news_replay_job={"status":"COMPLETED","result":result,"error":None}
+    except Exception as exc:
+        _copper_current_mind_news_replay_job={"status":"FAILED","result":None,"error":str(exc)[:1000],"traceback":traceback.format_exc()[-4000:]}
+
 _copper_current_mind_replay_job={"status":"IDLE","result":None,"error":None}
 _copper_current_mind_replay_task=None
 
@@ -215,6 +228,20 @@ async def copper_current_mind_20_click_replay(x_collector_token:str|None=Header(
     store=_collector_store(x_collector_token)
     try:return await run_current_mind_replay_from_store(store)
     except Exception as exc:_safe_upstream_error("Copper Current Mind 20-click replay",exc)
+
+@app.post("/v1/internal/copper/current-mind-news-replay/start")
+async def copper_current_mind_news_replay_start(x_collector_token:str|None=Header(default=None)):
+    import asyncio
+    global _copper_current_mind_news_replay_job,_copper_current_mind_news_replay_task
+    _collector_store(x_collector_token)
+    if _copper_current_mind_news_replay_job.get("status")=="RUNNING":return {"status":"RUNNING"}
+    _copper_current_mind_news_replay_job={"status":"RUNNING","result":None,"error":None}
+    _copper_current_mind_news_replay_task=asyncio.create_task(asyncio.to_thread(_run_copper_current_mind_news_replay_job_sync,settings.database_url))
+    return {"status":"RUNNING"}
+
+@app.get("/v1/internal/copper/current-mind-news-replay/status")
+async def copper_current_mind_news_replay_status(x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token);return _copper_current_mind_news_replay_job
 
 @app.get("/v1/internal/copper/current-mind-data-integrity")
 async def copper_current_mind_data_integrity(x_collector_token:str|None=Header(default=None)):
