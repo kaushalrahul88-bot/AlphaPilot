@@ -16,3 +16,27 @@ class HistoricalNewsAuditContractTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+    def test_sports_name_copper_is_rejected(self):
+        result=audit_historical_news_records([self.row("Kahleah Copper scores 31 as Mercury beat Sky")])
+        self.assertEqual(result["classification_counts"].get("REJECT"),1)
+
+    def test_copper_theft_is_rejected(self):
+        result=audit_historical_news_records([self.row("Two arrested for stealing copper wire")])
+        self.assertEqual(result["classification_counts"].get("REJECT"),1)
+
+    def test_company_equity_story_is_rejected(self):
+        result=audit_historical_news_records([self.row("Hindustan Copper shares rise as OFS opens")])
+        self.assertEqual(result["classification_counts"].get("REJECT"),1)
+
+    def test_small_exploration_story_is_rejected(self):
+        result=audit_historical_news_records([self.row("Junior Copper project begins drilling program")])
+        self.assertEqual(result["classification_counts"].get("REJECT"),1)
+
+    def test_major_supply_disruption_can_be_kept(self):
+        result=audit_historical_news_records([self.row("Strike disrupts copper output at BHP Escondida mine")])
+        self.assertEqual(result["accepted_record_count"],1)
+
+    def test_inventory_price_story_is_kept(self):
+        result=audit_historical_news_records([self.row("Copper prices rise as LME copper inventories fall")])
+        self.assertEqual(result["accepted_record_count"],1)
