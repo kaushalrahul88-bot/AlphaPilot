@@ -40,9 +40,22 @@ jobs:
       - name: Run frozen Current Mind replay
         run: |
           set -euo pipefail
-          curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/start" -o start.json
+          STARTED=0
+          for attempt in {1..12}; do
+            if curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/start" -o start.json; then
+              STARTED=1
+              break
+            fi
+            echo "Transient start failure on attempt $attempt; retrying"
+            sleep 15
+          done
+          test "$STARTED" -eq 1
           for i in {1..60}; do
-            curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/status" -o status.json
+            if ! curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/status" -o status.json; then
+              echo "Transient status failure on poll $i; retrying"
+              sleep 15
+              continue
+            fi
             STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
             echo "Replay state: $STATE"
             if [ "$STATE" = "COMPLETED" ]; then
