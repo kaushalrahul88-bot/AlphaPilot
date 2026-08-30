@@ -1,0 +1,56 @@
+{
+  "mode": "COPPER_RAW_HISTORICAL_NEWS_BATCH_V3",
+  "status": "RAW_ACQUISITION_ONLY_NO_CHATGPT_DIRECTION_LABELS",
+  "records": [
+    {
+      "published_at": "2026-08-07T14:59:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/id/newscontent/104048814-biaya-pengolahan-konsentrat-tembaga-impor-terus-menurun-beberapa-proyek-konstruksi-dan-pengembangan-di-el-teniente-tamba",
+      "headline": "Imported copper concentrate treatment charges continued to decline; some El Teniente development work suspended",
+      "facts": [
+        "SMM imported copper concentrate index -$173.91/dmt, down $14.54/dmt WoW.",
+        "China July copper concentrate imports 2.379Mt, +1.88% MoM and -6.93% YoY.",
+        "Eleven-port concentrate stocks 692,000t on Aug 6, +27,600t from Jul 31."
+      ],
+      "timestamp_precision": "EXACT"
+    },
+    {
+      "published_at": "2026-08-19",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/lme-gripped-by-flash-squeeze-copper-tensions-boil-over-2026-08-19/",
+      "headline": "LME gripped by flash squeeze as copper tensions boil over",
+      "facts": [
+        "Cash premium reached $545/t during the squeeze.",
+        "Live LME stocks had fallen to just over 103,000t.",
+        "More than 38,000t was delivered into LME warehouses as shorts responded."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN"
+    },
+    {
+      "published_at": "2026-08-24T13:48:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/newscontent/104075947-east-china-inventory-drawdown-exceeded-expectations-strengthening-downside-support-for-shanghai-spot-copper-spot-premium",
+      "headline": "East China inventory drawdown exceeded expectations",
+      "facts": [
+        "Shanghai inventory 70,800t, down 12,300t from prior Thursday.",
+        "Jiangsu inventory 16,300t, down 4,100t.",
+        "Imported arrivals were limited by unfavorable SHFE/LME ratio and shipment delays."
+      ],
+      "timestamp_precision": "EXACT"
+    },
+    {
+      "published_at": "2026-08-25",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/",
+      "headline": "US tariff threat upends copper surplus as prices test all-time peak",
+      "facts": [
+        "COMEX inventories reached 675,185t after sustained increases.",
+        "US refined copper imports were almost 885,000t in H1 2026.",
+        "Large LME withdrawal orders tightened non-US availability."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN"
+    }
+  ]
+}

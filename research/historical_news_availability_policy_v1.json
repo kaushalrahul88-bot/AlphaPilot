@@ -1,0 +1,18 @@
+{
+  "mode": "HISTORICAL_NEWS_AVAILABILITY_POLICY_V1",
+  "exact_timestamp": {
+    "availability": "USE_REPORTED_TIMESTAMP",
+    "confidence": "NORMAL"
+  },
+  "date_only": {
+    "availability": "NEXT_TRADING_SESSION_OPEN",
+    "confidence": "CAUTIOUS_DATE_ONLY",
+    "restrictions": [
+      "Never expose on reported calendar date.",
+      "Pass through normal Integrity and News Intelligence.",
+      "Mark provenance date_only=true so Market Brain can down-weight/flag uncertainty.",
+      "Do not infer an intraday publication time."
+    ]
+  },
+  "rationale": "A next-session boundary prevents same-day lookahead when only a publication date is known while retaining potentially useful historical context."
+}
