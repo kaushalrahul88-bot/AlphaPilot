@@ -1,0 +1,26 @@
+name: Copper Multi-Source News Admission Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research/copper_historical_news_candidate_ledger_v1.json"
+      - "app/copper_historical_news_integrity_audit.py"
+      - "app/copper_news_intelligence.py"
+      - "scripts/audit_multisource_copper_news_admission.py"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: PYTHONPATH=. python -m scripts.audit_multisource_copper_news_admission --output historical-news-admission-v1.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-multisource-news-admission-v1
+          path: historical-news-admission-v1.json
