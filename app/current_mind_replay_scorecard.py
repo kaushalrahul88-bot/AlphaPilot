@@ -24,7 +24,7 @@ def replay_scorecard(decisions:list[dict])->dict:
     def outcome_label(row):
         outcome=row.get("outcome")
         if isinstance(outcome,dict):
-            return outcome.get("outcome")
+            return outcome.get("result") or outcome.get("outcome")
         return outcome
     resolved=[x for x in trades if outcome_label(x) in {"TARGET","STOP"}]
     wins=sum(outcome_label(x)=="TARGET" for x in resolved)
