@@ -30,6 +30,7 @@ from .copper_market_brain_direction_audit import run_market_brain_direction_audi
 from .copper_market_brain_error_attribution import run_error_attribution_from_store
 from .copper_event_path_backtest import run_event_path_from_store
 from .copper_experience_memory import run_experience_memory_from_store
+from .copper_memory_evidence_audit import run_memory_evidence_from_store
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -167,6 +168,15 @@ async def copper_exact_option_route_probe(
             get_provider(settings),"COPPER",strike,trade_date,
         )
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
+
+@app.get("/v1/internal/copper/memory-evidence-audit")
+async def copper_memory_evidence_audit(
+    sample_every_bars:int=3,analogue_k:int=75,
+    x_collector_token:str|None=Header(default=None),
+):
+    store=_collector_store(x_collector_token)
+    try:return await run_memory_evidence_from_store(store,max(1,min(int(sample_every_bars),12)),max(20,min(int(analogue_k),200)))
+    except Exception as exc:_safe_upstream_error("Copper Memory Evidence audit",exc)
 
 @app.get("/v1/internal/copper/experience-memory")
 async def copper_experience_memory(
