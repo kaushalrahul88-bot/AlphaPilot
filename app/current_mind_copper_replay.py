@@ -16,6 +16,7 @@ from .copper_experience_memory import (
 )
 from .copper_point_in_time_context import visible_at
 from .china_copper_macro_context import china_copper_macro_records
+from .copper_historical_news import fetch_copper_historical_news
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_integrated_replay import current_mind_click
 from .current_mind_replay_scorecard import replay_scorecard
@@ -85,7 +86,16 @@ def _macro_evidence(click):
     return {"lane":"MACRO","stance":stance,"source":"China NBS","detail":[r.get("value") for r in records]}
 
 
-def _evidence_items(features, memory_item, macro_item):
+def _news_evidence(click, records):
+    cutoff=click-timedelta(hours=8)
+    visible=[r for r in (records or []) if cutoff<=parse_ist_timestamp(r["available_at"])<=click]
+    bullish=sum((r.get("value") or {}).get("sentiment")=="BULLISH" for r in visible)
+    bearish=sum((r.get("value") or {}).get("sentiment")=="BEARISH" for r in visible)
+    stance="BULLISH" if bullish>bearish else "BEARISH" if bearish>bullish else "UNKNOWN"
+    return {"lane":"NEWS","stance":stance,"source":"GDELT_timestamped_headlines","detail":{"visible_8h":len(visible),"bullish":bullish,"bearish":bearish,"latest":[r.get("value") for r in visible[-5:]]}}
+
+
+def _evidence_items(features, memory_item, macro_item, news_item=None):
     structure=str(features.get("structure") or "UNKNOWN")
     ret15=_f(features.get("return_15m_pct"),0.0)
     rel=_f(features.get("time_adjusted_relative_volume"))
@@ -99,6 +109,7 @@ def _evidence_items(features, memory_item, macro_item):
        "source":"time_adjusted_volume","detail":{"relative_volume":rel}},
       memory_item,macro_item,
     ]
+    if news_item is not None:items.append(news_item)
     return items
 
 
@@ -200,7 +211,7 @@ def _missed_move(rows,index):
             "large_move_threshold_pct":MISSED_MOVE_PCT}
 
 
-def evaluate_current_mind_replay(candles):
+def evaluate_current_mind_replay(candles, news_records=None, news_metadata=None):
     rows=clean_ohlcv(candles);quality=_session_quality(rows);info=_precompute_information_quality(rows)
     complete_days={d for d,q in quality.items() if q.get("primary_score_eligible")}
     complete_rows=[r for r in rows if parse_ist_timestamp(r[0]).date() in complete_days]
@@ -221,7 +232,8 @@ def evaluate_current_mind_replay(candles):
         # three valid first-session clicks and broke the 20-click/session contract.
         features=_build_copper_snapshot_clean(rows,index,information_quality=info)
         mem=_memory_evidence(experiences,features,click);macro=_macro_evidence(click)
-        evidence=_evidence_items(features,mem,macro)
+        news=_news_evidence(click,news_records) if news_records is not None else None
+        evidence=_evidence_items(features,mem,macro,news)
         direction=_dominant_direction(evidence)
         market=_regime_features(features)
         geom=_trade_geometry(rows,index,direction,features) if direction else {}
@@ -229,6 +241,9 @@ def evaluate_current_mind_replay(candles):
         context=[{"series":"MCX_COPPER","observed_at":click.isoformat(),"available_at":click.isoformat(),
                   "source":REFERENCE_CONTRACT,"value":{"price":features.get("price")},"quality":"OBSERVED"}]
         context.extend([r for r in macro_records if parse_ist_timestamp(r["available_at"])<=click])
+        if news_records is not None:
+            visible_news=[r for r in news_records if parse_ist_timestamp(r["available_at"])<=click]
+            if visible_news:context.append(visible_news[-1])
         journal=current_mind_click(click_timestamp=click.isoformat(),context_records=context,
           market_features=market,evidence_items=evidence,memory_cases=memory_cases)
         decision=journal["decision"]
@@ -267,7 +282,8 @@ def evaluate_current_mind_replay(candles):
       "missed_large_moves_after_abstention":sum(bool((x.get("outcome") or {}).get("future_move_without_setup")) for x in decisions if x["decision"].get("action") in {"WAIT","NO_TRADE"}),
       "scorecard":score,"decisions":decisions,
       "data_context":{"mcx_5m":True,"china_macro_point_in_time":True,"experience_walk_forward":True,
-                      "comex_intraday":False,"lme_intraday":False,"historical_news":False,"historical_option_premium":False},
+                      "comex_intraday":False,"lme_intraday":False,"historical_news":news_records is not None,"historical_option_premium":False},
+      "news_metadata":news_metadata if news_records is not None else None,
       "guardrails":["20 deterministic random clicks per complete trading session.","Provider-confirmed partial sessions excluded from primary replay.",
                     "Every feature uses data no later than the click.","Memory outcomes must resolve before the click before becoming eligible evidence.",
                     "Future bars are revealed only after the decision is frozen.","No historical option premium, IV, Greeks or option P&L is fabricated."]}
@@ -279,5 +295,19 @@ async def run_current_mind_replay_from_store(store):
     target=next((s for s in segs if str(s.get("trading_symbol") or "").upper()==REFERENCE_CONTRACT),None)
     if not target:raise RuntimeError(f"Stored contract {REFERENCE_CONTRACT} not found")
     report=evaluate_current_mind_replay(target.get("candles") or [])
+    report["contract_metadata"]={"trading_symbol":target.get("trading_symbol"),"expiry_date":target.get("expiry_date")}
+    return report
+
+
+async def run_current_mind_news_replay_from_store(store):
+    await store.initialize()
+    segs=await store.read_symbol_contract_segments("COPPER",5,PRIMARY_START,PRIMARY_END)
+    target=next((s for s in segs if str(s.get("trading_symbol") or "").upper()==REFERENCE_CONTRACT),None)
+    if not target:raise RuntimeError(f"Stored contract {REFERENCE_CONTRACT} not found")
+    news=await fetch_copper_historical_news(PRIMARY_START,PRIMARY_END)
+    if not news["records"]:raise RuntimeError("Historical Copper news fetch returned no relevant timestamped records")
+    report=evaluate_current_mind_replay(target.get("candles") or [],news_records=news["records"],news_metadata={k:v for k,v in news.items() if k!="records"})
+    report["mode"]="COPPER_CURRENT_MIND_20_CLICK_REPLAY_WITH_HISTORICAL_NEWS_V1"
+    report["comparison_variant"]="FROZEN_CURRENT_MIND_PLUS_TIMESTAMPED_NEWS"
     report["contract_metadata"]={"trading_symbol":target.get("trading_symbol"),"expiry_date":target.get("expiry_date")}
     return report
