@@ -6,6 +6,7 @@ on:
     paths:
       - "app/current_mind_copper_replay.py"
       - "app/current_mind_click_sampler.py"
+      - "app/current_mind_replay_scorecard.py"
       - "app/current_mind_integrated_replay.py"
       - "app/current_mind_thesis_builder.py"
       - "app/main.py"
