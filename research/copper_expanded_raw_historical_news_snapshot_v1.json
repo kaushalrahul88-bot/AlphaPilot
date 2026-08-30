@@ -1,0 +1,185 @@
+{
+  "mode": "COPPER_EXPANDED_RAW_HISTORICAL_NEWS_SNAPSHOT_V1",
+  "status": "QUARANTINED_PENDING_PIPELINE_REPLAY",
+  "input_rows": 19,
+  "unique_records": 14,
+  "deduplicated_rows": 5,
+  "records": [
+    {
+      "published_at": "2026-08-07T14:59:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/id/newscontent/104048814-biaya-pengolahan-konsentrat-tembaga-impor-terus-menurun-beberapa-proyek-konstruksi-dan-pengembangan-di-el-teniente-tamba",
+      "headline": "Imported copper concentrate treatment charges continued to decline; some El Teniente development work suspended",
+      "facts": [
+        "SMM imported copper concentrate index -$173.91/dmt, down $14.54/dmt WoW.",
+        "China July copper concentrate imports 2.379Mt, +1.88% MoM and -6.93% YoY.",
+        "Eleven-port concentrate stocks 692,000t on Aug 6, +27,600t from Jul 31."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_raw_historical_news_batch_v3.json"
+    },
+    {
+      "published_at": "2026-08-19",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/lme-gripped-by-flash-squeeze-copper-tensions-boil-over-2026-08-19/",
+      "headline": "LME gripped by flash squeeze as copper tensions boil over",
+      "facts": [
+        "Cash premium reached $545/t during the squeeze.",
+        "Live LME stocks had fallen to just over 103,000t.",
+        "More than 38,000t was delivered into LME warehouses as shorts responded."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN",
+      "origin": "research/copper_raw_historical_news_batch_v3.json"
+    },
+    {
+      "published_at": "2026-08-24T13:48:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/newscontent/104075947-east-china-inventory-drawdown-exceeded-expectations-strengthening-downside-support-for-shanghai-spot-copper-spot-premium",
+      "headline": "East China inventory drawdown exceeded expectations",
+      "facts": [
+        "Shanghai inventory 70,800t, down 12,300t from prior Thursday.",
+        "Jiangsu inventory 16,300t, down 4,100t.",
+        "Imported arrivals were limited by unfavorable SHFE/LME ratio and shipment delays."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_raw_historical_news_batch_v3.json"
+    },
+    {
+      "published_at": "2026-08-25",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/",
+      "headline": "US tariff threat upends copper surplus as prices test all-time peak",
+      "facts": [
+        "COMEX inventories reached 675,185t after sustained increases.",
+        "US refined copper imports were almost 885,000t in H1 2026.",
+        "Large LME withdrawal orders tightened non-US availability."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN",
+      "origin": "research/copper_raw_historical_news_batch_v3.json"
+    },
+    {
+      "published_at": "2026-08-04T00:01:00-04:00",
+      "source": "Reuters via Fidelity",
+      "source_url": "https://www.fidelity.com/news/article/default/202608040001RTRSNEWSCOMBINED_L1N441027_1",
+      "headline": "LME/SHFE/COMEX inventory divergence",
+      "facts": [
+        "LME copper stocks were 244,025t versus about 400,000t in April; SHFE stocks about 69,300t versus above 430,000t in March; COMEX stocks 717,314 short tons on Aug 3. Chinese downstream consumption was reported weakening at higher prices."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-06",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/world/africa/congo-bans-exports-copper-cobalt-concentrates-official-order-says-2026-08-06/",
+      "headline": "DRC copper concentrate export ban",
+      "facts": [
+        "DRC issued an immediate ban on copper and cobalt concentrate exports, while permitting one-year strategic waivers and with substantial domestic processing already present."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-11",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/coppers-congo-panic-says-more-about-copper-than-congo-2026-08-11/",
+      "headline": "DRC ban impact reassessment",
+      "facts": [
+        "Follow-up analysis found limited likely global supply impact from the DRC ban because refined copper dominates exports, exemptions recur and domestic smelting capacity has expanded, while broader concentrate tightness and falling LME stocks persisted."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-13T13:06:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "headline": "China copper social inventory observation",
+      "facts": [
+        "SMM published regional copper social-inventory data at 13:06 China time."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-17T11:29:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "headline": "China copper social inventory observation",
+      "facts": [
+        "SMM published regional copper social-inventory data at 11:29 China time."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-20T11:54:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "headline": "China copper social inventory observation",
+      "facts": [
+        "SMM published regional copper social-inventory data at 11:54 China time."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-24T11:43:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://hq.smm.cn/h5/cu-data",
+      "headline": "China copper social inventory observation",
+      "facts": [
+        "SMM published regional copper social-inventory data at 11:43 China time."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_independent_web_acquisition_aug_v2.json"
+    },
+    {
+      "published_at": "2026-08-24T14:40:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/id/newscontent/104076084-copper-cathode-social-inventory-sees-significant-drawdown-all-regions-simultaneously-digest-spot-copper-smm-weekly-data",
+      "headline": "China mainstream-region copper inventories fell 19,700 mt WoW to 114,200 mt; supply marginally tight while end-user purchasing remained insufficient.",
+      "facts": [
+        "China mainstream-region copper inventories fell 19,700 mt WoW to 114,200 mt; supply marginally tight while end-user purchasing remained insufficient."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_historical_news_candidate_ledger_v1.json"
+    },
+    {
+      "published_at": "2026-08-27T14:33:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/newscontent/104083304-national-copper-social-inventory-posts-yoy-double-decline-regional-trends-diverge-smm-weekly-data",
+      "headline": "China major-region copper inventories fell 24,900 mt WoW to 109,500 mt; regional demand diverged and supply was marginally tight.",
+      "facts": [
+        "China major-region copper inventories fell 24,900 mt WoW to 109,500 mt; regional demand diverged and supply was marginally tight."
+      ],
+      "timestamp_precision": "EXACT",
+      "availability_policy": "EXACT_TIMESTAMP",
+      "origin": "research/copper_historical_news_candidate_ledger_v1.json"
+    },
+    {
+      "published_at": "2026-08-28",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/world/americas/chiles-codelco-posts-stronger-profit-copper-rally-mine-disruptions-drag-output-2026-08-28/",
+      "headline": "Codelco first-half copper output fell 11% with operational restrictions at El Teniente, lower Chuquicamata output and lower grades at Ministro Hales.",
+      "facts": [
+        "Codelco first-half copper output fell 11% with operational restrictions at El Teniente, lower Chuquicamata output and lower grades at Ministro Hales."
+      ],
+      "timestamp_precision": "DATE_ONLY",
+      "availability_policy": "NEXT_TRADING_SESSION_OPEN",
+      "origin": "research/copper_historical_news_candidate_ledger_v1.json"
+    }
+  ]
+}
