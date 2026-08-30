@@ -1,0 +1,52 @@
+name: Copper Experience Memory Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_experience_memory.py"
+      - "app/main.py"
+      - ".github/workflows/copper-experience-memory.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for memory endpoint deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/copper/experience-memory" in (d.get("paths") or {}) else 1)'; then sleep 20; exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Run walk-forward memory audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 300 -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/copper/experience-memory?sample_every_bars=3&analogue_k=75" -o memory.json
+          python - <<'PY'
+          import json
+          d=json.load(open("memory.json"))
+          assert d.get("mode")=="COPPER_EXPERIENCE_MEMORY_V1",d
+          assert d.get("production_rules_changed") is False,d
+          print(json.dumps({k:d.get(k) for k in ("reference_contract","experiences","walk_forward_queries","analogue_k","target_pct","stop_pct")},indent=2))
+          print(json.dumps({"latest":(d.get("latest_queries") or [])[-3:]},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-experience-memory
+          path: memory.json
