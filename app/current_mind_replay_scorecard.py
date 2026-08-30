@@ -21,8 +21,13 @@ def replay_scorecard(decisions:list[dict])->dict:
     process=[score_decision_process(x) for x in decisions]
     actions={a:sum(x.get("action")==a for x in decisions) for a in ("BUY_CE","BUY_PE","WAIT","NO_TRADE")}
     trades=[x for x in decisions if x.get("action") in {"BUY_CE","BUY_PE"}]
-    resolved=[x for x in trades if x.get("outcome") in {"TARGET","STOP"}]
-    wins=sum(x.get("outcome")=="TARGET" for x in resolved)
+    def outcome_label(row):
+        outcome=row.get("outcome")
+        if isinstance(outcome,dict):
+            return outcome.get("outcome")
+        return outcome
+    resolved=[x for x in trades if outcome_label(x) in {"TARGET","STOP"}]
+    wins=sum(outcome_label(x)=="TARGET" for x in resolved)
     return {"mode":"CURRENT_MIND_REPLAY_SCORECARD_V1",
       "primary_objective":"DECISION_PROCESS_AND_TRADE_EXPECTANCY_NOT_EXACT_PREDICTION",
       "decisions":len(decisions),"actions":actions,
