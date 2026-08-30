@@ -11,7 +11,7 @@ class HistoricalNewsAuditContractTests(unittest.TestCase):
         self.assertEqual(result["accepted_record_count"],0)
 
     def test_market_headline_is_accepted(self):
-        result=audit_historical_news_records([self.row("Copper prices rise as LME inventories fall")])
+        result=audit_historical_news_records([self.row("LME copper inventories fall sharply, tightening available supply")])
         self.assertEqual(result["accepted_record_count"],1)
 
 if __name__=="__main__":
@@ -38,7 +38,7 @@ if __name__=="__main__":
         self.assertEqual(result["accepted_record_count"],1)
 
     def test_inventory_price_story_is_kept(self):
-        result=audit_historical_news_records([self.row("Copper prices rise as LME copper inventories fall")])
+        result=audit_historical_news_records([self.row("LME copper inventories fall sharply, tightening available supply")])
         self.assertEqual(result["accepted_record_count"],1)
 
     def test_price_recap_does_not_vote(self):
