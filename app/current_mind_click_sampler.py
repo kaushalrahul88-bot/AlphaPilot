@@ -3,10 +3,10 @@ import hashlib,random
 from datetime import timedelta
 from .commodity_time import parse_ist_timestamp
 
-def deterministic_clicks(candles, clicks_per_session=10, seed="CURRENT_MIND_V1", warmup_bars=24, tail_bars=12):
+def deterministic_clicks(candles, clicks_per_session=10, seed="CURRENT_MIND_V1", warmup_bars=24, tail_bars=12, min_global_index=None):
     """Sample user-like clicks without consulting future outcomes."""
     by_day={}
-    for c in candles:
+    for global_index,c in enumerate(candles):
         if isinstance(c,dict):
             raw_ts=c.get("timestamp") or c.get("time") or c.get("datetime")
         elif isinstance(c,(list,tuple)) and c:
@@ -16,17 +16,19 @@ def deterministic_clicks(candles, clicks_per_session=10, seed="CURRENT_MIND_V1",
         if raw_ts is None:continue
         ts=str(raw_ts)
         d=parse_ist_timestamp(ts).date().isoformat()
-        by_day.setdefault(d,[]).append(ts)
+        by_day.setdefault(d,[]).append((ts,global_index))
     out=[]
-    for day,stamps in sorted(by_day.items()):
-        stamps=sorted(stamps,key=parse_ist_timestamp)
-        eligible=stamps[warmup_bars:len(stamps)-tail_bars if tail_bars else None]
+    for day,items in sorted(by_day.items()):
+        items=sorted(items,key=lambda x:parse_ist_timestamp(x[0]))
+        eligible=items[warmup_bars:len(items)-tail_bars if tail_bars else None]
+        if min_global_index is not None:
+            eligible=[x for x in eligible if x[1]>=int(min_global_index)]
         if not eligible:continue
         n=min(clicks_per_session,len(eligible))
         day_seed=int(hashlib.sha256(f"{seed}:{day}".encode()).hexdigest()[:16],16)
         rng=random.Random(day_seed)
-        chosen=sorted(rng.sample(eligible,n),key=parse_ist_timestamp)
-        out.extend({"session":day,"click_timestamp":x,"sampling":"DETERMINISTIC_RANDOM_WITHIN_SESSION"} for x in chosen)
+        chosen=sorted(rng.sample(eligible,n),key=lambda x:parse_ist_timestamp(x[0]))
+        out.extend({"session":day,"click_timestamp":x[0],"sampling":"DETERMINISTIC_RANDOM_WITHIN_SESSION"} for x in chosen)
     return out
 
 def sampler_contract():
