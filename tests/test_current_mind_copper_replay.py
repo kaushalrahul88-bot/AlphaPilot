@@ -15,7 +15,7 @@ if __name__=="__main__":unittest.main()
 class NewsCarryForwardTests(unittest.TestCase):
  def allowed(self,ts,effect="BULLISH",raw="BEARISH"):
   return {"available_at":ts,"value":{"headline":"Congo bans copper concentrate exports","sentiment":raw},
-          "news_intelligence":{"disposition":"ALLOW","effect":effect}}
+          "news_intelligence":{"disposition":"ALLOW","effect":effect,"transmission_mechanism":"SUPPLY"}}
 
  def test_weekend_news_reaches_next_session(self):
   from datetime import datetime
