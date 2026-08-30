@@ -171,11 +171,14 @@ async def copper_exact_option_route_probe(
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
 
 _copper_current_mind_replay_job={"status":"IDLE","result":None,"error":None}
+_copper_current_mind_replay_task=None
 
-async def _run_copper_current_mind_replay_job(store):
+def _run_copper_current_mind_replay_job_sync(database_url:str):
+    import asyncio
     global _copper_current_mind_replay_job
     try:
-        result=await run_current_mind_replay_from_store(store)
+        store=PostgresCandleStore(database_url)
+        result=asyncio.run(run_current_mind_replay_from_store(store))
         _copper_current_mind_replay_job={"status":"COMPLETED","result":result,"error":None}
     except Exception as exc:
         _copper_current_mind_replay_job={"status":"FAILED","result":None,"error":str(exc)[:1000]}
@@ -183,12 +186,14 @@ async def _run_copper_current_mind_replay_job(store):
 @app.post("/v1/internal/copper/current-mind-20-click-replay/start")
 async def copper_current_mind_20_click_replay_start(x_collector_token:str|None=Header(default=None)):
     import asyncio
-    global _copper_current_mind_replay_job
-    store=_collector_store(x_collector_token)
+    global _copper_current_mind_replay_job,_copper_current_mind_replay_task
+    _collector_store(x_collector_token)
     if _copper_current_mind_replay_job.get("status")=="RUNNING":
         return {"status":"RUNNING"}
     _copper_current_mind_replay_job={"status":"RUNNING","result":None,"error":None}
-    asyncio.create_task(_run_copper_current_mind_replay_job(store))
+    _copper_current_mind_replay_task=asyncio.create_task(
+        asyncio.to_thread(_run_copper_current_mind_replay_job_sync,settings.database_url)
+    )
     return {"status":"RUNNING"}
 
 @app.get("/v1/internal/copper/current-mind-20-click-replay/status")
