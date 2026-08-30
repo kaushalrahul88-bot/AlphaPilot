@@ -1,0 +1,49 @@
+name: Copper Current Mind Data Integrity Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/current_mind_data_integrity_audit.py"
+      - "app/main.py"
+      - ".github/workflows/copper-current-mind-data-integrity.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for exact Render commit
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..60}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Audit stored replay data
+        run: |
+          set -euo pipefail
+          for i in {1..12}; do
+            if curl -fsS --max-time 60 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-data-integrity" -o data-integrity.json; then break; fi
+            sleep 15
+          done
+          test -s data-integrity.json
+          python - <<'PY'
+          import json
+          d=json.load(open("data-integrity.json"))
+          print(json.dumps({k:d.get(k) for k in ("reference_contract","raw_candles","clean_candles","dropped_by_ohlcv_cleaning","duplicate_timestamp_count","off_5m_grid_count","non_monotonic_pairs","negative_volume_rows","negative_oi_rows","complete_sessions","exact_100pct_complete_sessions","partial_or_ineligible_sessions","missing_bars_inside_primary_complete_sessions","outside_session_bars","checks","certification_scope")},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-current-mind-data-integrity
+          path: data-integrity.json
