@@ -19,6 +19,7 @@ from .china_copper_macro_context import china_copper_macro_records
 from .copper_historical_news import fetch_copper_historical_news
 from .copper_historical_news_integrity_audit import audit_historical_news_records
 from .copper_news_intelligence import apply_news_intelligence
+from .copper_news_persistence import assess_news_persistence
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_integrated_replay import current_mind_click
 from .current_mind_replay_scorecard import replay_scorecard
@@ -90,19 +91,12 @@ def _macro_evidence(click):
 
 
 def _news_evidence(click, records, session_start=None, previous_market_bar=None):
-    """Return only News-Intelligence-approved evidence visible at the click.
-
-    The frozen eight-hour relevance horizon is measured in market opportunity,
-    not wall-clock downtime. News first observed after the previous market bar
-    (weekends, holidays, or after close) is carried into the next session for
-    the first eight hours of that session. News that was already observable
-    while the market was trading is never revived on a later session.
-    """
+    """Use only approved news whose causal effect is still live at click time."""
     cutoff=click-timedelta(hours=NEWS_ACTIVE_TRADING_HOURS)
-    visible=[];carried=[]
-    for r in records or []:
+    visible=[];carried=[];stale=[];persistence=[]
+    eligible=[r for r in (records or []) if parse_ist_timestamp(r["available_at"])<=click]
+    for r in eligible:
         ts=parse_ist_timestamp(r["available_at"])
-        if ts>click:continue
         ni=r.get("news_intelligence") or {}
         if ni.get("disposition")!="ALLOW":continue
         normal=ts>=cutoff
@@ -111,18 +105,25 @@ def _news_evidence(click, records, session_start=None, previous_market_bar=None)
             carry_deadline=session_start+timedelta(hours=NEWS_ACTIVE_TRADING_HOURS)
             after_previous_market=(previous_market_bar is None or ts>previous_market_bar)
             carry=after_previous_market and click<=carry_deadline
-        if normal or carry:
-            visible.append(r)
-            if carry:carried.append(r)
-    bullish=sum((r.get("news_intelligence") or {}).get("effect")=="BULLISH" for r in visible)
-    bearish=sum((r.get("news_intelligence") or {}).get("effect")=="BEARISH" for r in visible)
-    stance="BULLISH" if bullish>bearish else "BEARISH" if bearish>bullish else "UNKNOWN"
-    return {"lane":"NEWS","stance":stance,"source":"news_intelligence",
-            "detail":{"visible":len(visible),"carried_from_closed_market":len(carried),
+        p=assess_news_persistence(r,click,eligible)
+        persistence.append({"available_at":r.get("available_at"),"headline":(r.get("value") or {}).get("headline"),**p})
+        # Fresh/carry semantics remain the first boundary. Persistence can veto
+        # stale/invalidation and can describe decay; it never revives otherwise
+        # invisible news.
+        if not(normal or carry):continue
+        if p["status"].startswith("STALE_"):
+            stale.append(r);continue
+        visible.append(r)
+        if carry:carried.append(r)
+    bullish_weight=sum(p["weight"] for r in visible for p in [assess_news_persistence(r,click,eligible)] if (r.get("news_intelligence") or {}).get("effect")=="BULLISH")
+    bearish_weight=sum(p["weight"] for r in visible for p in [assess_news_persistence(r,click,eligible)] if (r.get("news_intelligence") or {}).get("effect")=="BEARISH")
+    stance="BULLISH" if bullish_weight>bearish_weight else "BEARISH" if bearish_weight>bullish_weight else "UNKNOWN"
+    return {"lane":"NEWS","stance":stance,"source":"news_intelligence+persistence",
+            "detail":{"visible":len(visible),"carried_from_closed_market":len(carried),"stale_vetoed":len(stale),
                       "active_trading_hours":NEWS_ACTIVE_TRADING_HOURS,
-                      "bullish":bullish,"bearish":bearish,
+                      "bullish_weight":round(bullish_weight,3),"bearish_weight":round(bearish_weight,3),
+                      "persistence":persistence,
                       "latest":[{"value":r.get("value"),"news_intelligence":r.get("news_intelligence")} for r in visible[-5:]]}}
-
 
 def _evidence_items(features, memory_item, macro_item, news_item=None):
     structure=str(features.get("structure") or "UNKNOWN")
