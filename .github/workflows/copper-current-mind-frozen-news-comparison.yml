@@ -1,0 +1,38 @@
+name: Copper Current Mind Frozen News Comparison
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+      SOURCE_ARTIFACT_ID: "9731584724"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements.txt
+      - name: Download frozen source and re-audit locally
+        env: {GH_TOKEN: ${{ github.token }}}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" > source.zip
+          unzip -q source.zip -d frozen
+          PYTHONPATH=. python -m scripts.reaudit_frozen_copper_news --source frozen/news-audit.json --output news-audit-v2.json
+      - name: Wait for exact Render commit
+        run: |
+          set -euo pipefail; test -n "$COLLECTOR_TOKEN"
+          for i in {1..75}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")'); [ "$D" = "$GITHUB_SHA" ] && exit 0; fi
+            sleep 10
+          done; exit 1
+      - name: Run frozen-news replay through Render endpoint
+        run: |
+          # Deployment is verified here; the endpoint currently owns the stored MCX dataset.
+          # A follow-up endpoint patch will pass the frozen artifact payload rather than refetch GDELT.
+          echo "BLOCKED_UNTIL_RENDER_ENDPOINT_ACCEPTS_FROZEN_PAYLOAD"
+          exit 1
