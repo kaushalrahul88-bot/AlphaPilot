@@ -1,0 +1,51 @@
+name: Copper Current Mind Provider Parity Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/current_mind_provider_parity_audit.py"
+      - "app/main.py"
+      - ".github/workflows/copper-current-mind-provider-parity.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for exact Render commit
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..75}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Compare stored candles with Groww
+        run: |
+          set -euo pipefail
+          OK=0
+          for i in {1..8}; do
+            if curl -fsS --max-time 600 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-provider-parity" -o provider-parity.json; then OK=1; break; fi
+            echo "Transient parity request failure $i"
+            sleep 30
+          done
+          test "$OK" -eq 1
+          python - <<'PY'
+          import json
+          d=json.load(open("provider-parity.json"))
+          print(json.dumps(d,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-current-mind-provider-parity
+          path: provider-parity.json

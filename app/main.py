@@ -34,6 +34,7 @@ from .copper_experience_memory import run_experience_memory_from_store
 from .copper_memory_evidence_audit import run_memory_evidence_from_store
 from .current_mind_copper_replay import run_current_mind_replay_from_store
 from .current_mind_data_integrity_audit import run_copper_replay_data_audit_from_store
+from .current_mind_provider_parity_audit import run_provider_parity_audit
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -219,6 +220,12 @@ async def copper_current_mind_data_integrity(x_collector_token:str|None=Header(d
     store=_collector_store(x_collector_token)
     try:return await run_copper_replay_data_audit_from_store(store)
     except Exception as exc:_safe_upstream_error("Copper Current Mind data integrity audit",exc)
+
+@app.get("/v1/internal/copper/current-mind-provider-parity")
+async def copper_current_mind_provider_parity(x_collector_token:str|None=Header(default=None)):
+    store=_collector_store(x_collector_token)
+    try:return await run_provider_parity_audit(get_provider(settings),store)
+    except Exception as exc:_safe_upstream_error("Copper Current Mind provider parity audit",exc)
 
 @app.get("/v1/internal/copper/memory-evidence-audit")
 async def copper_memory_evidence_audit(
