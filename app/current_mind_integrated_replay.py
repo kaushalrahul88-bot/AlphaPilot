@@ -12,7 +12,11 @@ def current_mind_click(*,click_timestamp,context_records,market_features,evidenc
     evidence=synthesize_evidence(evidence_items)
     memory=retrieve_similar(memory_cases or [],{"regime":regime,"evidence":evidence})
     scenario=build_scenario_board(evidence_items,{"similar_cases":memory})
-    decision=(decision_builder or _default_decision)(board,regime,evidence,scenario,memory)
+    if decision_builder is None:
+        from .current_mind_thesis_builder import build_current_mind_decision
+        decision=build_current_mind_decision(board,regime,evidence,scenario,memory,market_features)
+    else:
+        decision=decision_builder(board,regime,evidence,scenario,memory)
     return journal_decision(click_timestamp=click_timestamp,information_board=board,regime=regime,
       evidence=evidence,scenario=scenario,thesis=decision.get("thesis"),decision=decision,
       option_expression=option_expression)
