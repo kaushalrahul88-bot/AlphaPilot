@@ -23,7 +23,9 @@ jobs:
       - name: Install audit dependencies
         run: pip install -r requirements.txt
       - name: Fetch and audit historical Copper news outside Render
-        run: python scripts/audit_copper_historical_news.py --output news-audit.json
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m scripts.audit_copper_historical_news --output news-audit.json
       - name: Validate audited dataset
         run: |
           python - <<'PY'
