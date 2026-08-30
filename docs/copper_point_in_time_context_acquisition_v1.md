@@ -26,3 +26,9 @@ A record is visible only when both observed_at <= click_timestamp and available_
 - no interpolating missing external data from MCX's later price path;
 - no fabricating historical option premium/IV/Greeks;
 - no tuning source availability rules after seeing replay outcomes.
+
+
+## Latest-known-as-of semantics
+Periodic information remains usable after publication until superseded. At each simulated click AlphaPilot selects the most recent record whose observed_at and available_at are both no later than the click. The record's age is retained so Evidence can distinguish fresh from stale context.
+
+Example: if a daily report is published Monday at 20:00, Tuesday clicks before the Tuesday publication may use Monday's report. Once Tuesday's report is genuinely published, subsequent clicks use Tuesday's report. The same principle applies to weekly and monthly releases.
