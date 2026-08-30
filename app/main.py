@@ -193,12 +193,17 @@ def _run_copper_historical_news_audit_job_sync():
 _copper_current_mind_news_replay_job={"status":"IDLE","result":None,"error":None}
 _copper_current_mind_news_replay_task=None
 
-def _run_copper_current_mind_news_replay_job_sync(database_url:str):
+def _run_copper_current_mind_news_replay_job_sync(database_url:str, frozen_payload:dict|None=None):
     import asyncio
     global _copper_current_mind_news_replay_job
     try:
         store=PostgresCandleStore(database_url)
-        result=asyncio.run(run_current_mind_news_replay_from_store(store))
+        if frozen_payload is None:
+            result=asyncio.run(run_current_mind_news_replay_from_store(store))
+        else:
+            records=frozen_payload.get("records") or []
+            metadata=frozen_payload.get("metadata") or {}
+            result=asyncio.run(run_current_mind_news_replay_from_store(store,records,metadata))
         _copper_current_mind_news_replay_job={"status":"COMPLETED","result":result,"error":None}
     except Exception as exc:
         _copper_current_mind_news_replay_job={"status":"FAILED","result":None,"error":str(exc)[:1000],"traceback":traceback.format_exc()[-4000:]}
@@ -287,14 +292,26 @@ async def copper_historical_news_integrity_audit(x_collector_token:str|None=Head
     raise HTTPException(status_code=409,detail={"status":job.get("status","IDLE"),"message":"Historical news integrity audit is not completed."})
 
 @app.post("/v1/internal/copper/current-mind-news-replay/start")
-async def copper_current_mind_news_replay_start(x_collector_token:str|None=Header(default=None)):
+async def copper_current_mind_news_replay_start(request:Request,x_collector_token:str|None=Header(default=None)):
     import asyncio
     global _copper_current_mind_news_replay_job,_copper_current_mind_news_replay_task
     _collector_store(x_collector_token)
     if _copper_current_mind_news_replay_job.get("status")=="RUNNING":return {"status":"RUNNING"}
+    body=await request.body()
+    frozen_payload=None
+    if body:
+        try:frozen_payload=await request.json()
+        except Exception as exc:raise HTTPException(status_code=400,detail=f"Invalid frozen news payload: {exc}")
+        if not isinstance(frozen_payload,dict) or not isinstance(frozen_payload.get("records"),list):
+            raise HTTPException(status_code=400,detail="Frozen news payload must contain records[]")
+        if len(frozen_payload["records"])!=1:
+            raise HTTPException(status_code=400,detail="Controlled frozen-news replay requires exactly one News Intelligence ALLOW record")
+        ni=(frozen_payload["records"][0].get("news_intelligence") or {})
+        if ni.get("disposition")!="ALLOW":
+            raise HTTPException(status_code=400,detail="Frozen news record must carry News Intelligence disposition ALLOW")
     _copper_current_mind_news_replay_job={"status":"RUNNING","result":None,"error":None}
-    _copper_current_mind_news_replay_task=asyncio.create_task(asyncio.to_thread(_run_copper_current_mind_news_replay_job_sync,settings.database_url))
-    return {"status":"RUNNING"}
+    _copper_current_mind_news_replay_task=asyncio.create_task(asyncio.to_thread(_run_copper_current_mind_news_replay_job_sync,settings.database_url,frozen_payload))
+    return {"status":"RUNNING","input_mode":"FROZEN_PREVALIDATED" if frozen_payload is not None else "LIVE_FETCH"}
 
 @app.get("/v1/internal/copper/current-mind-news-replay/status")
 async def copper_current_mind_news_replay_status(x_collector_token:str|None=Header(default=None)):
