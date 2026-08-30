@@ -51,8 +51,11 @@ def _audit_one(record):
     supply_event=[x for x in SUPPLY_EVENT_TERMS if x in low]
     major_supply=[x for x in MAJOR_SUPPLY_TERMS if x in low]
     equity_project=[x for x in EQUITY_OR_PROJECT_TERMS if x in low]
+    operational_tech=any(x in low for x in ("proof of concept","remote mine operations","improving the efficiency","technology study","digital transformation"))
     price_recap=[x for x in PRICE_RECAP_TERMS if x in low]
     promotional=[x for x in PROMOTIONAL_DEMAND_TERMS if x in low]
+    if named_copper_asset and operational_tech:
+        return "REJECT",["OPERATIONAL_TECH_OR_EFFICIENCY_STORY_NO_MARKET_TRANSMISSION"]
     # Price-following stories are consequences/recaps, not independent causal news.
     # Keep them visible for audit/context, but never let them vote directionally.
     if price_recap and not (supply_event and major_supply):
@@ -71,7 +74,10 @@ def _audit_one(record):
         channels.extend(macro)
     if supply_event and major_supply:
         channels.extend(supply_event);channels.extend(major_supply)
-    if named_copper_asset and any(x in low for x in ("production","output","mine","concentrate","shutdown","closure","strike","disruption")):
+    if named_copper_asset and (
+        any(x in low for x in ("production","output","concentrate","shutdown","closure","strike","disruption"))
+        or supply_event
+    ):
         channels.append("NAMED_COPPER_ASSET_SUPPLY")
     if not channels:
         reasons.append("NO_CLEAR_MARKET_TRANSMISSION_CHANNEL")
