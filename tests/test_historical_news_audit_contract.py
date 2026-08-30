@@ -40,3 +40,22 @@ if __name__=="__main__":
     def test_inventory_price_story_is_kept(self):
         result=audit_historical_news_records([self.row("Copper prices rise as LME copper inventories fall")])
         self.assertEqual(result["accepted_record_count"],1)
+
+    def test_price_recap_does_not_vote(self):
+        result=audit_historical_news_records([self.row("BHP annual profit rises on record-high copper prices")])
+        self.assertEqual(result["accepted_record_count"],0)
+        self.assertEqual(result["classification_counts"].get("UNCERTAIN"),1)
+
+    def test_price_surge_consequence_does_not_vote(self):
+        result=audit_historical_news_records([self.row("Copper price surge lifts global mining behemoth")])
+        self.assertEqual(result["accepted_record_count"],0)
+        self.assertEqual(result["classification_counts"].get("UNCERTAIN"),1)
+
+    def test_promotional_project_demand_claim_is_rejected(self):
+        result=audit_historical_news_records([self.row("Solis Minerals targets rising lithium and copper demand with Brazil and Peru drilling")])
+        self.assertEqual(result["accepted_record_count"],0)
+        self.assertEqual(result["classification_counts"].get("REJECT"),1)
+
+    def test_causal_export_ban_can_vote(self):
+        result=audit_historical_news_records([self.row("Congo bans copper and cobalt concentrate exports")])
+        self.assertEqual(result["accepted_record_count"],1)
