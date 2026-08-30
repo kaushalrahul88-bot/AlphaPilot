@@ -24,14 +24,26 @@ jobs:
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
           for i in {1..42}; do
-            if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o o.json && python -c 'import json,sys;d=json.load(open("o.json"));sys.exit(0 if "/v1/internal/copper/current-mind-20-click-replay" in d.get("paths",{}) else 1)'; then sleep 20; exit 0; fi
+            if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o o.json && python -c 'import json,sys;d=json.load(open("o.json"));sys.exit(0 if "/v1/internal/copper/current-mind-20-click-replay/start" in d.get("paths",{}) else 1)'; then sleep 20; exit 0; fi
             sleep 10
           done
           exit 1
       - name: Run frozen Current Mind replay
         run: |
           set -euo pipefail
-          curl -fsS --max-time 600 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay" -o result.json
+          curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/start" -o start.json
+          for i in {1..60}; do
+            curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay/status" -o status.json
+            STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+            echo "Replay state: $STATE"
+            if [ "$STATE" = "COMPLETED" ]; then
+              python -c 'import json;d=json.load(open("status.json"));json.dump(d["result"],open("result.json","w"))'
+              break
+            fi
+            if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            sleep 15
+          done
+          test -f result.json
           python - <<'PY'
           import json
           d=json.load(open("result.json"))
