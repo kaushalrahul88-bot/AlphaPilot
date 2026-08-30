@@ -205,7 +205,8 @@ def evaluate_current_mind_replay(candles):
     complete_days={d for d,q in quality.items() if q.get("primary_score_eligible")}
     complete_rows=[r for r in rows if parse_ist_timestamp(r[0]).date() in complete_days]
     clicks=deterministic_clicks(complete_rows,clicks_per_session=CLICKS_PER_COMPLETE_SESSION,
-                                seed="COPPER_CURRENT_MIND_V1_20_CLICKS",warmup_bars=24,tail_bars=12)
+                                seed="COPPER_CURRENT_MIND_V1_20_CLICKS",warmup_bars=24,tail_bars=12,
+                                min_global_index=50)
     click_set={parse_ist_timestamp(x["click_timestamp"]):x for x in clicks}
     index_by_ts={parse_ist_timestamp(r[0]):i for i,r in enumerate(rows)}
     experiences=build_experiences(rows,3)
