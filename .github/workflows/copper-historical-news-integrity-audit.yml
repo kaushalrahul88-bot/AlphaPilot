@@ -6,65 +6,26 @@ on:
     paths:
       - "app/copper_historical_news.py"
       - "app/copper_historical_news_integrity_audit.py"
-      - "app/main.py"
+      - "scripts/audit_copper_historical_news.py"
       - ".github/workflows/copper-historical-news-integrity-audit.yml"
 permissions:
   contents: read
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      API_BASE: https://alphapilot-api-pnio.onrender.com
-      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    timeout-minutes: 30
     steps:
-      - name: Wait for exact Render commit
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install audit dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch and audit historical Copper news outside Render
+        run: python scripts/audit_copper_historical_news.py --output news-audit.json
+      - name: Validate audited dataset
         run: |
-          set -euo pipefail; test -n "$COLLECTOR_TOKEN"
-          for i in {1..75}; do
-            if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then
-              D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")')
-              if [ "$D" = "$GITHUB_SHA" ]; then exit 0; fi
-            fi
-            sleep 10
-          done
-          exit 1
-      - name: Start historical news audit
-        run: |
-          set -euo pipefail
-          for attempt in {1..10}; do
-            if curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/historical-news-integrity-audit/start" -o start.json; then
-              exit 0
-            fi
-            echo "Transient start failure $attempt"
-            sleep 15
-          done
-          exit 1
-      - name: Wait for historical news audit
-        run: |
-          set -euo pipefail
-          for i in {1..80}; do
-            if ! curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/historical-news-integrity-audit/status" -o status.json; then
-              echo "Transient status failure $i"
-              sleep 15
-              continue
-            fi
-            STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
-            echo "Audit state: $STATE"
-            if [ "$STATE" = "COMPLETED" ]; then break; fi
-            if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
-            sleep 15
-          done
-          python -c 'import json,sys;sys.exit(0 if json.load(open("status.json")).get("status")=="COMPLETED" else 1)'
-      - name: Download and validate audited dataset
-        run: |
-          set -euo pipefail
-          OK=0
-          for i in {1..8}; do
-            if curl -fsS --max-time 120 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/historical-news-integrity-audit" -o news-audit.json; then OK=1; break; fi
-            sleep 15
-          done
-          test "$OK" -eq 1
           python - <<'PY'
           import json
           d=json.load(open("news-audit.json"))
@@ -73,10 +34,12 @@ jobs:
           assert d["checks"]["uncertain_do_not_vote"]
           assert d["accepted_record_count"]>0
           print(json.dumps({k:d.get(k) for k in ("raw_record_count","classification_counts","accepted_record_count","accepted_dataset_sha256","checks","limitations")},indent=2))
-          print("\nUNCERTAIN SAMPLE")
-          for x in d.get("uncertain",[])[:25]: print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
-          print("\nREJECTED SAMPLE")
-          for x in d.get("rejected",[])[:25]: print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          print("\nUNCERTAIN")
+          for x in d.get("uncertain",[]): print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          print("\nREJECTED")
+          for x in d.get("rejected",[]): print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          print("\nACCEPTED")
+          for x in d.get("accepted",[]): print(x["available_at"],"|",x["source"],"|",x["headline"])
           PY
       - uses: actions/upload-artifact@v4
         if: always()
