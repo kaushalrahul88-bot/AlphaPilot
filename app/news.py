@@ -37,6 +37,7 @@ NEGATIVE_WORDS = {
 COMMODITY_QUERIES = {
     "CRUDEOIL": 'crude oil OR Brent OR WTI OR OPEC OR EIA oil inventory OR Hormuz when:3d',
     "NATURALGAS": 'natural gas OR Henry Hub OR EIA natural gas storage OR LNG OR US weather when:3d',
+    "COPPER": 'copper OR COMEX copper OR LME copper OR China copper demand OR copper mine OR smelter OR copper inventory OR copper tariff when:3d',
 }
 
 COMMODITY_EVENT_TERMS = {
@@ -52,6 +53,14 @@ COMMODITY_EVENT_TERMS = {
         "LNG": ("lng", "liquefied natural gas"),
         "STORAGE / INVENTORY": ("storage", "inventory"),
     },
+    "COPPER": {
+        "CHINA DEMAND": ("china", "chinese"),
+        "MINE / SUPPLY": ("mine", "mining", "supply disruption", "strike"),
+        "SMELTER / TC": ("smelter", "smelting", "treatment charge"),
+        "INVENTORY": ("inventory", "inventories", "warehouse", "stocks"),
+        "TARIFF / TRADE": ("tariff", "trade"),
+        "LME / COMEX": ("lme", "comex"),
+    },
 }
 
 COMMODITY_BULLISH_PHRASES = {
@@ -60,6 +69,11 @@ COMMODITY_BULLISH_PHRASES = {
         "oil jumps", "oil surges", "crude jumps", "crude surges", "sanctions on iran", "supply disruption",
         "supply disruptions", "output cut", "output cuts", "production cut", "production cuts", "inventory draw",
         "inventories fall", "inventories drop", "hormuz disruption", "shipping disruption",
+    ),
+    "COPPER": (
+        "copper rises", "copper prices rise", "copper rallies", "copper jumps", "copper surges",
+        "supply disruption", "mine disruption", "mine strike", "inventories fall", "inventory draw",
+        "stocks fall", "treatment charges fall", "china stimulus", "demand improves",
     ),
     "NATURALGAS": (
         "natural gas futures rise", "natgas futures rise", "natural gas prices rise", "futures leap",
@@ -74,6 +88,11 @@ COMMODITY_BEARISH_PHRASES = {
         "oil falls", "oil prices fall", "crude falls", "crude prices fall", "brent falls", "wti falls",
         "oil drops", "oil slumps", "crude drops", "crude slumps", "output rises", "production rises",
         "inventory build", "inventories rise", "inventories build", "demand falls", "demand declines",
+    ),
+    "COPPER": (
+        "copper falls", "copper prices fall", "copper drops", "copper slumps",
+        "inventories rise", "inventory build", "stocks rise", "demand weakens", "demand concern",
+        "china slowdown", "mine output rises", "supply rises",
     ),
     "NATURALGAS": (
         "natural gas futures fall", "natgas futures fall", "natural gas prices fall", "futures drop",
