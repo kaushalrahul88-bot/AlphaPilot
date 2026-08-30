@@ -7,7 +7,8 @@ from .commodity_time import parse_ist_timestamp
 from .news import _commodity_sentiment, _event_tags
 
 GDELT_DOC="https://api.gdeltproject.org/api/v2/doc/doc"
-QUERY='(copper OR "copper prices" OR "copper mine" OR "copper demand" OR "copper inventories" OR "copper smelter" OR "COMEX copper" OR "LME copper")'
+COPPER_ASSET_TERMS=("escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata","codelco")
+QUERY='(copper OR "copper prices" OR "copper mine" OR "copper demand" OR "copper inventories" OR "copper smelter" OR "COMEX copper" OR "LME copper" OR Escondida OR Grasberg OR Collahuasi OR "Las Bambas" OR Kamoa OR Tenke OR Chuquicamata OR Codelco)'
 MAX_PER_DAY=250
 
 def _seen(value):
@@ -26,7 +27,8 @@ def _relevant(title):
     # Broad retrieval only. Final trading relevance is decided by the separate
     # integrity audit; retrieval must not silently discard records before review.
     t=str(title or "").lower()
-    return "copper" in t or ("lme" in t and "metal" in t) or ("comex" in t and "metal" in t)
+    return ("copper" in t or any(x in t for x in COPPER_ASSET_TERMS)
+            or ("lme" in t and "metal" in t) or ("comex" in t and "metal" in t))
 
 async def _fetch_day(client, start, end, *, attempts=5):
     params={"query":QUERY,"mode":"artlist","format":"json","maxrecords":MAX_PER_DAY,
@@ -78,4 +80,5 @@ async def fetch_copper_historical_news(start, end):
     digest=hashlib.sha256(json.dumps(records,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     return {"provider":"GDELT DOC 2.0","query":QUERY,"records":records,"record_count":len(records),
             "dataset_sha256":digest,"timestamp_semantics":"available_at = GDELT seendate; no article is visible before GDELT observed it.",
+            "coverage_scope":"Direct Copper terms plus named globally material Copper assets; broad retrieval is filtered by Integrity + News Intelligence.",
             "retrieved_at":datetime.now(timezone.utc).isoformat()}
