@@ -1,0 +1,110 @@
+{
+  "mode": "COPPER_HISTORICAL_NEWS_ACQUISITION_MANIFEST_V1",
+  "purpose": "Acquire point-in-time Copper causal context independently of replay outcomes.",
+  "window": {
+    "start": "2026-08-03",
+    "end": "2026-08-26"
+  },
+  "source_classes": [
+    {
+      "name": "wire_and_market_news",
+      "examples": [
+        "Reuters"
+      ],
+      "targets": [
+        "mine disruptions",
+        "inventory changes",
+        "tariff/trade policy",
+        "China demand/import data",
+        "smelter outages"
+      ]
+    },
+    {
+      "name": "physical_market",
+      "examples": [
+        "Shanghai Metals Market"
+      ],
+      "targets": [
+        "China social inventory",
+        "spot premiums",
+        "treatment charges",
+        "smelter conditions",
+        "downstream demand"
+      ]
+    },
+    {
+      "name": "industry_primary_or_specialist",
+      "examples": [
+        "International Copper Association Australia"
+      ],
+      "targets": [
+        "weekly supply/demand synthesis with source attribution"
+      ]
+    },
+    {
+      "name": "official_macro",
+      "examples": [
+        "China NBS",
+        "China Customs"
+      ],
+      "targets": [
+        "PMI",
+        "industrial activity",
+        "copper imports"
+      ]
+    },
+    {
+      "name": "exchange_inventory",
+      "examples": [
+        "LME",
+        "COMEX",
+        "SHFE"
+      ],
+      "targets": [
+        "warehouse stocks",
+        "cancelled warrants",
+        "spreads where timestamped"
+      ]
+    }
+  ],
+  "candidate_leads": [
+    {
+      "date": "2026-08-04",
+      "event": "LME and SHFE inventories falling while COMEX stocks rise; China downstream consumption weakening",
+      "source": "Reuters syndication",
+      "url": "https://www.fidelity.com/news/article/default/202608040001RTRSNEWSCOMBINED_L1N441027_1"
+    },
+    {
+      "date": "2026-08-10",
+      "event": "China July unwrought copper imports down 11.5% YoY and concentrate imports weaker",
+      "source": "ING-derived market report",
+      "url": "https://www.tmgm.com/en/analysis/market-news/article/copper-weak-china-imports-contrast-with-bullish-positioning-ing-202608101308"
+    },
+    {
+      "date": "2026-08-19",
+      "event": "LME inventories +17,450t; disappointing China data versus tight concentrates/smelters",
+      "source": "Kedia market report",
+      "url": "https://in.investing.com/news/commodities-news/copper-slips-as-lme-inventories-rise-for-second-day-amid-supply-concerns-5562718"
+    },
+    {
+      "date": "2026-08-24",
+      "event": "China mainstream-region copper inventory -19,700t WoW to 114,200t",
+      "source": "Shanghai Metals Market",
+      "url": "https://news.metal.com/id/newscontent/104076084-copper-cathode-social-inventory-sees-significant-drawdown-all-regions-simultaneously-digest-spot-copper-smm-weekly-data"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "US tariff threat diverts copper into America; LME availability tightens; China demand and mine/smelter disruptions remain relevant",
+      "source": "Reuters",
+      "url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/"
+    }
+  ],
+  "admission_rules": [
+    "Persist publication/first-seen timestamp and never expose a record before it.",
+    "Prefer event facts over price-recap headlines.",
+    "Run every acquired record through integrity audit and News Intelligence before Market Brain.",
+    "Do not infer missing historical timestamps.",
+    "Do not use replay outcomes to select or label news.",
+    "Keep source text out of the repository when copyright/licensing does not permit storage; retain normalized event facts, timestamp, source, URL and provenance."
+  ]
+}
