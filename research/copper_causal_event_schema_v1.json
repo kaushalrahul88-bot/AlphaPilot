@@ -1,0 +1,74 @@
+{
+  "mode": "COPPER_CAUSAL_EVENT_SCHEMA_V1",
+  "status": "RESEARCH_ONLY",
+  "principle": "Direction must come from an explicit causal market mechanism, not from article tone or replay outcome.",
+  "required_fields": [
+    "available_at",
+    "source",
+    "source_url",
+    "event_type",
+    "subject",
+    "fact",
+    "transmission_channel",
+    "directional_effect",
+    "effect_basis",
+    "confidence",
+    "provenance_status"
+  ],
+  "event_types": [
+    "MINE_DISRUPTION",
+    "PRODUCTION_GUIDANCE",
+    "SMELTER_DISRUPTION",
+    "CONCENTRATE_TC",
+    "EXCHANGE_INVENTORY",
+    "CHINA_IMPORTS",
+    "CHINA_DEMAND",
+    "TRADE_POLICY",
+    "PHYSICAL_PREMIUM"
+  ],
+  "directional_effects": [
+    "BULLISH",
+    "BEARISH",
+    "MIXED",
+    "UNKNOWN"
+  ],
+  "admission": {
+    "ALLOW": [
+      "provenance_status=VERIFIED",
+      "directional_effect in BULLISH/BEARISH",
+      "explicit transmission_channel",
+      "confidence>=0.75"
+    ],
+    "CONTEXT_ONLY": [
+      "MIXED",
+      "UNKNOWN",
+      "confidence<0.75"
+    ],
+    "BLOCK": [
+      "unverified timestamp",
+      "no Copper causal mechanism",
+      "retrospective price recap only",
+      "irrelevant entity"
+    ]
+  },
+  "examples": [
+    {
+      "event_type": "MINE_DISRUPTION",
+      "fact": "Verified mine shutdown removes expected near-term Copper supply.",
+      "transmission_channel": "SUPPLY_DOWN",
+      "directional_effect": "BULLISH"
+    },
+    {
+      "event_type": "EXCHANGE_INVENTORY",
+      "fact": "Verified exchange deliverable inventory rises materially.",
+      "transmission_channel": "AVAILABLE_SUPPLY_UP",
+      "directional_effect": "BEARISH"
+    },
+    {
+      "event_type": "CHINA_PHYSICAL_INVENTORY",
+      "fact": "Inventory falls while end-user purchasing is weak.",
+      "transmission_channel": "CONFLICTING_INVENTORY_AND_DEMAND",
+      "directional_effect": "MIXED"
+    }
+  ]
+}
