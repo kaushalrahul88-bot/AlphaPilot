@@ -31,6 +31,7 @@ from .copper_market_brain_error_attribution import run_error_attribution_from_st
 from .copper_event_path_backtest import run_event_path_from_store
 from .copper_experience_memory import run_experience_memory_from_store
 from .copper_memory_evidence_audit import run_memory_evidence_from_store
+from .current_mind_copper_replay import run_current_mind_replay_from_store
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -168,6 +169,12 @@ async def copper_exact_option_route_probe(
             get_provider(settings),"COPPER",strike,trade_date,
         )
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
+
+@app.get("/v1/internal/copper/current-mind-20-click-replay")
+async def copper_current_mind_20_click_replay(x_collector_token:str|None=Header(default=None)):
+    store=_collector_store(x_collector_token)
+    try:return await run_current_mind_replay_from_store(store)
+    except Exception as exc:_safe_upstream_error("Copper Current Mind 20-click replay",exc)
 
 @app.get("/v1/internal/copper/memory-evidence-audit")
 async def copper_memory_evidence_audit(
