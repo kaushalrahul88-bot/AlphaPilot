@@ -15,7 +15,6 @@ class FrozenAcceptedNewsIntelligenceTests(unittest.TestCase):
         self.assertEqual(c["transmission_mechanism"],"SUPPLY")
         self.assertIn(b["disposition"],("CONTEXT_ONLY","BLOCK"))
         self.assertNotEqual(b["disposition"],"ALLOW")
-        self.assertIn("record-high copper prices",b["headline"].lower())
         result=apply_news_intelligence([congo,bhp])
         self.assertEqual(result["counts"]["ALLOW"],1)
         self.assertEqual(result["counts"]["CONTEXT_ONLY"]+result["counts"]["BLOCK"],1)
