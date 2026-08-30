@@ -175,6 +175,21 @@ async def copper_exact_option_route_probe(
         )
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
 
+_copper_historical_news_audit_job={"status":"IDLE","result":None,"error":None}
+_copper_historical_news_audit_task=None
+
+def _run_copper_historical_news_audit_job_sync():
+    import asyncio
+    global _copper_historical_news_audit_job
+    try:
+        result=asyncio.run(run_historical_news_integrity_audit())
+        _copper_historical_news_audit_job={"status":"COMPLETED","result":result,"error":None}
+    except Exception as exc:
+        _copper_historical_news_audit_job={
+            "status":"FAILED","result":None,"error":str(exc)[:1000],
+            "traceback":traceback.format_exc()[-4000:],
+        }
+
 _copper_current_mind_news_replay_job={"status":"IDLE","result":None,"error":None}
 _copper_current_mind_news_replay_task=None
 
@@ -230,11 +245,46 @@ async def copper_current_mind_20_click_replay(x_collector_token:str|None=Header(
     try:return await run_current_mind_replay_from_store(store)
     except Exception as exc:_safe_upstream_error("Copper Current Mind 20-click replay",exc)
 
+@app.post("/v1/internal/copper/historical-news-integrity-audit/start")
+async def copper_historical_news_integrity_audit_start(x_collector_token:str|None=Header(default=None)):
+    import asyncio
+    global _copper_historical_news_audit_job,_copper_historical_news_audit_task
+    _collector_store(x_collector_token)
+    if _copper_historical_news_audit_job.get("status")=="RUNNING":
+        return {"status":"RUNNING"}
+    _copper_historical_news_audit_job={"status":"RUNNING","result":None,"error":None}
+    _copper_historical_news_audit_task=asyncio.create_task(
+        asyncio.to_thread(_run_copper_historical_news_audit_job_sync)
+    )
+    return {"status":"RUNNING"}
+
+@app.get("/v1/internal/copper/historical-news-integrity-audit/status")
+async def copper_historical_news_integrity_audit_status(x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token)
+    job=_copper_historical_news_audit_job
+    result=job.get("result") or {}
+    return {
+        "status":job.get("status","IDLE"),
+        "error":job.get("error"),
+        "traceback":job.get("traceback"),
+        "summary":({
+            "raw_record_count":result.get("raw_record_count"),
+            "classification_counts":result.get("classification_counts"),
+            "accepted_record_count":result.get("accepted_record_count"),
+            "accepted_dataset_sha256":result.get("accepted_dataset_sha256"),
+            "checks":result.get("checks"),
+        } if result else None),
+    }
+
 @app.get("/v1/internal/copper/historical-news-integrity-audit")
 async def copper_historical_news_integrity_audit(x_collector_token:str|None=Header(default=None)):
     _collector_store(x_collector_token)
-    try:return await run_historical_news_integrity_audit()
-    except Exception as exc:_safe_upstream_error("Copper historical news integrity audit",exc)
+    job=_copper_historical_news_audit_job
+    if job.get("status")=="COMPLETED" and job.get("result") is not None:
+        return job["result"]
+    if job.get("status")=="FAILED":
+        raise HTTPException(status_code=500,detail={"error":job.get("error"),"traceback":job.get("traceback")})
+    raise HTTPException(status_code=409,detail={"status":job.get("status","IDLE"),"message":"Historical news integrity audit is not completed."})
 
 @app.post("/v1/internal/copper/current-mind-news-replay/start")
 async def copper_current_mind_news_replay_start(x_collector_token:str|None=Header(default=None)):
