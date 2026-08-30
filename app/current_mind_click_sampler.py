@@ -7,8 +7,14 @@ def deterministic_clicks(candles, clicks_per_session=10, seed="CURRENT_MIND_V1",
     """Sample user-like clicks without consulting future outcomes."""
     by_day={}
     for c in candles:
-        ts=str(c.get("timestamp") or c.get("time") or c.get("datetime"))
-        if not ts:continue
+        if isinstance(c,dict):
+            raw_ts=c.get("timestamp") or c.get("time") or c.get("datetime")
+        elif isinstance(c,(list,tuple)) and c:
+            raw_ts=c[0]
+        else:
+            raw_ts=None
+        if raw_ts is None:continue
+        ts=str(raw_ts)
         d=parse_ist_timestamp(ts).date().isoformat()
         by_day.setdefault(d,[]).append(ts)
     out=[]
