@@ -28,6 +28,7 @@ from .copper_option_snapshot_readiness import run_snapshot_readiness
 from .copper_contract_sync_audit import audit_copper_aug26_contract_window
 from .copper_market_brain_direction_audit import run_market_brain_direction_audit_from_store
 from .copper_market_brain_error_attribution import run_error_attribution_from_store
+from .copper_event_path_backtest import run_event_path_from_store
 from .commodity_continuous_backtest import discover_groww_historical_mcx_contracts, run_continuous_commodity_backtest
 from .commodity_click_replay import audit_identified_setups, run_frozen_extended_click_backtest, run_frozen_july_validation_backtest, run_frozen_tuesday_phase_a, run_frozen_weekly_click_backtest, validate_frozen_tuesday_phase_a_data
 from .commodity_live import run_commodity_live_scan
@@ -165,6 +166,19 @@ async def copper_exact_option_route_probe(
             get_provider(settings),"COPPER",strike,trade_date,
         )
     except Exception as exc:_safe_upstream_error("Copper exact option route probe",exc)
+
+@app.get("/v1/internal/copper/event-path-backtest")
+async def copper_event_path_backtest(
+    sample_every_bars:int=3,
+    x_collector_token:str|None=Header(default=None),
+):
+    store=_collector_store(x_collector_token)
+    try:
+        return await run_event_path_from_store(
+            store,
+            max(1,min(int(sample_every_bars),12)),
+        )
+    except Exception as exc:_safe_upstream_error("Copper event-path backtest",exc)
 
 @app.get("/v1/internal/copper/market-brain-error-attribution")
 async def copper_market_brain_error_attribution(
