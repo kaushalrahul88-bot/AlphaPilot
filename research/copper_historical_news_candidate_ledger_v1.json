@@ -1,0 +1,53 @@
+{
+  "mode": "COPPER_HISTORICAL_NEWS_CANDIDATE_LEDGER_V1",
+  "status": "QUARANTINED_NOT_MARKET_BRAIN_INPUT",
+  "rules": [
+    "Point-in-time publication timestamp required.",
+    "Candidate discovery is independent of replay outcomes.",
+    "Every event must pass provenance validation, integrity audit and News Intelligence before admission.",
+    "Price commentary alone is not a causal event.",
+    "No historical option data is inferred or fabricated."
+  ],
+  "candidates": [
+    {
+      "published_at": "2026-08-19",
+      "source": "Reuters",
+      "event_type": "INVENTORY_MARKET_STRUCTURE",
+      "fact": "LME copper flash squeeze with constrained available inventory, extreme backwardation and physical deliveries responding to tightness.",
+      "url": "https://www.reuters.com/commentary/reuters-open-interest/lme-gripped-by-flash-squeeze-copper-tensions-boil-over-2026-08-19/",
+      "initial_label": "REVIEW_CAUSAL_COMPONENTS"
+    },
+    {
+      "published_at": "2026-08-24T14:40:00+08:00",
+      "source": "Shanghai Metals Market",
+      "event_type": "CHINA_PHYSICAL_INVENTORY",
+      "fact": "China mainstream-region copper inventories fell 19,700 mt WoW to 114,200 mt; supply marginally tight while end-user purchasing remained insufficient.",
+      "url": "https://news.metal.com/id/newscontent/104076084-copper-cathode-social-inventory-sees-significant-drawdown-all-regions-simultaneously-digest-spot-copper-smm-weekly-data",
+      "initial_label": "REVIEW_MIXED"
+    },
+    {
+      "published_at": "2026-08-25",
+      "source": "Reuters",
+      "event_type": "TRADE_FLOW_INVENTORY_DISTORTION",
+      "fact": "Expected US refined-copper tariffs diverted metal toward the US, lifting COMEX inventory and tightening availability outside the US.",
+      "url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/",
+      "initial_label": "REVIEW_CAUSAL_COMPONENTS"
+    },
+    {
+      "published_at": "2026-08-27T14:33:00+08:00",
+      "source": "Shanghai Metals Market",
+      "event_type": "CHINA_PHYSICAL_INVENTORY",
+      "fact": "China major-region copper inventories fell 24,900 mt WoW to 109,500 mt; regional demand diverged and supply was marginally tight.",
+      "url": "https://news.metal.com/newscontent/104083304-national-copper-social-inventory-posts-yoy-double-decline-regional-trends-diverge-smm-weekly-data",
+      "initial_label": "OUTSIDE_PRIMARY_COMPLETE_SESSION_WINDOW"
+    },
+    {
+      "published_at": "2026-08-28",
+      "source": "Reuters",
+      "event_type": "MINE_SUPPLY",
+      "fact": "Codelco first-half copper output fell 11% with operational restrictions at El Teniente, lower Chuquicamata output and lower grades at Ministro Hales.",
+      "url": "https://www.reuters.com/world/americas/chiles-codelco-posts-stronger-profit-copper-rally-mine-disruptions-drag-output-2026-08-28/",
+      "initial_label": "OUTSIDE_PRIMARY_COMPLETE_SESSION_WINDOW"
+    }
+  ]
+}
