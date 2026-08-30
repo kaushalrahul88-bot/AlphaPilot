@@ -19,6 +19,7 @@ from .china_copper_macro_context import china_copper_macro_records
 from .copper_historical_news import fetch_copper_historical_news
 from .copper_historical_news_integrity_audit import audit_historical_news_records
 from .copper_news_intelligence import apply_news_intelligence
+from .copper_news_persistence import assess_news_persistence
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_integrated_replay import current_mind_click
 from .current_mind_replay_scorecard import replay_scorecard
