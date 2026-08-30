@@ -1,0 +1,46 @@
+name: Copper Current Mind 20 Click Replay
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/current_mind_copper_replay.py"
+      - "app/current_mind_integrated_replay.py"
+      - "app/current_mind_thesis_builder.py"
+      - "app/main.py"
+      - ".github/workflows/copper-current-mind-20-click-replay.yml"
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for replay endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..42}; do
+            if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o o.json && python -c 'import json,sys;d=json.load(open("o.json"));sys.exit(0 if "/v1/internal/copper/current-mind-20-click-replay" in d.get("paths",{}) else 1)'; then sleep 20; exit 0; fi
+            sleep 10
+          done
+          exit 1
+      - name: Run frozen Current Mind replay
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 600 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-20-click-replay" -o result.json
+          python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d["mode"]=="COPPER_CURRENT_MIND_20_CLICK_REPLAY_V1"
+          assert d["current_mind_frozen"] is True
+          print(json.dumps({k:d.get(k) for k in ("reference_contract","candles","complete_sessions","excluded_partial_sessions","scheduled_clicks","evaluated_clicks","actions","trades","resolved_trades","targets","stops","no_entry","session_end","expectancy_r_resolved","missed_large_moves_after_abstention","data_context")},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-current-mind-20-click-replay
+          path: result.json
