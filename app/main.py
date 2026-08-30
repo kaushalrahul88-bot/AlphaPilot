@@ -181,7 +181,12 @@ def _run_copper_current_mind_replay_job_sync(database_url:str):
         result=asyncio.run(run_current_mind_replay_from_store(store))
         _copper_current_mind_replay_job={"status":"COMPLETED","result":result,"error":None}
     except Exception as exc:
-        _copper_current_mind_replay_job={"status":"FAILED","result":None,"error":str(exc)[:1000]}
+        _copper_current_mind_replay_job={
+            "status":"FAILED",
+            "result":None,
+            "error":str(exc)[:1000],
+            "traceback":traceback.format_exc()[-4000:],
+        }
 
 @app.post("/v1/internal/copper/current-mind-20-click-replay/start")
 async def copper_current_mind_20_click_replay_start(x_collector_token:str|None=Header(default=None)):
