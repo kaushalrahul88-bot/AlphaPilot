@@ -23,8 +23,10 @@ def _domain(url):
     except Exception:return ""
 
 def _relevant(title):
+    # Broad retrieval only. Final trading relevance is decided by the separate
+    # integrity audit; retrieval must not silently discard records before review.
     t=str(title or "").lower()
-    return "copper" in t or any(x in t for x in ("lme","comex","smelter","mine","metal prices")) and any(x in t for x in ("china","metal","commodity"))
+    return "copper" in t or ("lme" in t and "metal" in t) or ("comex" in t and "metal" in t)
 
 async def _fetch_day(client, start, end):
     params={"query":QUERY,"mode":"artlist","format":"json","maxrecords":MAX_PER_DAY,
