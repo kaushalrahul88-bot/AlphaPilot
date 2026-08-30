@@ -24,7 +24,8 @@ jobs:
           for i in {1..75}; do
             if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")'); if [ "$D" = "$GITHUB_SHA" ]; then exit 0; fi; fi; sleep 10; done; exit 1
       - name: Start news replay
-        run: curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-news-replay/start"
+        run: |
+          curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-news-replay/start"
       - name: Wait and capture result
         run: |
           set -euo pipefail
