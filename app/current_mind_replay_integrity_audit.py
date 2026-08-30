@@ -13,7 +13,7 @@ def audit_replay_integrity(candles, report):
     rows=clean_ohlcv(candles); quality=_session_quality(rows)
     complete_days={d for d,q in quality.items() if q.get("primary_score_eligible")}
     complete_rows=[r for r in rows if parse_ist_timestamp(r[0]).date() in complete_days]
-    scheduled=deterministic_clicks(complete_rows,clicks_per_session=CLICKS,seed=SEED,warmup_bars=24,tail_bars=12)
+    scheduled=deterministic_clicks(complete_rows,clicks_per_session=CLICKS,seed=SEED,warmup_bars=24,tail_bars=12,min_global_index=50)
     scheduled_ts=[parse_ist_timestamp(x["click_timestamp"]) for x in scheduled]
     decisions=report.get("decisions",[])
     evaluated_ts=[parse_ist_timestamp(x["click_timestamp"]) for x in decisions]
