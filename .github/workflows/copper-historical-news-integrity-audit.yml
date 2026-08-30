@@ -1,0 +1,58 @@
+name: Copper Historical News Integrity Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_historical_news.py"
+      - "app/copper_historical_news_integrity_audit.py"
+      - "app/main.py"
+      - ".github/workflows/copper-historical-news-integrity-audit.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for exact Render commit
+        run: |
+          set -euo pipefail; test -n "$COLLECTOR_TOKEN"
+          for i in {1..75}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then
+              D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")')
+              if [ "$D" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Audit historical news dataset
+        run: |
+          set -euo pipefail
+          OK=0
+          for i in {1..8}; do
+            if curl -fsS --max-time 180 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/historical-news-integrity-audit" -o news-audit.json; then OK=1; break; fi
+            sleep 20
+          done
+          test "$OK" -eq 1
+          python - <<'PY'
+          import json
+          d=json.load(open("news-audit.json"))
+          assert d["checks"]["no_rejected_in_accepted"]
+          assert d["checks"]["duplicates_do_not_vote"]
+          assert d["checks"]["uncertain_do_not_vote"]
+          assert d["accepted_record_count"]>0
+          print(json.dumps({k:d.get(k) for k in ("raw_record_count","classification_counts","accepted_record_count","accepted_dataset_sha256","checks","limitations")},indent=2))
+          print("\nUNCERTAIN SAMPLE")
+          for x in d.get("uncertain",[])[:25]: print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          print("\nREJECTED SAMPLE")
+          for x in d.get("rejected",[])[:25]: print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-historical-news-integrity-audit
+          path: news-audit.json
