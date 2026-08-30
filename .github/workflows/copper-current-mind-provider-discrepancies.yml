@@ -1,0 +1,46 @@
+name: Copper Current Mind Provider Discrepancy Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/current_mind_provider_discrepancy_audit.py"
+      - "app/main.py"
+      - ".github/workflows/copper-current-mind-provider-discrepancies.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for exact Render commit
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..75}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then
+              D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")')
+              if [ "$D" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Triangulate discrepant candles
+        run: |
+          set -euo pipefail
+          OK=0
+          for i in {1..8}; do
+            if curl -fsS --max-time 600 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-provider-discrepancies" -o provider-discrepancies.json; then OK=1; break; fi
+            sleep 30
+          done
+          test "$OK" -eq 1
+          python -m json.tool provider-discrepancies.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-current-mind-provider-discrepancies
+          path: provider-discrepancies.json
