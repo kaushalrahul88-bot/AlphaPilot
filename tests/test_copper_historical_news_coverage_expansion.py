@@ -27,3 +27,12 @@ class HistoricalNewsCoverageExpansionTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+    def test_codelco_remote_operations_poc_is_not_market_news(self):
+        d=audit_historical_news_records([row("NTT DOCOMO BUSINESS and Chile State-owned Copper Company CODELCO Launch a Study and Proof of Concept Aimed at Improving the Efficiency of Remote Copper Mine Operations")])
+        self.assertEqual(d["accepted_record_count"],0)
+        self.assertEqual(d["classification_counts"].get("REJECT"),1)
+
+    def test_named_asset_mine_mention_alone_is_not_supply_channel(self):
+        d=audit_historical_news_records([row("Escondida mine launches worker training initiative")])
+        self.assertEqual(d["accepted_record_count"],0)

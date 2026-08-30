@@ -1,6 +1,14 @@
 name: Copper Current Mind Frozen News Comparison
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/current_mind_copper_replay.py"
+      - "app/copper_news_intelligence.py"
+      - "app/copper_historical_news_integrity_audit.py"
+      - "scripts/reaudit_frozen_copper_news.py"
+      - ".github/workflows/copper-current-mind-frozen-news-comparison.yml"
 permissions:
   contents: read
   actions: read
