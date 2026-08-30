@@ -38,15 +38,34 @@ def visible_at(records,click_timestamp):
             out.append(record)
     return sorted(out,key=lambda x:(x["series"],x["observed_at"],x["available_at"]))
 
+
+def latest_known_as_of(records,click_timestamp,max_age_seconds=None):
+    """Return the latest genuinely available record per series at a simulated click."""
+    click=parse_ist_timestamp(click_timestamp)
+    latest={}
+    for record in visible_at(records,click_timestamp):
+        available=parse_ist_timestamp(record["available_at"])
+        age=max(0.0,(click-available).total_seconds())
+        if max_age_seconds is not None and age>max_age_seconds:
+            continue
+        current=latest.get(record["series"])
+        if current is None or parse_ist_timestamp(current["available_at"])<=available:
+            enriched=dict(record)
+            enriched["age_seconds"]=round(age,3)
+            latest[record["series"]]=enriched
+    return latest
+
 def audit_context_coverage(records,click_timestamps):
     rows=[]
     for ts in click_timestamps:
-        visible=visible_at(records,ts)
-        series={x["series"] for x in visible}
+        latest=latest_known_as_of(records,ts)
+        visible=list(latest.values())
+        series=set(latest)
         rows.append({"click_timestamp":ts,"visible_series":sorted(series),
                      "missing_series":sorted(set(SERIES_POLICY)-series)})
     return {"mode":"COPPER_POINT_IN_TIME_CONTEXT_COVERAGE_V1",
             "lookahead_guard":"observed_at <= click AND available_at <= click",
+            "selection_semantics":"latest genuinely published/available observation per series as of the click; age is retained",
             "series_policy":SERIES_POLICY,"clicks":rows}
 
 def acquisition_manifest():
