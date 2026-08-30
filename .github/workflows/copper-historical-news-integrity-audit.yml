@@ -1,13 +1,6 @@
 name: Copper Historical News Integrity Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_historical_news.py"
-      - "app/copper_historical_news_integrity_audit.py"
-      - "scripts/audit_copper_historical_news.py"
-      - ".github/workflows/copper-historical-news-integrity-audit.yml"
 permissions:
   contents: read
 jobs:

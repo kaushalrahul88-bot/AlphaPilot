@@ -1,0 +1,67 @@
+name: Copper Frozen Historical News Re-Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/copper_historical_news_integrity_audit.py"
+      - "scripts/reaudit_frozen_copper_news.py"
+      - ".github/workflows/copper-frozen-historical-news-reaudit.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_ARTIFACT_ID: "9731584724"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download immutable successful source artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" > source-news.zip
+          unzip -q source-news.zip -d frozen-source
+          test -s frozen-source/news-audit.json
+      - name: Re-audit frozen source with current relevance gate
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m scripts.reaudit_frozen_copper_news \
+            --source frozen-source/news-audit.json \
+            --output news-audit-v2.json
+      - name: Validate deterministic frozen audit
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open("news-audit-v2.json"))
+          assert d["raw_record_count"] == 54
+          assert d["source_metadata"]["source_dataset_sha256"] == "f37aab4971f3cccd74a8ca6feb7cc391e4a5d8aa8e7038f97b9567dac010bc3a"
+          assert d["source_metadata"]["network_refetch"] is False
+          assert d["checks"]["no_rejected_in_accepted"]
+          assert d["checks"]["duplicates_do_not_vote"]
+          assert d["checks"]["uncertain_do_not_vote"]
+          print(json.dumps({
+            "classification_counts":d["classification_counts"],
+            "accepted_record_count":d["accepted_record_count"],
+            "accepted_dataset_sha256":d["accepted_dataset_sha256"],
+            "source_metadata":d["source_metadata"],
+          },indent=2))
+          print("\nACCEPTED")
+          for x in d.get("accepted",[]): print(x["available_at"],"|",x["source"],"|",x["headline"])
+          print("\nUNCERTAIN")
+          for x in d.get("uncertain",[]): print(x["available_at"],"|",x["source"],"|",x["headline"],"|",x["reasons"])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-frozen-historical-news-reaudit-v2
+          path: news-audit-v2.json
