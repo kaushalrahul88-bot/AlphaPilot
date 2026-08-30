@@ -213,7 +213,11 @@ def evaluate_current_mind_replay(candles):
     macro_records=china_copper_macro_records()
     for click in sorted(click_set):
         index=index_by_ts.get(click)
-        if index is None or index<50:continue
+        if index is None:
+            raise RuntimeError(f"Scheduled click timestamp missing from replay rows: {click.isoformat()}")
+        # The sampler's per-session 24-bar warm-up is the frozen eligibility rule.
+        # Do not silently impose a second global-history gate here: it removed
+        # three valid first-session clicks and broke the 20-click/session contract.
         features=_build_copper_snapshot_clean(rows,index,information_quality=info)
         mem=_memory_evidence(experiences,features,click);macro=_macro_evidence(click)
         evidence=_evidence_items(features,mem,macro)
@@ -251,6 +255,7 @@ def evaluate_current_mind_replay(candles):
       "complete_sessions":len(complete_days),"complete_session_dates":sorted(d.isoformat() for d in complete_days),
       "excluded_partial_sessions":sorted(q["date"] for q in quality.values() if not q.get("primary_score_eligible")),
       "scheduled_clicks":len(clicks),"evaluated_clicks":len(decisions),
+      "click_coverage_exact":len(clicks)==len(decisions)==CLICKS_PER_COMPLETE_SESSION*len(complete_days),
       "actions":dict(Counter(x["decision"].get("action") for x in decisions)),
       "trades":len(trades),"resolved_trades":len(resolved),
       "targets":sum((x.get("outcome") or {}).get("result")=="TARGET" for x in trades),

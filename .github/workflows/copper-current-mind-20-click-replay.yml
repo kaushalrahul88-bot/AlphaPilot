@@ -72,7 +72,10 @@ jobs:
           d=json.load(open("result.json"))
           assert d["mode"]=="COPPER_CURRENT_MIND_20_CLICK_REPLAY_V1"
           assert d["current_mind_frozen"] is True
-          print(json.dumps({k:d.get(k) for k in ("reference_contract","candles","complete_sessions","excluded_partial_sessions","scheduled_clicks","evaluated_clicks","actions","trades","resolved_trades","targets","stops","no_entry","session_end","expectancy_r_resolved","missed_large_moves_after_abstention","data_context")},indent=2))
+          assert d["scheduled_clicks"] == 360, d["scheduled_clicks"]
+          assert d["evaluated_clicks"] == 360, d["evaluated_clicks"]
+          assert d["click_coverage_exact"] is True
+          print(json.dumps({k:d.get(k) for k in ("reference_contract","candles","complete_sessions","excluded_partial_sessions","scheduled_clicks","evaluated_clicks","click_coverage_exact","actions","trades","resolved_trades","targets","stops","no_entry","session_end","expectancy_r_resolved","missed_large_moves_after_abstention","data_context")},indent=2))
           PY
       - uses: actions/upload-artifact@v4
         if: always()
