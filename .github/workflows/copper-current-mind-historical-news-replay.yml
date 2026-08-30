@@ -1,13 +1,6 @@
 name: Copper Current Mind Historical News Replay
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_historical_news.py"
-      - "app/current_mind_copper_replay.py"
-      - "app/main.py"
-      - ".github/workflows/copper-current-mind-historical-news-replay.yml"
 permissions:
   contents: read
 jobs:

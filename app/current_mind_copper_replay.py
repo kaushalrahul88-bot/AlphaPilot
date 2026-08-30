@@ -17,6 +17,7 @@ from .copper_experience_memory import (
 from .copper_point_in_time_context import visible_at
 from .china_copper_macro_context import china_copper_macro_records
 from .copper_historical_news import fetch_copper_historical_news
+from .copper_historical_news_integrity_audit import audit_historical_news_records
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_integrated_replay import current_mind_click
 from .current_mind_replay_scorecard import replay_scorecard
@@ -305,8 +306,16 @@ async def run_current_mind_news_replay_from_store(store):
     target=next((s for s in segs if str(s.get("trading_symbol") or "").upper()==REFERENCE_CONTRACT),None)
     if not target:raise RuntimeError(f"Stored contract {REFERENCE_CONTRACT} not found")
     news=await fetch_copper_historical_news(PRIMARY_START,PRIMARY_END)
-    if not news["records"]:raise RuntimeError("Historical Copper news fetch returned no relevant timestamped records")
-    report=evaluate_current_mind_replay(target.get("candles") or [],news_records=news["records"],news_metadata={k:v for k,v in news.items() if k!="records"})
+    if not news["records"]:raise RuntimeError("Historical Copper news fetch returned no timestamped records")
+    integrity=audit_historical_news_records(news["records"])
+    accepted=integrity.get("accepted_records") or []
+    if not accepted:raise RuntimeError("Historical Copper news integrity audit accepted zero records")
+    report=evaluate_current_mind_replay(target.get("candles") or [],news_records=accepted,news_metadata={
+      **{k:v for k,v in news.items() if k!="records"},
+      "integrity_audit_mode":integrity.get("mode"),"accepted_record_count":len(accepted),
+      "accepted_dataset_sha256":integrity.get("accepted_dataset_sha256"),
+      "classification_counts":integrity.get("classification_counts"),
+    })
     report["mode"]="COPPER_CURRENT_MIND_20_CLICK_REPLAY_WITH_HISTORICAL_NEWS_V1"
     report["comparison_variant"]="FROZEN_CURRENT_MIND_PLUS_TIMESTAMPED_NEWS"
     report["contract_metadata"]={"trading_symbol":target.get("trading_symbol"),"expiry_date":target.get("expiry_date")}

@@ -33,6 +33,7 @@ from .copper_event_path_backtest import run_event_path_from_store
 from .copper_experience_memory import run_experience_memory_from_store
 from .copper_memory_evidence_audit import run_memory_evidence_from_store
 from .current_mind_copper_replay import run_current_mind_replay_from_store, run_current_mind_news_replay_from_store
+from .copper_historical_news_integrity_audit import run_historical_news_integrity_audit
 from .current_mind_data_integrity_audit import run_copper_replay_data_audit_from_store
 from .current_mind_provider_parity_audit import run_provider_parity_audit
 from .current_mind_provider_discrepancy_audit import run_provider_discrepancy_triangulation
@@ -228,6 +229,12 @@ async def copper_current_mind_20_click_replay(x_collector_token:str|None=Header(
     store=_collector_store(x_collector_token)
     try:return await run_current_mind_replay_from_store(store)
     except Exception as exc:_safe_upstream_error("Copper Current Mind 20-click replay",exc)
+
+@app.get("/v1/internal/copper/historical-news-integrity-audit")
+async def copper_historical_news_integrity_audit(x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token)
+    try:return await run_historical_news_integrity_audit()
+    except Exception as exc:_safe_upstream_error("Copper historical news integrity audit",exc)
 
 @app.post("/v1/internal/copper/current-mind-news-replay/start")
 async def copper_current_mind_news_replay_start(x_collector_token:str|None=Header(default=None)):
