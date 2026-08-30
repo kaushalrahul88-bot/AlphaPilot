@@ -28,13 +28,25 @@ def _relevant(title):
     t=str(title or "").lower()
     return "copper" in t or ("lme" in t and "metal" in t) or ("comex" in t and "metal" in t)
 
-async def _fetch_day(client, start, end):
+async def _fetch_day(client, start, end, *, attempts=5):
     params={"query":QUERY,"mode":"artlist","format":"json","maxrecords":MAX_PER_DAY,
             "sort":"DateAsc","startdatetime":start.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S"),
             "enddatetime":end.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S")}
-    r=await client.get(GDELT_DOC,params=params);r.raise_for_status()
-    data=r.json()
-    return data.get("articles") or []
+    last=None
+    for attempt in range(1,attempts+1):
+        try:
+            r=await client.get(GDELT_DOC,params=params)
+            r.raise_for_status()
+            data=r.json()
+            return data.get("articles") or []
+        except (httpx.TimeoutException,httpx.NetworkError,httpx.HTTPStatusError,ValueError) as exc:
+            last=exc
+            if attempt>=attempts:break
+            await asyncio.sleep(min(2**(attempt-1),12))
+    raise RuntimeError(
+        f"GDELT historical fetch failed for {start.isoformat()}..{end.isoformat()} "
+        f"after {attempts} attempts: {type(last).__name__}: {last}"
+    ) from last
 
 async def fetch_copper_historical_news(start, end):
     """Fetch genuine timestamped historical news. GDELT seendate is used as conservative available_at."""
@@ -42,12 +54,16 @@ async def fetch_copper_historical_news(start, end):
     while cur<end:
         nxt=min(end,cur+timedelta(days=1));days.append((cur,nxt));cur=nxt
     headers={"User-Agent":"AlphaPilot/1.0 historical-news-research"}
-    async with httpx.AsyncClient(timeout=45,follow_redirects=True,headers=headers) as client:
+    timeout=httpx.Timeout(connect=30.0,read=60.0,write=30.0,pool=30.0)
+    limits=httpx.Limits(max_connections=2,max_keepalive_connections=1)
+    async with httpx.AsyncClient(timeout=timeout,limits=limits,follow_redirects=True,headers=headers) as client:
         raw=[]
-        for i in range(0,len(days),3):
-            batch=await asyncio.gather(*(_fetch_day(client,a,b) for a,b in days[i:i+3]))
-            for rows in batch:raw.extend(rows)
-            if i+3<len(days):await asyncio.sleep(1.0)
+        # GDELT can intermittently refuse/timeout concurrent TLS connections.
+        # Historical integrity matters more than speed: fetch one UTC-day slice
+        # at a time and retry that exact slice so we never silently create gaps.
+        for i,(a,b) in enumerate(days):
+            raw.extend(await _fetch_day(client,a,b))
+            if i+1<len(days):await asyncio.sleep(0.75)
     dedup={}
     for a in raw:
         title=str(a.get("title") or "").strip();url=str(a.get("url") or "").strip();seen=_seen(a.get("seendate"))
