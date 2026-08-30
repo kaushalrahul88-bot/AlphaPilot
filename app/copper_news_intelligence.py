@@ -9,7 +9,8 @@ BULLISH_DEMAND=("stimulus","demand rises","demand growth","imports rise","manufa
 BEARISH_DEMAND=("demand falls","imports fall","manufacturing contracts","pmi below 50","recession")
 PRICE_RECAP=("price surge","prices surge","price rises","prices rise","price rally","prices rally","record-high copper prices","record high copper prices","copper gains","copper jumps","copper climbs","copper falls","copper drops","copper slides")
 NON_COMMODITY=("basketball","scores ","mercury beat","wire","cable","theft","stolen","stealing","swan boats","antenna","coil","manure","contamination","ofs","share price","shares ","ipo","private placement")
-MAJOR_SUPPLY=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata","freeport","antofagasta","glencore","bhp","rio tinto","southern copper","congo","drc")
+COPPER_ASSETS=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata")
+MAJOR_SUPPLY=COPPER_ASSETS+("freeport","antofagasta","glencore","bhp","rio tinto","southern copper","congo","drc")
 MECHANISM_TERMS={
     "SUPPLY":("supply","mine","smelter","refinery","production","output","concentrate","inventory","inventories","warehouse","stocks","export ban","ban","strike","shutdown","closure","disruption"),
     "DEMAND":("demand","imports","manufacturing","pmi","stimulus","construction","grid","electric vehicle","ev "),
@@ -40,8 +41,9 @@ def assess_copper_news(record:dict)->dict:
     if not headline:
         result["reasons"].append("MISSING_HEADLINE")
         return result
-    if "copper" not in low:
-        result["reasons"].append("NO_COPPER_REFERENCE")
+    named_copper_asset=_contains_any(low,COPPER_ASSETS)
+    if "copper" not in low and not named_copper_asset:
+        result["reasons"].append("NO_COPPER_OR_NAMED_COPPER_ASSET_REFERENCE")
         return result
     if _contains_any(low,NON_COMMODITY):
         result.update(entity_class="NON_COMMODITY_OR_EQUITY_CONTEXT",commodity_relevance="LOW",materiality="LOW",novelty="IRRELEVANT",confidence=0.99,disposition="BLOCK")
@@ -58,7 +60,7 @@ def assess_copper_news(record:dict)->dict:
             mechanism=name
             break
     result["transmission_mechanism"]=mechanism
-    result["entity_class"]="COPPER_COMMODITY"
+    result["entity_class"]="NAMED_COPPER_ASSET" if named_copper_asset and "copper" not in low else "COPPER_COMMODITY"
     result["commodity_relevance"]="HIGH" if mechanism!="NONE" else "MEDIUM"
 
     effect="UNKNOWN"

@@ -13,7 +13,8 @@ STRONG_MARKET_TERMS=(
 )
 GLOBAL_MACRO_TERMS=("china","chinese","pmi","manufacturing","stimulus","tariff","tariffs","trade war","dollar","fed","federal reserve","rates")
 SUPPLY_EVENT_TERMS=("strike","disruption","shutdown","closure","ban","bans","export ban","accident","flood","earthquake","fire")
-MAJOR_SUPPLY_TERMS=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata","freeport","antofagasta","glencore","bhp","rio tinto","southern copper")
+COPPER_ASSET_TERMS=("codelco","escondida","grasberg","collahuasi","las bambas","kamoa","tenke","chuquicamata")
+MAJOR_SUPPLY_TERMS=COPPER_ASSET_TERMS+("freeport","antofagasta","glencore","bhp","rio tinto","southern copper")
 EQUITY_OR_PROJECT_TERMS=("shares","share price","stock","stocks","ofs","ipo","private placement","drilling","drill","exploration","project","earnings","profit","profits","valuation","returns")
 PRICE_RECAP_TERMS=("price surge","prices surge","price rises","prices rise","price rally","prices rally","record-high copper prices","record high copper prices","copper gains","copper jumps","copper climbs","copper falls","copper drops","copper slides")
 PROMOTIONAL_DEMAND_TERMS=("targets rising","targeting rising","sees rising","expects rising","bets on rising","aims to capitalize","positions for rising")
@@ -42,8 +43,9 @@ def _audit_one(record):
     if any(x in low for x in HARD_IRRELEVANT) or any(x in low for x in NON_PRICE_COPPER_TERMS):
         return "REJECT",["NON_MARKET_COPPER_MEANING"]
     explicit="copper" in low
-    if not explicit and not any(x in low for x in ("lme copper","comex copper","mcx copper")):
-        return "REJECT",["NO_EXPLICIT_COPPER_OR_COPPER_EXCHANGE_REFERENCE"]
+    named_copper_asset=any(x in low for x in COPPER_ASSET_TERMS)
+    if not explicit and not named_copper_asset and not any(x in low for x in ("lme copper","comex copper","mcx copper")):
+        return "REJECT",["NO_EXPLICIT_COPPER_OR_NAMED_COPPER_ASSET_REFERENCE"]
     strong=[x for x in STRONG_MARKET_TERMS if x in low]
     macro=[x for x in GLOBAL_MACRO_TERMS if x in low]
     supply_event=[x for x in SUPPLY_EVENT_TERMS if x in low]
@@ -69,6 +71,8 @@ def _audit_one(record):
         channels.extend(macro)
     if supply_event and major_supply:
         channels.extend(supply_event);channels.extend(major_supply)
+    if named_copper_asset and any(x in low for x in ("production","output","mine","concentrate","shutdown","closure","strike","disruption")):
+        channels.append("NAMED_COPPER_ASSET_SUPPLY")
     if not channels:
         reasons.append("NO_CLEAR_MARKET_TRANSMISSION_CHANNEL")
     if any(x in low for x in RETROSPECTIVE):
