@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/current_mind_provider_parity_audit.py"
+      - "app/commodity_backtest.py"
       - "app/main.py"
       - ".github/workflows/copper-current-mind-provider-parity.yml"
 permissions:
