@@ -76,8 +76,14 @@ async def _fetch_chunked(provider, contract, interval_minutes, start, end):
     rows = []
     cursor = start
     chunk_days = 7 if interval_minutes <= 15 else 30
-    while cursor < end:
-        chunk_end = min(end, cursor + timedelta(days=chunk_days))
+    bar_step = timedelta(minutes=max(1, int(interval_minutes)))
+    # Keep chunk boundaries on the candle grid and make the boundary candle the
+    # first bar of the next request, not the end bar of the previous request.
+    # Groww can return an omitted/revised candle when a 5m bar sits exactly on a
+    # long-range request end boundary (observed at 7-day boundaries).
+    while cursor <= end:
+        natural_end = cursor + timedelta(days=chunk_days) - bar_step
+        chunk_end = min(end, natural_end)
         chunk = await _fetch_range(provider, contract, interval_minutes, cursor, chunk_end)
         for row in chunk:
             if not isinstance(row, (list, tuple)) or len(row) < 5:
@@ -88,7 +94,9 @@ async def _fetch_chunked(provider, contract, interval_minutes, start, end):
                 continue
             if cursor <= stamp <= chunk_end:
                 rows.append(list(row))
-        cursor = chunk_end + timedelta(seconds=1)
+        if chunk_end >= end:
+            break
+        cursor = chunk_end + bar_step
     dedup = {}
     for row in rows:
         if isinstance(row, (list, tuple)) and len(row) >= 5:
