@@ -13,6 +13,7 @@ on:
       - "app/market_news_participation.py"
       - "app/market_news_volatility_context.py"
       - "app/market_news_assimilation.py"
+      - "app/market_news_path_materiality.py"
       - "app/commodity_time.py"
       - "app/mcx_calendar.py"
 
@@ -74,10 +75,11 @@ jobs:
           assert sum(report.get("coverage_counts",{}).values())==report["events"], report
           assert sum(report.get("observed_path_counts",{}).values())==report["classified"], report
           assert sum(report.get("assimilation_counts",{}).values())==report["classified"], report
+          assert sum(report.get("path_materiality_counts",{}).values())==report["classified"], report
           assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
           outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
           assert len(outside)==1, report
-          assert all("reaction" not in r and "observed_path" not in r and "participation" not in r and "volatility_context" not in r and "assimilation" not in r for r in outside), outside
+          assert all("reaction" not in r and "observed_path" not in r and "participation" not in r and "volatility_context" not in r and "assimilation" not in r and "path_materiality" not in r for r in outside), outside
           classifiable=[r for r in report["records"] if r.get("coverage_status")=="CLASSIFIABLE"]
           assert classifiable and all((r.get("observed_path") or {}).get("observation_status")=="OBSERVED" for r in classifiable), classifiable
           assert all((r.get("volatility_context") or {}).get("mode")=="VOLATILITY_CONTEXT_SHADOW_V1" for r in classifiable), classifiable
@@ -85,6 +87,9 @@ jobs:
           assert all((r.get("assimilation") or {}).get("mode")=="MARKET_NEWS_ASSIMILATION_SHADOW_V1" for r in classifiable), classifiable
           assert all((r.get("assimilation") or {}).get("shadow_only") is True for r in classifiable), classifiable
           assert all((r.get("assimilation") or {}).get("classification_unchanged") is True for r in classifiable), classifiable
+          assert all((r.get("path_materiality") or {}).get("mode")=="MARKET_NEWS_PATH_MATERIALITY_SHADOW_V1" for r in classifiable), classifiable
+          assert all((r.get("path_materiality") or {}).get("shadow_only") is True for r in classifiable), classifiable
+          assert all((r.get("path_materiality") or {}).get("classification_unchanged") is True for r in classifiable), classifiable
           weekend=[r for r in classifiable if (r.get("event") or {}).get("headline")=="Congo Bans Copper and Cobalt Concentrate Exports"]
           assert len(weekend)==1, weekend
           weekend_window=weekend[0].get("window") or {}
@@ -101,6 +106,7 @@ jobs:
               "reaction_counts":report["reaction_counts"],
               "participation_counts":report["participation_counts"],
               "assimilation_counts":report["assimilation_counts"],
+              "path_materiality_counts":report["path_materiality_counts"],
           }
           print("AUDIT_SUMMARY")
           print(json.dumps(summary,indent=2,sort_keys=True))
@@ -113,6 +119,7 @@ jobs:
               participation=row.get("participation") or {}
               volatility=row.get("volatility_context") or {}
               assimilation=row.get("assimilation") or {}
+              path_materiality=row.get("path_materiality") or {}
               segments=volatility.get("segments") or {}
               print(json.dumps({
                   "event":index,
@@ -135,6 +142,10 @@ jobs:
                   "assimilation_state":assimilation.get("assimilation_state"),
                   "assimilation_motion_band":assimilation.get("motion_band"),
                   "assimilation_normalized_abs_move":assimilation.get("assimilation_normalized_abs_move"),
+                  "path_materiality_state":path_materiality.get("materiality_state"),
+                  "directional_segments":path_materiality.get("directional_segments"),
+                  "directional_at_or_above_baseline":path_materiality.get("directional_at_or_above_baseline"),
+                  "directional_sub_baseline":path_materiality.get("directional_sub_baseline"),
                   "volatility_shadow":{name:{
                       "status":value.get("status"),
                       "median_abs_return":value.get("median_abs_return"),
@@ -155,10 +166,11 @@ jobs:
               "network_refetch":False,
               "volatility_context_mode":"SHADOW_ONLY",
               "assimilation_context_mode":"SHADOW_ONLY",
+              "path_materiality_mode":"SHADOW_ONLY",
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "audit_as_of":os.environ["AUDIT_AS_OF"],
-              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; prior same-clock volatility and assimilation summaries are diagnostic only; trade outcomes and P&L are not audit inputs.",
+              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; prior same-clock volatility, assimilation and fixed-floor path-materiality summaries are diagnostic only; trade outcomes and P&L are not audit inputs.",
           }
           Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
