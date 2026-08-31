@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "app/main.py"
       - "app/current_mind_copper_replay.py"
+      - "app/copper_news_persistence.py"
+      - "app/commodity_time.py"
       - "app/copper_news_intelligence.py"
       - "app/copper_historical_news_integrity_audit.py"
       - "scripts/reaudit_frozen_copper_news.py"
@@ -57,6 +60,14 @@ jobs:
           assert m.get("independent_unique_count")==14, m
           assert m.get("point_in_time") is True, m
           assert m.get("network_refetch") is False, m
+          assert m.get("date_only_session_timezone")=="Asia/Kolkata", m
+          records=p.get("records") or []
+          assert len(records)==m.get("transmitted_news_record_count"), (len(records),m)
+          dispositions=[(r.get("news_intelligence") or {}).get("disposition") for r in records]
+          assert "ALLOW" in dispositions, dispositions
+          assert all(x in {"ALLOW","CONTEXT_ONLY"} for x in dispositions), dispositions
+          assert dispositions.count("ALLOW")==m.get("transmitted_disposition_counts",{}).get("ALLOW"), m
+          assert dispositions.count("CONTEXT_ONLY")==m.get("transmitted_disposition_counts",{}).get("CONTEXT_ONLY"), m
           print("PRE-REPLAY PAYLOAD VERIFIED:",json.dumps(m,indent=2))
           PY
       - name: Start deterministic expanded-news replay
