@@ -8,7 +8,9 @@ on:
       - "app/copper_news_intelligence.py"
       - "app/copper_historical_news_integrity_audit.py"
       - "scripts/reaudit_frozen_copper_news.py"
-      - ".github/workflows/copper-current-mind-frozen-news-comparison.yml"
+      - "scripts/build_expanded_68_news_payload.py"
+      - "research/copper_expanded_raw_historical_news_snapshot_v1.json"
+      - ".github/workflows/copper-current-mind-expanded-68-news.yml"
 permissions:
   contents: read
   actions: read
@@ -41,35 +43,25 @@ jobs:
             if curl -fsS --max-time 20 "$API_BASE/health" -o h.json; then D=$(python -c 'import json;print(json.load(open("h.json")).get("deployment_commit") or "")'); [ "$D" = "$GITHUB_SHA" ] && exit 0; fi
             sleep 10
           done; exit 1
-      - name: Build expanded 68-record point-in-time payload
+      - name: Build and verify expanded 68-record point-in-time payload
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
+          python -m scripts.build_expanded_68_news_payload --source frozen/news-audit.json --expanded research/copper_expanded_raw_historical_news_snapshot_v1.json --output expanded-news-payload.json
           python - <<'PY'
           import json
-          from app.copper_news_intelligence import apply_news_intelligence
-          d=json.load(open("news-audit-v2.json"))
-          records=[{
-            "series":"COPPER_NEWS","observed_at":x["available_at"],"available_at":x["available_at"],
-            "source":x.get("source") or "GDELT",
-            "value":{"headline":x["headline"],"sentiment":x.get("raw_sentiment"),"url":x.get("url")},
-            "quality":"FROZEN_INTEGRITY_AUDIT_ACCEPTED",
-          } for x in d.get("accepted",[])]
-          intel=apply_news_intelligence(records); allowed=intel["allowed_records"]
-          assert len(allowed)==1 and "congo" in allowed[0]["value"]["headline"].lower()
-          payload={"records":allowed,"metadata":{
-            "source_dataset_sha256":(d.get("source_metadata") or {}).get("source_dataset_sha256"),
-            "accepted_dataset_sha256":d.get("accepted_dataset_sha256"),
-            "integrity_classification_counts":d.get("classification_counts"),
-            "news_intelligence_counts":intel.get("counts"),
-            "news_intelligence_policy":intel.get("policy"),
-            "allowed_headlines":[x["value"]["headline"] for x in allowed],
-          }}
-          json.dump(payload,open("frozen-news-payload.json","w"),indent=2)
+          p=json.load(open("expanded-news-payload.json"))
+          m=p.get("metadata") or {}
+          assert m.get("declared_raw_input_count")==68, m
+          assert m.get("original_frozen_count")==54, m
+          assert m.get("independent_unique_count")==14, m
+          assert m.get("point_in_time") is True, m
+          assert m.get("network_refetch") is False, m
+          print("PRE-REPLAY PAYLOAD VERIFIED:",json.dumps(m,indent=2))
           PY
-      - name: Start deterministic frozen-news replay
+      - name: Start deterministic expanded-news replay
         run: |
-          curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" -H "Content-Type: application/json" --data-binary @frozen-news-payload.json "$API_BASE/v1/internal/copper/current-mind-news-replay/start"
+          curl -fsS --max-time 30 -X POST -H "X-Collector-Token: $COLLECTOR_TOKEN" -H "Content-Type: application/json" --data-binary @expanded-news-payload.json "$API_BASE/v1/internal/copper/current-mind-news-replay/start"
       - name: Wait and capture result
         run: |
           set -euo pipefail
@@ -97,4 +89,4 @@ jobs:
           path: |
             result.json
             news-audit-v2.json
-            frozen-news-payload.json
+            expanded-news-payload.json
