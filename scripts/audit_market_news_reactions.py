@@ -7,6 +7,7 @@ from app.market_news_reaction_engine import assess_market_news_reaction
 from app.market_news_observed_path import assess_observed_market_path
 from app.market_news_participation import assess_news_participation
 from app.commodity_time import parse_ist_timestamp
+from app.mcx_calendar import mcx_metal_reaction_anchor
 
 
 def _event(record):
@@ -47,8 +48,11 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
             coverage_counts["OUTSIDE_CANDLE_COVERAGE"]+=1
             rows.append({"event":event,"status":"OUTSIDE_CANDLE_COVERAGE","coverage_status":"OUTSIDE_CANDLE_COVERAGE",
                          "market_coverage":coverage});continue
-        try:window=build_reaction_window(event,candles,as_of=as_of)
-        except (TypeError,ValueError) as exc:
+        try:
+            anchor_ts=mcx_metal_reaction_anchor(event_ts) if event_ts is not None else None
+            window=build_reaction_window(event,candles,as_of=as_of,
+                                         reaction_anchor=anchor_ts.isoformat() if anchor_ts is not None else None)
+        except (TypeError,ValueError,RuntimeError) as exc:
             coverage_counts["INVALID_EVENT_TIMESTAMP"]+=1
             rows.append({"event":event,"status":"INVALID_EVENT_TIMESTAMP","coverage_status":"INVALID_EVENT_TIMESTAMP",
                          "error":str(exc)});continue
@@ -76,6 +80,8 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "News and candles must be frozen point-in-time inputs.",
                           "Observed market path is separated from directional news-hypothesis confirmation.",
                           "Unknown news stance cannot erase an otherwise observable market price path.",
+                          "In-session news keeps its true event timestamp; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals session open.",
+                          "Pre-event price remains strictly before the news timestamp, including for closed-market events.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
                           "Market coverage itself is also clipped to the explicit as_of cutoff.",

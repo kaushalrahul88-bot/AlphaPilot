@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -79,19 +79,46 @@ def mcx_metal_day_schedule(day: date) -> dict:
     }
 
 
-def mcx_metal_session_status(now: datetime | None = None) -> dict:
-    now = now or datetime.now(IST)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=IST)
-    now = now.astimezone(IST)
-    schedule = mcx_metal_day_schedule(now.date())
-    is_open = False
+def _as_ist(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=IST)
+    return value.astimezone(IST)
+
+
+def _window_datetimes(day: date) -> list[tuple[datetime,datetime]]:
+    schedule = mcx_metal_day_schedule(day)
+    windows=[]
     for window in schedule["session_windows"]:
-        start = time.fromisoformat(window["start"])
-        end = time.fromisoformat(window["end"])
-        if start <= now.time() <= end:
-            is_open = True
-            break
+        start=datetime.combine(day,time.fromisoformat(window["start"]),tzinfo=IST)
+        end=datetime.combine(day,time.fromisoformat(window["end"]),tzinfo=IST)
+        windows.append((start,end))
+    return windows
+
+
+def mcx_metal_reaction_anchor(event_time: datetime, *, max_search_days: int = 14) -> datetime:
+    """Return the first MCX metal-market time at or after a news event.
+
+    In-session events retain their true event timestamp. Events released while MCX
+    metals are closed anchor to the next scheduled session open instead of allowing
+    a weekend/holiday gap to masquerade as a +5m reaction.
+    """
+    if max_search_days < 0:
+        raise ValueError("max_search_days must be non-negative")
+    event_time=_as_ist(event_time)
+    for day_offset in range(max_search_days + 1):
+        day=event_time.date()+timedelta(days=day_offset)
+        for start,end in _window_datetimes(day):
+            if day_offset == 0 and start <= event_time <= end:
+                return event_time
+            if start >= event_time:
+                return start
+    raise RuntimeError("no MCX metal session found within max_search_days")
+
+
+def mcx_metal_session_status(now: datetime | None = None) -> dict:
+    now = _as_ist(now or datetime.now(IST))
+    schedule = mcx_metal_day_schedule(now.date())
+    is_open = any(start <= now <= end for start,end in _window_datetimes(now.date()))
     return {
         "status": "OPEN" if is_open else "CLOSED",
         "is_open": is_open,

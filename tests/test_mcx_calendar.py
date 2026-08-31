@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from app.mcx_calendar import mcx_metal_day_schedule, mcx_metal_session_status
+from app.mcx_calendar import mcx_metal_day_schedule, mcx_metal_reaction_anchor, mcx_metal_session_status
 
 IST=ZoneInfo("Asia/Kolkata")
 
@@ -38,6 +38,22 @@ class McxCalendarTests(unittest.TestCase):
         self.assertFalse(closed["is_open"])
         open_day=mcx_metal_session_status(datetime(2026,8,28,18,0,tzinfo=IST))
         self.assertTrue(open_day["is_open"])
+
+    def test_in_session_reaction_anchor_preserves_event_time(self):
+        event=datetime(2026,8,7,14,59,tzinfo=IST)
+        self.assertEqual(mcx_metal_reaction_anchor(event),event)
+
+    def test_weekend_reaction_anchor_moves_to_monday_open(self):
+        event=datetime(2026,8,8,9,45,tzinfo=IST)
+        self.assertEqual(mcx_metal_reaction_anchor(event),datetime(2026,8,10,9,0,tzinfo=IST))
+
+    def test_partial_holiday_reaction_anchor_moves_to_evening_open(self):
+        event=datetime(2026,9,14,10,0,tzinfo=IST)
+        self.assertEqual(mcx_metal_reaction_anchor(event),datetime(2026,9,14,17,0,tzinfo=IST))
+
+    def test_full_holiday_reaction_anchor_skips_weekend(self):
+        event=datetime(2026,10,2,10,0,tzinfo=IST)
+        self.assertEqual(mcx_metal_reaction_anchor(event),datetime(2026,10,5,9,0,tzinfo=IST))
 
 
 if __name__=="__main__":
