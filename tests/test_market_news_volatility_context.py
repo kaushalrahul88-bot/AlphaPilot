@@ -38,7 +38,7 @@ class MarketNewsVolatilityContextTests(unittest.TestCase):
         self.assertTrue(result["classification_unchanged"])
         immediate=result["segments"]["immediate"]
         self.assertEqual(immediate["status"],"AVAILABLE")
-        self.assertEqual(immediate["samples"],3)
+        self.assertEqual(immediate["samples"],4)
         self.assertAlmostEqual(immediate["median_abs_return"],0.001,places=8)
         self.assertAlmostEqual(immediate["actual_abs_return"],0.002,places=8)
         self.assertAlmostEqual(immediate["normalized_abs_move"],2.0,places=8)
