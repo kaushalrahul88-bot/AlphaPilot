@@ -201,8 +201,7 @@ async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,
    if not expiry:raise RuntimeError("no expiry")
    chain=await provider.option_chain(symbol,expiry)
    await store.upsert_chain(symbol,str(expiry)[:10],now,chain)
-   chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"expiry_source":expiry_source,
-                       "ok":True,"classification":"COLLECTED"})
+   chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"expiry_source":expiry_source,"ok":True})
   except Exception as exc:
    chain_stats.append(_option_chain_result(symbol,exc))
  successes=sum(bool(x.get("ok")) for x in chain_stats)
