@@ -1,0 +1,57 @@
+name: Copper Frozen Reaction Candles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Export exact stored Copper reaction candles
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          python - <<'PY'
+          import asyncio, json, os
+          from pathlib import Path
+          from app.commodity_candle_collector import PostgresCandleStore
+          from app.copper_reaction_candle_export import export_copper_reaction_candles_from_store
+
+          store=PostgresCandleStore(os.environ["DATABASE_URL"])
+          artifact=asyncio.run(export_copper_reaction_candles_from_store(store))
+          Path("copper-frozen-reaction-candles.json").write_text(json.dumps(artifact,indent=2,sort_keys=True)+"\n")
+          print(json.dumps({k:artifact[k] for k in ("trading_symbol","interval_minutes","candle_count","first_timestamp","last_timestamp","candles_sha256","network_refetch")},indent=2,sort_keys=True))
+          PY
+      - name: Verify frozen artifact invariants
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-frozen-reaction-candles.json"))
+          assert d["trading_symbol"]=="COPPER31AUG26FUT", d
+          assert d["interval_minutes"]==5, d
+          assert d["network_refetch"] is False, d
+          assert d["candle_count"]>0, d
+          assert len(d["candles_sha256"])==64, d
+          assert d["candles"], d
+          print("FROZEN CANDLE ARTIFACT VERIFIED")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-frozen-reaction-candles
+          path: copper-frozen-reaction-candles.json
+          if-no-files-found: error
+          retention-days: 30
