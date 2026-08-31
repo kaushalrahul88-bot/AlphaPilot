@@ -1,8 +1,6 @@
-name: Scheduled Commodity Collector
+name: Manual Commodity Candle Collector
 
 on:
-  schedule:
-    - cron: "*/30 3-18 * * 1-5"
   workflow_dispatch:
 
 permissions:
