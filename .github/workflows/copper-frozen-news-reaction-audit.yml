@@ -61,15 +61,19 @@ jobs:
           assert report["outcomes_read"] is False, report
           assert report["events"]==8, report
           assert sum(report.get("coverage_counts",{}).values())==report["events"], report
+          assert sum(report.get("observed_path_counts",{}).values())==report["classified"], report
           assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
           outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
           assert outside, report
-          assert all("reaction" not in r and "participation" not in r for r in outside), outside
+          assert all("reaction" not in r and "observed_path" not in r and "participation" not in r for r in outside), outside
+          classifiable=[r for r in report["records"] if r.get("coverage_status")=="CLASSIFIABLE"]
+          assert classifiable and all((r.get("observed_path") or {}).get("observation_status")=="OBSERVED" for r in classifiable), classifiable
           summary={
               "events":report["events"],
               "classified":report["classified"],
               "market_coverage":report["market_coverage"],
               "coverage_counts":report["coverage_counts"],
+              "observed_path_counts":report["observed_path_counts"],
               "reaction_counts":report["reaction_counts"],
               "participation_counts":report["participation_counts"],
           }
@@ -78,6 +82,7 @@ jobs:
           print("EVENT_ROWS")
           for index,row in enumerate(report["records"],1):
               event=row.get("event") or {}
+              observed=row.get("observed_path") or {}
               reaction=row.get("reaction") or {}
               participation=row.get("participation") or {}
               print(json.dumps({
@@ -90,9 +95,11 @@ jobs:
                   "disposition":event.get("disposition"),
                   "status":row.get("status"),
                   "coverage_status":row.get("coverage_status"),
+                  "observed_path_state":observed.get("path_state"),
+                  "observed_directions":observed.get("directions"),
+                  "observed_moves_from_pre":observed.get("moves_from_pre"),
                   "reaction_state":reaction.get("reaction_state"),
                   "expected_price_direction":reaction.get("expected_price_direction"),
-                  "moves":reaction.get("moves"),
                   "participation_state":participation.get("participation_state"),
               },sort_keys=True))
           PY
@@ -108,7 +115,7 @@ jobs:
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "audit_as_of":os.environ["AUDIT_AS_OF"],
-              "rule":"Only the frozen news payload and frozen stored-candle artifact are read; trade outcomes and P&L are not audit inputs.",
+              "rule":"Only the frozen news payload and frozen stored-candle artifact are read; observed price path is separated from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
           }
           Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
