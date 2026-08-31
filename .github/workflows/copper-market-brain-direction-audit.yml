@@ -2,12 +2,6 @@ name: Copper Market Brain Direction Audit
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_market_brain_direction_audit.py"
-      - "app/main.py"
-      - ".github/workflows/copper-market-brain-direction-audit.yml"
 
 permissions:
   contents: read

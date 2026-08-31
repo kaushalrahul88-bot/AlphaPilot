@@ -4,12 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "10 18 * * 1-5"
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_option_snapshot_readiness.py"
-      - "app/main.py"
-      - ".github/workflows/copper-option-snapshot-readiness.yml"
 
 permissions:
   contents: read

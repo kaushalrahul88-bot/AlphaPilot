@@ -1,11 +1,6 @@
 name: Copper Context Coverage Audit
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_context_ablation.py"
-      - "app/main.py"
-      - ".github/workflows/copper-context-coverage-audit.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

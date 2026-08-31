@@ -1,11 +1,6 @@
 name: Copper Context Ablation
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_context_ablation_v2.py"
-      - "app/main.py"
-      - ".github/workflows/copper-context-ablation.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

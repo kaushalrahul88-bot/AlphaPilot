@@ -1,11 +1,6 @@
 name: Copper Context Interaction Audit
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_context_interaction_audit.py"
-      - "app/main.py"
-      - ".github/workflows/copper-context-interaction-audit.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

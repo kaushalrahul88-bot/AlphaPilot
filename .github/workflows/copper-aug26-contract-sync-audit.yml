@@ -2,15 +2,6 @@ name: Copper Aug26 Contract Sync Audit
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/mcx_calendar.py"
-      - "app/commodities.py"
-      - "app/copper_contract_sync_audit.py"
-      - "app/commodity_continuous_backtest.py"
-      - "app/main.py"
-      - ".github/workflows/copper-aug26-contract-sync-audit.yml"
 
 permissions:
   contents: read

@@ -4,12 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * 2-6"
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_fx_level_downtrend_forward_validation.py"
-      - "app/main.py"
-      - ".github/workflows/copper-fx-level-downtrend-forward-validation.yml"
 
 permissions:
   contents: read

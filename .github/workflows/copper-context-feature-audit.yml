@@ -1,11 +1,6 @@
 name: Copper Context Feature Audit
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_context_feature_audit.py"
-      - "app/main.py"
-      - ".github/workflows/copper-context-feature-audit.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
