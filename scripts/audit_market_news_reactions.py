@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse,json
 from collections import Counter
 from pathlib import Path
-from app.market_news_reaction_windows import build_reaction_window
+from app.market_news_reaction_windows import build_reaction_window, infer_volume_semantics
 from app.market_news_reaction_engine import assess_market_news_reaction
 from app.market_news_observed_path import assess_observed_market_path
 from app.market_news_participation import assess_news_participation
@@ -20,14 +20,22 @@ def _event(record):
             "materiality":ni.get("materiality"),"disposition":ni.get("disposition")}
 
 
-def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
-    timestamps=[]
+def _visible_candles(candles:list[dict],*,as_of_ts)->list[dict]:
+    visible=[]
     for candle in candles:
         raw=candle.get("timestamp") or candle.get("time") or candle.get("datetime")
         if not raw:continue
         try:ts=parse_ist_timestamp(raw)
         except (TypeError,ValueError):continue
-        if ts<=as_of_ts:timestamps.append((ts,raw))
+        if ts<=as_of_ts:visible.append(candle)
+    return visible
+
+
+def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
+    timestamps=[]
+    for candle in _visible_candles(candles,as_of_ts=as_of_ts):
+        raw=candle.get("timestamp") or candle.get("time") or candle.get("datetime")
+        timestamps.append((parse_ist_timestamp(raw),raw))
     if not timestamps:
         return {"status":"NO_MARKET_DATA","first_timestamp":None,"last_timestamp":None,"observations":0}
     timestamps.sort(key=lambda x:x[0])
@@ -38,8 +46,10 @@ def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
 def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
     rows=[];reaction_counts=Counter();observed_path_counts=Counter();participation_counts=Counter();coverage_counts=Counter()
     as_of_ts=parse_ist_timestamp(as_of)
-    coverage=_market_coverage(candles,as_of_ts=as_of_ts)
+    visible_candles=_visible_candles(candles,as_of_ts=as_of_ts)
+    coverage=_market_coverage(visible_candles,as_of_ts=as_of_ts)
     coverage_end=parse_ist_timestamp(coverage["last_timestamp"]) if coverage["last_timestamp"] else None
+    volume_semantics=infer_volume_semantics(visible_candles)
     for raw in news_payload.get("records") or []:
         event=_event(raw);event_raw=event.get("available_at") or event.get("published_at")
         try:event_ts=parse_ist_timestamp(event_raw) if event_raw else None
@@ -50,8 +60,9 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                          "market_coverage":coverage});continue
         try:
             anchor_ts=mcx_metal_reaction_anchor(event_ts) if event_ts is not None else None
-            window=build_reaction_window(event,candles,as_of=as_of,
-                                         reaction_anchor=anchor_ts.isoformat() if anchor_ts is not None else None)
+            window=build_reaction_window(event,visible_candles,as_of=as_of,
+                                         reaction_anchor=anchor_ts.isoformat() if anchor_ts is not None else None,
+                                         volume_semantics=volume_semantics["mode"])
         except (TypeError,ValueError,RuntimeError) as exc:
             coverage_counts["INVALID_EVENT_TIMESTAMP"]+=1
             rows.append({"event":event,"status":"INVALID_EVENT_TIMESTAMP","coverage_status":"INVALID_EVENT_TIMESTAMP",
@@ -72,6 +83,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                      "observed_path":observed_path,"reaction":reaction,"participation":participation})
     return {"mode":"MARKET_NEWS_REACTION_AUDIT_V1","outcome_blind":True,"outcomes_read":False,"as_of":as_of,
             "events":len(news_payload.get("records") or []),"market_coverage":coverage,
+            "volume_semantics":volume_semantics,
             "coverage_counts":dict(sorted(coverage_counts.items())),"classified":sum(reaction_counts.values()),
             "observed_path_counts":dict(sorted(observed_path_counts.items())),
             "reaction_counts":dict(sorted(reaction_counts.items())),
@@ -82,6 +94,8 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "Unknown news stance cannot erase an otherwise observable market price path.",
                           "In-session news keeps its true event timestamp; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals session open.",
                           "Pre-event price remains strictly before the news timestamp, including for closed-market events.",
+                          "Raw volume may confirm participation only after its semantics are identified; session-cumulative volume is converted to bar activity and compared with a pre-event median baseline.",
+                          "Volume-semantics inference is clipped to the same explicit as_of cutoff as the reaction audit.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
                           "Market coverage itself is also clipped to the explicit as_of cutoff.",
