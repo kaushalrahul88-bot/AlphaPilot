@@ -38,3 +38,12 @@ def build(frozen_path,expanded_path,output_path):
   "point_in_time":True,"date_only_policy":"NEXT_TRADING_SESSION_OPEN_CAUTION","network_refetch":False}}
  Path(output_path).write_text(json.dumps(out,indent=2))
  print(json.dumps(out["metadata"],indent=2))
+
+if __name__=="__main__":
+ import argparse
+ p=argparse.ArgumentParser()
+ p.add_argument("--source",required=True)
+ p.add_argument("--expanded",required=True)
+ p.add_argument("--output",required=True)
+ a=p.parse_args()
+ build(a.source,a.expanded,a.output)
