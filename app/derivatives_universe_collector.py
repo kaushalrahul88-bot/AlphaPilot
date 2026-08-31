@@ -151,25 +151,26 @@ def _records(contract,rows,collected_at):
    "open_interest":Decimal(str(row[6])) if len(row)>6 and row[6] is not None else None,"collected_at":collected_at})
  return out
 
-async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,shards:int=4,now:datetime|None=None):
+async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,shards:int=4,now:datetime|None=None,
+                                      offset:int=0,limit:int=4):
  now=now or datetime.now(IST);await store.initialize();u=await discover_active_derivatives_universe(now)
- # Historical OHLCV/5m candles are intentionally NOT persisted here. They remain
- # reconstructible from Groww on demand. Live storage is reserved for point-in-time
- # derivatives state that cannot be reliably reconstructed later.
+ symbols=[s for i,s in enumerate(u["fno_option_underlyings"]) if i%max(1,shards)==shard]
+ offset=max(0,int(offset));limit=max(1,min(int(limit),8));batch=symbols[offset:offset+limit]
  chain_stats=[]
- for i,symbol in enumerate(u["fno_option_underlyings"]):
-  if i%max(1,shards)!=shard:continue
+ for symbol in batch:
   try:
    expiries=await provider.expiries(symbol); expiry=(expiries or [None])[0]
    if not expiry:raise RuntimeError("no expiry")
    chain=await provider.option_chain(symbol,expiry)
    await store.upsert_chain(symbol,str(expiry)[:10],now,chain)
    chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"ok":True})
-  except Exception as exc:chain_stats.append({"symbol":symbol,"ok":False,"error":str(exc)[:180]})
+  except Exception as exc:
+   chain_stats.append({"symbol":symbol,"ok":False,"error":str(exc)[:180]})
  return {"status":"COLLECTED","collected_at":now.isoformat(),"shard":shard,"shards":shards,
-  "universe_counts":u["counts"],
+  "universe_counts":u["counts"],"shard_underlyings":len(symbols),"offset":offset,"limit":limit,
+  "batch_size":len(batch),"next_offset":offset+len(batch),"done":offset+len(batch)>=len(symbols),
   "historical_candles_persisted":False,
   "historical_candle_policy":"FETCH_FROM_GROWW_ON_DEMAND",
   "live_ephemeral_policy":"PERSIST_POINT_IN_TIME_STATE_NOT_RELIABLY_RECONSTRUCTIBLE",
   "option_chains_attempted":len(chain_stats),"option_chain_success":sum(x["ok"] for x in chain_stats),
-  "option_chain_failed":sum(not x["ok"] for x in chain_stats)}
+  "option_chain_failed":sum(not x["ok"] for x in chain_stats),"results":chain_stats}

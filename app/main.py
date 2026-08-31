@@ -437,11 +437,12 @@ async def copper_aug26_contract_sync_audit(
     except Exception as exc:_safe_upstream_error("Copper Aug26 contract sync audit",exc)
 
 @app.post("/v1/internal/derivatives-universe/collect")
-async def derivatives_universe_collect(shard:int=0,shards:int=4,x_collector_token:str|None=Header(default=None)):
+async def derivatives_universe_collect(shard:int=0,shards:int=4,offset:int=0,limit:int=4,x_collector_token:str|None=Header(default=None)):
     _collector_store(x_collector_token)
     if shard<0 or shards<1 or shard>=shards:raise HTTPException(status_code=400,detail="Invalid shard")
+    if offset<0 or limit<1 or limit>8:raise HTTPException(status_code=400,detail="Invalid offset/limit")
     try:
-        return await collect_derivatives_universe(get_provider(settings),UniverseStore(settings.database_url),shard,shards)
+        return await collect_derivatives_universe(get_provider(settings),UniverseStore(settings.database_url),shard,shards,offset=offset,limit=limit)
     except Exception as exc:_safe_upstream_error("derivatives universe collection",exc)
 
 @app.post("/v1/internal/commodity-candles/backfill-continuous")

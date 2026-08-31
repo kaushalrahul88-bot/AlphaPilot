@@ -12,6 +12,7 @@ jobs:
   collect:
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         shard: [0,1,2,3]
     runs-on: ubuntu-latest
@@ -20,23 +21,31 @@ jobs:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
     steps:
-      - name: Collect derivatives universe shard
+      - name: Collect derivatives universe shard in bounded batches
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
-          for i in {1..6}; do
-            curl --silent --max-time 20 "$API_BASE/health" >/dev/null || true
-            CODE=$(curl --silent --show-error --max-time 480 -w "%{http_code}" -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST               "$API_BASE/v1/internal/derivatives-universe/collect?shard=${{ matrix.shard }}&shards=4" -o result.json || echo 000)
-            echo "shard=${{ matrix.shard }} attempt=$i HTTP=$CODE"
-            [ "$CODE" = "200" ] && break
-            [ "$i" = "6" ] && { cat result.json 2>/dev/null || true; exit 1; }
-            sleep 20
-          done
-          python - <<'PY'
+          OFFSET=0
+          for batch in {1..80}; do
+            SUCCESS=0
+            for attempt in {1..5}; do
+              curl --silent --max-time 15 "$API_BASE/health" >/dev/null || true
+              CODE=$(curl --silent --show-error --max-time 120 -w "%{http_code}"                 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST                 "$API_BASE/v1/internal/derivatives-universe/collect?shard=${{ matrix.shard }}&shards=4&offset=$OFFSET&limit=4"                 -o result.json || echo 000)
+              echo "shard=${{ matrix.shard }} offset=$OFFSET attempt=$attempt HTTP=$CODE"
+              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              sleep $((attempt*10))
+            done
+            [ "$SUCCESS" = "1" ] || { cat result.json 2>/dev/null || true; exit 1; }
+            python - <<'PY'
           import json
           d=json.load(open("result.json"))
           assert d.get("status")=="COLLECTED",d
           assert d.get("historical_candles_persisted") is False,d
           assert d.get("historical_candle_policy")=="FETCH_FROM_GROWW_ON_DEMAND",d
-          print(json.dumps(d,indent=2))
+          print(json.dumps({k:d.get(k) for k in ("shard","shard_underlyings","offset","batch_size","next_offset","done","option_chain_success","option_chain_failed")},indent=2))
           PY
+            DONE=$(python -c 'import json;print("1" if json.load(open("result.json")).get("done") else "0")')
+            OFFSET=$(python -c 'import json;print(json.load(open("result.json")).get("next_offset",0))')
+            [ "$DONE" = "1" ] && break
+            sleep 3
+          done
