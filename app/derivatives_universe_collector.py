@@ -60,7 +60,7 @@ def _expiry(v):
  except Exception:return None
 
 def _active_derivatives_from_rows(rows,today:date):
- mcx=[]; nse_futures=[]; option_underlyings=set(); mcx_option_underlyings=set()
+ mcx=[]; nse_futures=[]; option_expiries={}; mcx_option_underlyings=set()
  for row in rows:
   ex=str(row.get("exchange") or "").upper();seg=str(row.get("segment") or "").upper()
   it=str(row.get("instrument_type") or "").upper();exp=_expiry(row.get("expiry_date"))
@@ -76,7 +76,9 @@ def _active_derivatives_from_rows(rows,today:date):
    elif it in {"CE","PE"} and u:mcx_option_underlyings.add(u)
   elif ex=="NSE" and seg=="FNO":
    if it in {"FUT","FUTURE","FUTURES"} or ts.endswith("FUT"):nse_futures.append(base)
-   elif it in {"CE","PE"} and u:option_underlyings.add(u)
+   elif it in {"CE","PE"} and u:
+    listed=option_expiries.get(u)
+    if listed is None or exp<listed:option_expiries[u]=exp
  # nearest active future per underlying to bound request volume
  def nearest(rows):
   best={}
@@ -89,10 +91,11 @@ def _active_derivatives_from_rows(rows,today:date):
  active_mcx_options=sorted(mcx_option_underlyings & mcx_future_symbols)
  return {"mcx_futures":mcx_nearest,"nse_futures":nse_nearest,
          "mcx_option_underlyings":active_mcx_options,
-         "fno_option_underlyings":sorted(option_underlyings),
+         "fno_option_underlyings":sorted(option_expiries),
+         "fno_option_expiries":{symbol:option_expiries[symbol].isoformat() for symbol in sorted(option_expiries)},
          "counts":{"mcx_futures":len(mcx_nearest),"nse_futures":len(nse_nearest),
                    "mcx_option_underlyings":len(active_mcx_options),
-                   "fno_option_underlyings":len(option_underlyings)}}
+                   "fno_option_underlyings":len(option_expiries)}}
 
 async def discover_active_derivatives_universe(now:datetime|None=None,force:bool=False):
  today=(now or datetime.now(IST)).date(); loaded_at=time.monotonic()
@@ -176,11 +179,15 @@ async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,
  chain_stats=[]
  for symbol in batch:
   try:
-   expiries=await provider.expiries(symbol); expiry=(expiries or [None])[0]
+   expiry=(u.get("fno_option_expiries") or {}).get(symbol)
+   expiry_source="GROWW_INSTRUMENT_MASTER"
+   if not expiry:
+    expiries=await provider.expiries(symbol); expiry=(expiries or [None])[0]
+    expiry_source="GROWW_EXPIRIES_API"
    if not expiry:raise RuntimeError("no expiry")
    chain=await provider.option_chain(symbol,expiry)
    await store.upsert_chain(symbol,str(expiry)[:10],now,chain)
-   chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"ok":True})
+   chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"expiry_source":expiry_source,"ok":True})
   except Exception as exc:
    chain_stats.append({"symbol":symbol,"ok":False,"error":str(exc)[:180]})
  successes=sum(x["ok"] for x in chain_stats); failures=len(chain_stats)-successes
