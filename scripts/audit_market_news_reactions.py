@@ -9,6 +9,7 @@ from app.market_news_participation import assess_news_participation
 from app.market_news_volatility_context import assess_volatility_context
 from app.market_news_assimilation import assess_market_news_assimilation
 from app.market_news_path_materiality import assess_observed_path_materiality
+from app.market_news_materiality_qualified_path import assess_materiality_qualified_path
 from app.commodity_time import parse_ist_timestamp
 from app.mcx_calendar import mcx_metal_reaction_anchor
 
@@ -47,7 +48,7 @@ def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
 
 
 def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
-    rows=[];reaction_counts=Counter();observed_path_counts=Counter();participation_counts=Counter();assimilation_counts=Counter();path_materiality_counts=Counter();coverage_counts=Counter()
+    rows=[];reaction_counts=Counter();observed_path_counts=Counter();participation_counts=Counter();assimilation_counts=Counter();path_materiality_counts=Counter();qualified_path_counts=Counter();coverage_counts=Counter();qualified_path_changes=0
     as_of_ts=parse_ist_timestamp(as_of)
     visible_candles=_visible_candles(candles,as_of_ts=as_of_ts)
     coverage=_market_coverage(visible_candles,as_of_ts=as_of_ts)
@@ -83,15 +84,18 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
         volatility_context=assess_volatility_context(window,visible_candles)
         assimilation=assess_market_news_assimilation(observed_path,volatility_context,participation)
         path_materiality=assess_observed_path_materiality(observed_path,volatility_context)
+        qualified_path=assess_materiality_qualified_path(observed_path,path_materiality)
         observed_path_counts[observed_path["path_state"]]+=1
         reaction_counts[reaction["reaction_state"]]+=1
         participation_counts[participation["participation_state"]]+=1
         assimilation_counts[assimilation["assimilation_state"]]+=1
         path_materiality_counts[path_materiality["materiality_state"]]+=1
+        qualified_path_counts[qualified_path["qualified_path_state"]]+=1
+        qualified_path_changes+=int(qualified_path["path_state_changed"])
         rows.append({"event":event,"status":"CLASSIFIED","coverage_status":"CLASSIFIABLE","window":window,
                      "observed_path":observed_path,"reaction":reaction,"participation":participation,
                      "volatility_context":volatility_context,"assimilation":assimilation,
-                     "path_materiality":path_materiality})
+                     "path_materiality":path_materiality,"materiality_qualified_path":qualified_path})
     return {"mode":"MARKET_NEWS_REACTION_AUDIT_V1","outcome_blind":True,"outcomes_read":False,"as_of":as_of,
             "events":len(news_payload.get("records") or []),"market_coverage":coverage,
             "volume_semantics":volume_semantics,
@@ -100,7 +104,9 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
             "reaction_counts":dict(sorted(reaction_counts.items())),
             "participation_counts":dict(sorted(participation_counts.items())),
             "assimilation_counts":dict(sorted(assimilation_counts.items())),
-            "path_materiality_counts":dict(sorted(path_materiality_counts.items())),"records":rows,
+            "path_materiality_counts":dict(sorted(path_materiality_counts.items())),
+            "materiality_qualified_path_counts":dict(sorted(qualified_path_counts.items())),
+            "materiality_qualified_path_changes":qualified_path_changes,"records":rows,
             "guardrails":["Trade outcomes and P&L are not accepted as audit inputs.",
                           "News and candles must be frozen point-in-time inputs.",
                           "Observed market path is separated from directional news-hypothesis confirmation.",
@@ -112,6 +118,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "Volatility-normalized same-clock market motion is shadow context only and cannot change reaction, participation, or trade classification.",
                           "Assimilation shadow summarizes observed path plus transparent 1x/2x prior-median motion context; it is descriptive only and cannot generate a trade.",
                           "Path-materiality shadow audits whether fixed-floor directional segments exceed prior same-clock median motion without changing the observed path classification.",
+                          "Materiality-qualified path is a second shadow view only: sub-baseline raw directions are muted and missing volatility reference fails closed; production observed path remains unchanged.",
                           "Volatility baselines use only fully observed prior-session analogue windows available before the segment being assessed.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
