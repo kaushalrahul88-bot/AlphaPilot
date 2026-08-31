@@ -1,0 +1,40 @@
+name: Scheduled Derivatives Universe Collector
+on:
+  schedule:
+    - cron: "5,35 3-18 * * 1-5"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: derivatives-universe-collector
+  cancel-in-progress: false
+jobs:
+  collect:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Collect derivatives universe shard
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..6}; do
+            curl --silent --max-time 20 "$API_BASE/health" >/dev/null || true
+            CODE=$(curl --silent --show-error --max-time 480 -w "%{http_code}" -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST               "$API_BASE/v1/internal/derivatives-universe/collect?shard=${{ matrix.shard }}&shards=4" -o result.json || echo 000)
+            echo "shard=${{ matrix.shard }} attempt=$i HTTP=$CODE"
+            [ "$CODE" = "200" ] && break
+            [ "$i" = "6" ] && { cat result.json 2>/dev/null || true; exit 1; }
+            sleep 20
+          done
+          python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d.get("status")=="COLLECTED",d
+          print(json.dumps(d,indent=2))
+          PY
