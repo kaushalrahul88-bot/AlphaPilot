@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse,json
 from collections import Counter
 from pathlib import Path
-from app.market_news_reaction_windows import build_reaction_window
+from app.market_news_reaction_windows import build_reaction_window, infer_volume_semantics
 from app.market_news_reaction_engine import assess_market_news_reaction
 from app.market_news_observed_path import assess_observed_market_path
 from app.market_news_participation import assess_news_participation
@@ -40,6 +40,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
     as_of_ts=parse_ist_timestamp(as_of)
     coverage=_market_coverage(candles,as_of_ts=as_of_ts)
     coverage_end=parse_ist_timestamp(coverage["last_timestamp"]) if coverage["last_timestamp"] else None
+    volume_semantics=infer_volume_semantics([c for c in candles if (_ts:=c.get("timestamp") or c.get("time") or c.get("datetime")) and parse_ist_timestamp(_ts)<=as_of_ts])
     for raw in news_payload.get("records") or []:
         event=_event(raw);event_raw=event.get("available_at") or event.get("published_at")
         try:event_ts=parse_ist_timestamp(event_raw) if event_raw else None
@@ -51,7 +52,8 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
         try:
             anchor_ts=mcx_metal_reaction_anchor(event_ts) if event_ts is not None else None
             window=build_reaction_window(event,candles,as_of=as_of,
-                                         reaction_anchor=anchor_ts.isoformat() if anchor_ts is not None else None)
+                                         reaction_anchor=anchor_ts.isoformat() if anchor_ts is not None else None,
+                                         volume_semantics=volume_semantics["mode"])
         except (TypeError,ValueError,RuntimeError) as exc:
             coverage_counts["INVALID_EVENT_TIMESTAMP"]+=1
             rows.append({"event":event,"status":"INVALID_EVENT_TIMESTAMP","coverage_status":"INVALID_EVENT_TIMESTAMP",
@@ -72,6 +74,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                      "observed_path":observed_path,"reaction":reaction,"participation":participation})
     return {"mode":"MARKET_NEWS_REACTION_AUDIT_V1","outcome_blind":True,"outcomes_read":False,"as_of":as_of,
             "events":len(news_payload.get("records") or []),"market_coverage":coverage,
+            "volume_semantics":volume_semantics,
             "coverage_counts":dict(sorted(coverage_counts.items())),"classified":sum(reaction_counts.values()),
             "observed_path_counts":dict(sorted(observed_path_counts.items())),
             "reaction_counts":dict(sorted(reaction_counts.items())),
@@ -82,6 +85,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "Unknown news stance cannot erase an otherwise observable market price path.",
                           "In-session news keeps its true event timestamp; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals session open.",
                           "Pre-event price remains strictly before the news timestamp, including for closed-market events.",
+                          "Raw volume may confirm participation only after its semantics are identified; session-cumulative volume is converted to bar activity and compared with a pre-event median baseline.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
                           "Market coverage itself is also clipped to the explicit as_of cutoff.",
