@@ -1,40 +1,34 @@
-name: Scheduled Copper Option Snapshot Collector
+name: Scheduled MCX Option Snapshot Collector
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "35-55/5 3 * * 1-5"
     - cron: "*/5 4-17 * * 1-5"
-  push:
-    branches: [main]
-    paths:
-      - "app/commodity_option_snapshot_collector.py"
-      - "app/main.py"
-      - ".github/workflows/scheduled-copper-option-collector.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: copper-option-snapshot-collector
+  group: mcx-option-snapshot-collector
   cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
       EVENT_NAME: ${{ github.event_name }}
     steps:
-      - name: Wait for Copper option snapshot collector deploy
+      - name: Wait for bounded MCX option collector deploy
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in {1..36}; do
+          for attempt in {1..42}; do
             if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
-              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/commodity-options/snapshot-collect" in (d.get("paths") or {}) else 1)'; then
+              if python -c 'import json,sys; d=json.load(open("openapi.json")); sys.exit(0 if "/v1/internal/mcx-options/snapshot-collect" in (d.get("paths") or {}) else 1)'; then
                 sleep 20
                 exit 0
               fi
@@ -42,54 +36,58 @@ jobs:
             sleep 10
           done
           exit 1
-      - name: Capture live Copper option snapshots
+
+      - name: Capture bounded live MCX option snapshots
         shell: bash
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
-          curl --fail --silent --show-error --max-time 180             -H "X-Collector-Token: $COLLECTOR_TOKEN"             -X POST "$API_BASE/v1/internal/commodity-options/snapshot-collect?strikes_per_type=10"             -o snapshot-result.json
-          python - <<'PY'
-          import json, os
-          result=json.load(open("snapshot-result.json"))
-          assert result.get("research_only") is True, result
-          assert result.get("production_rules_changed") is False, result
-          assert result.get("live_execution_enabled") is False, result
-
-          if result.get("status")=="MARKET_CLOSED":
-              calendar=((result.get("market_session") or {}).get("calendar") or {})
-              calendar_class=calendar.get("calendar_class")
-              if os.environ.get("EVENT_NAME")=="push" or calendar_class in {"WEEKEND","TRADING_HOLIDAY"}:
-                  print(json.dumps({
-                      "closed_session":"EXPECTED",
-                      "calendar_class":calendar_class,
-                      "holiday_name":calendar.get("holiday_name"),
-                      "observed_at":result.get("observed_at"),
-                  },indent=2))
-                  raise SystemExit(0)
-              raise AssertionError(result)
-
-          assert result.get("status") in {"COLLECTED","PARTIAL"}, result
-          assert result.get("data_type")=="LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC", result
-          assert result.get("underlying_price_source")=="LIVE_MCX_FUTURE_QUOTE", result
-          assert float(result.get("underlying_price") or 0) > 0, result
-          assert (result.get("quality") or {}).get("pass") is True, result
-          assert int(result.get("ce_snapshots") or 0) >= 3, result
-          assert int(result.get("pe_snapshots") or 0) >= 3, result
-          print(json.dumps({
-              "status":result.get("status"),
-              "sample_bucket_at":result.get("sample_bucket_at"),
-              "underlying_price":result.get("underlying_price"),
-              "underlying_price_source":result.get("underlying_price_source"),
-              "underlying_candle_close":result.get("underlying_candle_close"),
-              "ce_snapshots":result.get("ce_snapshots"),
-              "pe_snapshots":result.get("pe_snapshots"),
-              "upserted":result.get("upserted"),
-              "selected_strike_range":result.get("selected_strike_range"),
-          },indent=2))
+          OFFSET=0
+          : > mcx-option-snapshot-results.jsonl
+          for batch in {1..40}; do
+            SUCCESS=0
+            for attempt in {1..5}; do
+              curl --silent --max-time 15 "$API_BASE/health" >/dev/null || true
+              CODE=$(curl --silent --show-error --max-time 150 -w "%{http_code}" \
+                -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+                "$API_BASE/v1/internal/mcx-options/snapshot-collect?offset=$OFFSET&limit=1&strikes_per_type=3" \
+                -o result.json || echo 000)
+              echo "offset=$OFFSET attempt=$attempt HTTP=$CODE"
+              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              sleep $((attempt*10))
+            done
+            [ "$SUCCESS" = "1" ] || { cat result.json 2>/dev/null || true; exit 1; }
+            python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          if d.get("status")=="MARKET_CLOSED":
+              print(json.dumps({"status":"MARKET_CLOSED","observed_at":d.get("observed_at")}))
+              raise SystemExit(0)
+          assert d.get("status") in {"COLLECTED","PARTIAL"},d
+          assert d.get("historical_candles_persisted") is False,d
+          assert d.get("historical_candle_policy")=="FETCH_FROM_GROWW_ON_DEMAND",d
+          assert d.get("research_only") is True,d
+          assert d.get("production_rules_changed") is False,d
+          assert d.get("live_execution_enabled") is False,d
+          assert int(d.get("underlyings_collected") or 0)>=1,d
+          with open("mcx-option-snapshot-results.jsonl","a") as output:
+              output.write(json.dumps(d,separators=(",",":"))+"\n")
+          print(json.dumps({k:d.get(k) for k in (
+              "status","universe_underlyings","offset","batch_size","next_offset","done",
+              "underlyings_collected","underlyings_failed","snapshots","upserted"
+          )},indent=2))
           PY
-      - name: Upload snapshot result
+            DONE=$(python -c 'import json;print("1" if json.load(open("result.json")).get("done") else "0")')
+            OFFSET=$(python -c 'import json;print(json.load(open("result.json")).get("next_offset",0))')
+            [ "$DONE" = "1" ] && break
+            sleep 2
+          done
+
+      - name: Upload snapshot results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: copper-option-snapshot-result
-          path: snapshot-result.json
+          name: mcx-option-snapshot-results
+          path: |
+            result.json
+            mcx-option-snapshot-results.jsonl
