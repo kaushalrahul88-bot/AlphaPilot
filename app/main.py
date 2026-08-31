@@ -79,6 +79,7 @@ from .session_close_momentum import run_session_close_momentum
 from .strategy_research import run_strategy_research
 from .strategy_premium_replay import run_strategy_premium_replay
 from .strategy_regime_routing import run_strategy_regime_routing
+from .storage_health import StorageHealthMonitor
 
 logger = logging.getLogger("alphapilot.scan")
 class Settings(BaseSettings):
@@ -137,6 +138,14 @@ class CommodityOptionHistoryBandRequest(BaseModel): symbol:Literal["COPPER","CRU
 
 @app.get("/")
 async def root(): return {"ok":True,"service":"alphapilot-api"}
+@app.get("/v1/internal/storage-health")
+async def storage_health(x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token)
+    try:
+        return await StorageHealthMonitor(settings.database_url).run()
+    except Exception as exc:
+        _safe_upstream_error("storage health",exc)
+
 @app.get("/health")
 async def health(): return {"ok":True,"service":"alphapilot-api","version":"0.40.0","deployment_commit":os.getenv("RENDER_GIT_COMMIT"),"provider":settings.market_data_provider.upper(),"commodity_collector_enabled":bool(settings.database_url.strip() and settings.commodity_collector_token.strip())}
 def _collector_store(x_collector_token:str|None):

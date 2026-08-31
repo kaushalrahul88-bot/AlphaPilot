@@ -1,0 +1,30 @@
+name: Storage Health Monitor
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Check storage health
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 60             -H "X-Collector-Token: $COLLECTOR_TOKEN"             "$API_BASE/v1/internal/storage-health" -o storage-health.json
+          python - <<'PY'
+          import json
+          d=json.load(open("storage-health.json"))
+          print(json.dumps(d,indent=2))
+          assert d.get("status")!="CRITICAL",d
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-health
+          path: storage-health.json
