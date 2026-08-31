@@ -23,6 +23,7 @@ from .copper_news_persistence import assess_news_persistence
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_integrated_replay import current_mind_click
 from .current_mind_replay_scorecard import replay_scorecard
+from .trader_evidence_synthesis import synthesize_evidence
 
 CLICKS_PER_COMPLETE_SESSION=20
 MEMORY_K=75
@@ -164,12 +165,15 @@ def _regime_features(features):
 
 
 def _dominant_direction(items):
-    lanes=defaultdict(set)
-    for x in items:
-        stance=str(x.get("stance") or "UNKNOWN")
-        if stance in {"BULLISH","BEARISH"}:lanes[x.get("lane","OTHER")].add(stance)
-    bull=sum(v=={"BULLISH"} for v in lanes.values())
-    bear=sum(v=={"BEARISH"} for v in lanes.values())
+    """Use the same directional evidence semantics as the final thesis builder.
+
+    Trade geometry must never be prepared from a lane that the downstream
+    synthesis would classify as context-only; otherwise raw NEWS can still
+    manufacture or suppress an entry even after its vote is removed later.
+    """
+    synthesis=synthesize_evidence(items)
+    bull=len(synthesis.get("independent_bullish_lanes",[]))
+    bear=len(synthesis.get("independent_bearish_lanes",[]))
     if max(bull,bear)<2 or bull==bear:return None
     return "BULLISH" if bull>bear else "BEARISH"
 
