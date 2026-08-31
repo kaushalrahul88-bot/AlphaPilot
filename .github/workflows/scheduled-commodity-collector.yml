@@ -25,14 +25,29 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
-          curl --fail --silent --show-error --max-time 180             -H "X-Collector-Token: $COLLECTOR_TOKEN"             -X POST "$API_BASE/v1/internal/commodity-candles/collect"             -o collector-result.json
+          # Render can transiently return 502 while waking/redeploying. Warm health,
+          # then retry collection with bounded backoff rather than losing the interval.
+          for i in {1..12}; do
+            curl --silent --show-error --max-time 20 "$API_BASE/health" -o health.json || true
+            CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+              "$API_BASE/v1/internal/commodity-candles/collect" -o collector-result.json || echo "000")
+            echo "Collector attempt $i HTTP $CODE"
+            if [ "$CODE" = "200" ]; then break; fi
+            if [ "$i" = "12" ]; then cat collector-result.json 2>/dev/null || true; exit 1; fi
+            sleep 15
+          done
           python - <<'PY'
           import json
           d=json.load(open("collector-result.json"))
           assert d.get("status")=="COLLECTED", d
+          assert d.get("collected_at"), d
+          series=d.get("series") or []
+          assert series, d
           print(json.dumps({
             "collected_at": d.get("collected_at"),
             "upserted": d.get("upserted"),
-            "series": d.get("series"),
+            "series": series,
+            "verification": "COLLECTOR_RESPONSE_CONFIRMED",
           }, indent=2))
           PY
