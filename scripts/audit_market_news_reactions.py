@@ -18,13 +18,14 @@ def _event(record):
             "materiality":ni.get("materiality"),"disposition":ni.get("disposition")}
 
 
-def _market_coverage(candles:list[dict])->dict:
+def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
     timestamps=[]
     for candle in candles:
         raw=candle.get("timestamp") or candle.get("time") or candle.get("datetime")
         if not raw:continue
-        try:timestamps.append((parse_ist_timestamp(raw),raw))
+        try:ts=parse_ist_timestamp(raw)
         except (TypeError,ValueError):continue
+        if ts<=as_of_ts:timestamps.append((ts,raw))
     if not timestamps:
         return {"status":"NO_MARKET_DATA","first_timestamp":None,"last_timestamp":None,"observations":0}
     timestamps.sort(key=lambda x:x[0])
@@ -34,7 +35,8 @@ def _market_coverage(candles:list[dict])->dict:
 
 def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
     rows=[];reaction_counts=Counter();participation_counts=Counter();coverage_counts=Counter()
-    coverage=_market_coverage(candles)
+    as_of_ts=parse_ist_timestamp(as_of)
+    coverage=_market_coverage(candles,as_of_ts=as_of_ts)
     coverage_end=parse_ist_timestamp(coverage["last_timestamp"]) if coverage["last_timestamp"] else None
     for raw in news_payload.get("records") or []:
         event=_event(raw);event_raw=event.get("available_at") or event.get("published_at")
@@ -69,6 +71,7 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "News and candles must be frozen point-in-time inputs.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
+                          "Market coverage itself is also clipped to the explicit as_of cutoff.",
                           "No market observation later than the explicit as_of cutoff is visible.",
                           "Missing or late market observations remain unclassified.",
                           "This report describes market assimilation; it does not generate trades."]}
