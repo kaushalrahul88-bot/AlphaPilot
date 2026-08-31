@@ -6,6 +6,7 @@ from app.market_news_reaction_windows import build_reaction_window, infer_volume
 from app.market_news_reaction_engine import assess_market_news_reaction
 from app.market_news_observed_path import assess_observed_market_path
 from app.market_news_participation import assess_news_participation
+from app.market_news_volatility_context import assess_volatility_context
 from app.commodity_time import parse_ist_timestamp
 from app.mcx_calendar import mcx_metal_reaction_anchor
 
@@ -77,10 +78,12 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
         reaction=assess_market_news_reaction(event,window.get("pre_event"),window.get("immediate"),
                                              window.get("confirmation"),window.get("assimilation"))
         participation=assess_news_participation(window,reaction)
+        volatility_context=assess_volatility_context(window,visible_candles)
         observed_path_counts[observed_path["path_state"]]+=1
         reaction_counts[reaction["reaction_state"]]+=1;participation_counts[participation["participation_state"]]+=1
         rows.append({"event":event,"status":"CLASSIFIED","coverage_status":"CLASSIFIABLE","window":window,
-                     "observed_path":observed_path,"reaction":reaction,"participation":participation})
+                     "observed_path":observed_path,"reaction":reaction,"participation":participation,
+                     "volatility_context":volatility_context})
     return {"mode":"MARKET_NEWS_REACTION_AUDIT_V1","outcome_blind":True,"outcomes_read":False,"as_of":as_of,
             "events":len(news_payload.get("records") or []),"market_coverage":coverage,
             "volume_semantics":volume_semantics,
@@ -96,6 +99,8 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
                           "Pre-event price remains strictly before the news timestamp, including for closed-market events.",
                           "Raw volume may confirm participation only after its semantics are identified; session-cumulative volume is converted to bar activity and compared with a pre-event median baseline.",
                           "Volume-semantics inference is clipped to the same explicit as_of cutoff as the reaction audit.",
+                          "Volatility-normalized same-clock market motion is shadow context only and cannot change reaction, participation, or trade classification.",
+                          "Volatility baselines use only fully observed prior-session analogue windows available before the segment being assessed.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
                           "Market coverage itself is also clipped to the explicit as_of cutoff.",

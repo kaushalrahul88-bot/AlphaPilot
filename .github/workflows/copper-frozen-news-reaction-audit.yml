@@ -11,6 +11,7 @@ on:
       - "app/market_news_reaction_windows.py"
       - "app/market_news_observed_path.py"
       - "app/market_news_participation.py"
+      - "app/market_news_volatility_context.py"
       - "app/commodity_time.py"
       - "app/mcx_calendar.py"
 
@@ -74,9 +75,11 @@ jobs:
           assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
           outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
           assert len(outside)==1, report
-          assert all("reaction" not in r and "observed_path" not in r and "participation" not in r for r in outside), outside
+          assert all("reaction" not in r and "observed_path" not in r and "participation" not in r and "volatility_context" not in r for r in outside), outside
           classifiable=[r for r in report["records"] if r.get("coverage_status")=="CLASSIFIABLE"]
           assert classifiable and all((r.get("observed_path") or {}).get("observation_status")=="OBSERVED" for r in classifiable), classifiable
+          assert all((r.get("volatility_context") or {}).get("mode")=="VOLATILITY_CONTEXT_SHADOW_V1" for r in classifiable), classifiable
+          assert all((r.get("volatility_context") or {}).get("classification_unchanged") is True for r in classifiable), classifiable
           weekend=[r for r in classifiable if (r.get("event") or {}).get("headline")=="Congo Bans Copper and Cobalt Concentrate Exports"]
           assert len(weekend)==1, weekend
           weekend_window=weekend[0].get("window") or {}
@@ -102,6 +105,8 @@ jobs:
               observed=row.get("observed_path") or {}
               reaction=row.get("reaction") or {}
               participation=row.get("participation") or {}
+              volatility=row.get("volatility_context") or {}
+              segments=volatility.get("segments") or {}
               print(json.dumps({
                   "event":index,
                   "available_at":event.get("available_at") or event.get("published_at"),
@@ -120,6 +125,13 @@ jobs:
                   "reaction_state":reaction.get("reaction_state"),
                   "expected_price_direction":reaction.get("expected_price_direction"),
                   "participation_state":participation.get("participation_state"),
+                  "volatility_shadow":{name:{
+                      "status":value.get("status"),
+                      "median_abs_return":value.get("median_abs_return"),
+                      "normalized_abs_move":value.get("normalized_abs_move"),
+                      "samples":value.get("samples"),
+                      "baseline_to_fixed_floor":value.get("baseline_to_fixed_floor"),
+                  } for name,value in segments.items()},
               },sort_keys=True))
           PY
 
@@ -131,10 +143,11 @@ jobs:
           manifest={
               "outcome_blind":True,
               "network_refetch":False,
+              "volatility_context_mode":"SHADOW_ONLY",
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "audit_as_of":os.environ["AUDIT_AS_OF"],
-              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
+              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; prior same-clock volatility context is diagnostic only; trade outcomes and P&L are not audit inputs.",
           }
           Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
