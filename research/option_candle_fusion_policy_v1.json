@@ -1,0 +1,17 @@
+{
+  "mode": "OPTION_CANDLE_FUSION_POLICY_V1",
+  "principle": "Option snapshots may be stored live while reconstructible candles are fetched later, provided the join is point-in-time safe.",
+  "join_keys": [
+    "underlying_symbol",
+    "as_of_timestamp"
+  ],
+  "rules": [
+    "Use option snapshot observed_at as the decision-time anchor.",
+    "Include only candles whose full interval completed at or before observed_at.",
+    "Normalize all timestamps to Asia/Kolkata before comparison.",
+    "Never use the currently-forming candle.",
+    "Preserve option expiry separately; do not infer option expiry from the futures contract used for price context.",
+    "Reject/flag stale candle context rather than forward-filling it.",
+    "Historical candle retrieval time is irrelevant; candle event-time controls eligibility."
+  ]
+}
