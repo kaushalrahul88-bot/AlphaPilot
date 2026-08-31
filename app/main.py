@@ -19,6 +19,7 @@ from .copper_research_brain import run_copper_research_baseline, run_copper_brai
 from .copper_avoidance_forward_validation import run_copper_avoidance_forward_validation_from_store
 from .copper_day_replay import run_copper_day_by_day_replay_from_store
 from .commodity_candle_collector import PostgresCandleStore, backfill_commodity_candles, backfill_continuous_commodity_candles, collect_completed_commodity_candles
+from .derivatives_universe_collector import UniverseStore, collect_derivatives_universe
 from .historical_context import PostgresHistoricalContextStore
 from .copper_context_ablation import build_copper_context_coverage_for_days
 from .copper_context_ablation_v2 import context_ablation
@@ -425,6 +426,14 @@ async def copper_aug26_contract_sync_audit(
             store,
         )
     except Exception as exc:_safe_upstream_error("Copper Aug26 contract sync audit",exc)
+
+@app.post("/v1/internal/derivatives-universe/collect")
+async def derivatives_universe_collect(shard:int=0,shards:int=4,x_collector_token:str|None=Header(default=None)):
+    _collector_store(x_collector_token)
+    if shard<0 or shards<1 or shard>=shards:raise HTTPException(status_code=400,detail="Invalid shard")
+    try:
+        return await collect_derivatives_universe(get_provider(settings),UniverseStore(settings.database_url),shard,shards)
+    except Exception as exc:_safe_upstream_error("derivatives universe collection",exc)
 
 @app.post("/v1/internal/commodity-candles/backfill-continuous")
 async def commodity_candles_backfill_continuous(request:CommodityCandleBackfillRequest,x_collector_token:str|None=Header(default=None)):
