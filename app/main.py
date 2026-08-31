@@ -313,9 +313,15 @@ async def copper_current_mind_news_replay_start(request:Request,x_collector_toke
             if metadata.get("point_in_time") is not True or metadata.get("network_refetch") is not False:
                 raise HTTPException(status_code=400,detail="Expanded news replay requires point-in-time=true and network_refetch=false")
             if not records:
+                raise HTTPException(status_code=400,detail="Expanded news replay requires News Intelligence records")
+            dispositions=[(r.get("news_intelligence") or {}).get("disposition") for r in records]
+            if any(x not in {"ALLOW","CONTEXT_ONLY"} for x in dispositions):
+                raise HTTPException(status_code=400,detail="Expanded replay may transmit only ALLOW or CONTEXT_ONLY News Intelligence records")
+            if "ALLOW" not in dispositions:
                 raise HTTPException(status_code=400,detail="Expanded news replay requires at least one News Intelligence ALLOW record")
-            if any((r.get("news_intelligence") or {}).get("disposition")!="ALLOW" for r in records):
-                raise HTTPException(status_code=400,detail="Expanded replay records must all carry News Intelligence disposition ALLOW")
+            expected_count=metadata.get("transmitted_news_record_count")
+            if expected_count is not None and int(expected_count)!=len(records):
+                raise HTTPException(status_code=400,detail="Expanded news replay transmitted record count does not match metadata")
         else:
             if len(records)!=1:
                 raise HTTPException(status_code=400,detail="Controlled frozen-news replay requires exactly one News Intelligence ALLOW record")
