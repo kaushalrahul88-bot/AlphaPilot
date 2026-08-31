@@ -4,6 +4,7 @@ from collections import Counter
 from pathlib import Path
 from app.market_news_reaction_windows import build_reaction_window
 from app.market_news_reaction_engine import assess_market_news_reaction
+from app.market_news_observed_path import assess_observed_market_path
 from app.market_news_participation import assess_news_participation
 from app.commodity_time import parse_ist_timestamp
 
@@ -34,7 +35,7 @@ def _market_coverage(candles:list[dict],*,as_of_ts)->dict:
 
 
 def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
-    rows=[];reaction_counts=Counter();participation_counts=Counter();coverage_counts=Counter()
+    rows=[];reaction_counts=Counter();observed_path_counts=Counter();participation_counts=Counter();coverage_counts=Counter()
     as_of_ts=parse_ist_timestamp(as_of)
     coverage=_market_coverage(candles,as_of_ts=as_of_ts)
     coverage_end=parse_ist_timestamp(coverage["last_timestamp"]) if coverage["last_timestamp"] else None
@@ -56,19 +57,25 @@ def audit(news_payload:dict,candles:list[dict],*,as_of:str)->dict:
             rows.append({"event":event,"status":window.get("status"),"coverage_status":"INSUFFICIENT_REACTION_WINDOW",
                          "window":window});continue
         coverage_counts["CLASSIFIABLE"]+=1
+        observed_path=assess_observed_market_path(window.get("pre_event"),window.get("immediate"),
+                                                  window.get("confirmation"),window.get("assimilation"))
         reaction=assess_market_news_reaction(event,window.get("pre_event"),window.get("immediate"),
                                              window.get("confirmation"),window.get("assimilation"))
         participation=assess_news_participation(window,reaction)
+        observed_path_counts[observed_path["path_state"]]+=1
         reaction_counts[reaction["reaction_state"]]+=1;participation_counts[participation["participation_state"]]+=1
         rows.append({"event":event,"status":"CLASSIFIED","coverage_status":"CLASSIFIABLE","window":window,
-                     "reaction":reaction,"participation":participation})
+                     "observed_path":observed_path,"reaction":reaction,"participation":participation})
     return {"mode":"MARKET_NEWS_REACTION_AUDIT_V1","outcome_blind":True,"outcomes_read":False,"as_of":as_of,
             "events":len(news_payload.get("records") or []),"market_coverage":coverage,
             "coverage_counts":dict(sorted(coverage_counts.items())),"classified":sum(reaction_counts.values()),
+            "observed_path_counts":dict(sorted(observed_path_counts.items())),
             "reaction_counts":dict(sorted(reaction_counts.items())),
             "participation_counts":dict(sorted(participation_counts.items())),"records":rows,
             "guardrails":["Trade outcomes and P&L are not accepted as audit inputs.",
                           "News and candles must be frozen point-in-time inputs.",
+                          "Observed market path is separated from directional news-hypothesis confirmation.",
+                          "Unknown news stance cannot erase an otherwise observable market price path.",
                           "Event coverage is reported separately from reaction classification.",
                           "Events later than frozen candle coverage cannot be classified.",
                           "Market coverage itself is also clipped to the explicit as_of cutoff.",
