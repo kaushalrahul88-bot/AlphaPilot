@@ -1,0 +1,135 @@
+name: Market Brain V1 Consolidation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - app/market_brain_v1_validation.py
+      - tests/test_market_brain_v1_validation.py
+      - docs/market-brain-v1-consolidation.md
+      - .github/workflows/market-brain-v1-consolidation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-brain-v1-consolidation
+  cancel-in-progress: false
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify existing validation endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+              if python - <<'PY'
+          import json
+          d=json.load(open("openapi.json"))
+          paths=d.get("paths") or {}
+          required={
+            "/v1/internal/copper/current-mind-data-integrity",
+            "/v1/internal/copper/market-brain-direction-audit",
+            "/v1/internal/copper/market-brain-error-attribution",
+            "/v1/internal/copper/experience-memory",
+            "/v1/research/copper/context-ablation-v1",
+          }
+          raise SystemExit(0 if required.issubset(paths) else 1)
+          PY
+              then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Capture frozen validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/current-mind-data-integrity" \
+            -o data-integrity.json
+
+          curl --fail --silent --show-error --max-time 300 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/market-brain-direction-audit?sample_every_bars=3" \
+            -o direction-audit.json
+
+          curl --fail --silent --show-error --max-time 300 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/market-brain-error-attribution?sample_every_bars=3" \
+            -o error-attribution.json
+
+          curl --fail --silent --show-error --max-time 300 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/experience-memory?sample_every_bars=3&analogue_k=75" \
+            -o experience-memory.json
+
+          curl --fail --silent --show-error --max-time 300 \
+            -H 'Content-Type: application/json' -X POST \
+            "$API_BASE/v1/research/copper/context-ablation-v1" \
+            -d '{"days":3650,"sample_every_bars":3,"round_trip_cost_bps":4.0}' \
+            -o context-ablation.json
+
+      - name: Build consolidation scorecard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from app.market_brain_v1_validation import build_market_brain_v1_validation
+
+          def load(name):
+              return json.loads(Path(name).read_text())
+
+          report=build_market_brain_v1_validation(
+              data_integrity=load("data-integrity.json"),
+              direction_audit=load("direction-audit.json"),
+              error_attribution=load("error-attribution.json"),
+              experience_memory=load("experience-memory.json"),
+              context_ablation=load("context-ablation.json"),
+          )
+          Path("market-brain-v1-consolidation.json").write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
+          assert report["mode"]=="MARKET_BRAIN_V1_CONSOLIDATION_SCORECARD",report
+          assert report["production_rules_changed"] is False,report
+          assert report["strategy_rules_changed"] is False,report
+          assert "abstention_quality" in report["blockers"],report
+          assert report["promotion_status"]=="NOT_READY",report
+          print(json.dumps({
+              "promotion_status":report["promotion_status"],
+              "blockers":report["blockers"],
+              "next_required_work":report["next_required_work"],
+              "direction_reading":report["dimensions"]["direction_reading"],
+              "experience_memory":report["dimensions"]["experience_memory"],
+          },indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: market-brain-v1-consolidation
+          retention-days: 30
+          path: |
+            market-brain-v1-consolidation.json
+            data-integrity.json
+            direction-audit.json
+            error-attribution.json
+            experience-memory.json
+            context-ablation.json
