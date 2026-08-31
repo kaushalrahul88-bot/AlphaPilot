@@ -73,7 +73,28 @@ jobs:
               "reaction_counts":report["reaction_counts"],
               "participation_counts":report["participation_counts"],
           }
+          print("AUDIT_SUMMARY")
           print(json.dumps(summary,indent=2,sort_keys=True))
+          print("EVENT_ROWS")
+          for index,row in enumerate(report["records"],1):
+              event=row.get("event") or {}
+              reaction=row.get("reaction") or {}
+              participation=row.get("participation") or {}
+              print(json.dumps({
+                  "event":index,
+                  "available_at":event.get("available_at") or event.get("published_at"),
+                  "source":event.get("source"),
+                  "headline":event.get("headline"),
+                  "stance":event.get("stance"),
+                  "materiality":event.get("materiality"),
+                  "disposition":event.get("disposition"),
+                  "status":row.get("status"),
+                  "coverage_status":row.get("coverage_status"),
+                  "reaction_state":reaction.get("reaction_state"),
+                  "expected_price_direction":reaction.get("expected_price_direction"),
+                  "moves":reaction.get("moves"),
+                  "participation_state":participation.get("participation_state"),
+              },sort_keys=True))
           PY
 
       - name: Write reproducibility manifest
