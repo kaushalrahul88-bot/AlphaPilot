@@ -18,35 +18,64 @@ def _close(row:dict):
 
 def _snapshot(row:dict|None)->dict|None:
     if row is None:return None
+    oi=row.get("open_interest") if "open_interest" in row else row.get("oi")
     return {"timestamp":row.get("timestamp") or row.get("time") or row.get("datetime"),
-            "price":_close(row),"volume":row.get("volume"),"open_interest":row.get("open_interest") or row.get("oi")}
+            "price":_close(row),"volume":row.get("volume"),"open_interest":oi}
 
 
-def build_reaction_window(event:dict,candles:list[dict],*,immediate_minutes:int=5,
-                          confirmation_minutes:int=30,assimilation_minutes:int=60)->dict:
-    """Select causal market snapshots around an event from already-frozen candles.
+def build_reaction_window(event:dict,candles:list[dict],*,as_of:str,
+                          immediate_minutes:int=5,confirmation_minutes:int=30,
+                          assimilation_minutes:int=60,max_lateness_minutes:int=5)->dict:
+    """Select strictly point-in-time market snapshots around an event.
 
-    The event timestamp is when the information became available, not when it was
-    later collected. Selection is deterministic and contains no trade outcomes.
+    ``as_of`` is mandatory: observations later than it are invisible. A requested
+    horizon is also unavailable until its target time has passed. The next candle
+    may satisfy a horizon only within ``max_lateness_minutes`` so weekends/session
+    gaps cannot masquerade as a +5m/+30m reaction. Trade outcomes are never read.
     """
     raw=event.get("available_at") or event.get("published_at")
     if not raw:raise ValueError("event requires available_at or published_at")
-    event_ts=parse_ist_timestamp(raw)
-    rows=sorted((( _ts(c),c) for c in candles if _ts(c) is not None),key=lambda x:x[0])
-    before=[(t,c) for t,c in rows if t<=event_ts]
+    if not as_of:raise ValueError("as_of is required")
+    if not (0 < immediate_minutes <= confirmation_minutes <= assimilation_minutes):
+        raise ValueError("reaction horizons must satisfy 0 < immediate <= confirmation <= assimilation")
+    if max_lateness_minutes < 0:raise ValueError("max_lateness_minutes must be non-negative")
+
+    event_ts=parse_ist_timestamp(raw);as_of_ts=parse_ist_timestamp(as_of)
+    base={"event":event,"event_timestamp":raw,"as_of":as_of,"outcome_blind":True,
+          "horizons_minutes":{"immediate":immediate_minutes,"confirmation":confirmation_minutes,
+                              "assimilation":assimilation_minutes}}
+    if as_of_ts < event_ts:
+        return {**base,"status":"EVENT_NOT_YET_AVAILABLE","pre_event":None,
+                "immediate":None,"confirmation":None,"assimilation":None,"horizon_status":{}}
+
+    parsed=[]
+    for candle in candles:
+        ts=_ts(candle)
+        if ts is not None and ts <= as_of_ts:parsed.append((ts,candle))
+    rows=sorted(parsed,key=lambda x:x[0])
+    # Candle timestamps are observation timestamps. An observation exactly at the
+    # event can already contain event-period movement, so pre-event is strict.
+    before=[(t,c) for t,c in rows if t < event_ts]
     if not before:
-        return {"event":event,"event_timestamp":raw,"status":"NO_PRE_EVENT_MARKET","pre_event":None,
-                "immediate":None,"confirmation":None,"assimilation":None,"outcome_blind":True}
+        return {**base,"status":"NO_PRE_EVENT_MARKET","pre_event":None,
+                "immediate":None,"confirmation":None,"assimilation":None,"horizon_status":{}}
 
-    def at_or_after(minutes:int):
+    tolerance=timedelta(minutes=max_lateness_minutes)
+    horizon_status={}
+    def observed(name:str,minutes:int):
         target=event_ts+timedelta(minutes=minutes)
-        return next((c for t,c in rows if t>=target),None)
+        if target > as_of_ts:
+            horizon_status[name]="NOT_YET_OBSERVABLE";return None
+        found=next(((t,c) for t,c in rows if t>=target and t<=target+tolerance),None)
+        if found is None:
+            horizon_status[name]="NO_OBSERVATION_WITHIN_TOLERANCE";return None
+        horizon_status[name]="OBSERVED";return _snapshot(found[1])
 
-    return {"event":event,"event_timestamp":raw,"status":"READY","outcome_blind":True,
-            "pre_event":_snapshot(before[-1][1]),
-            "immediate":_snapshot(at_or_after(immediate_minutes)),
-            "confirmation":_snapshot(at_or_after(confirmation_minutes)),
-            "assimilation":_snapshot(at_or_after(assimilation_minutes)),
-            "horizons_minutes":{"immediate":immediate_minutes,"confirmation":confirmation_minutes,
-                                "assimilation":assimilation_minutes},
-            "rule":"Snapshots are selected only from frozen market observations at or after fixed causal horizons; no trade outcome is consulted."}
+    immediate=observed("immediate",immediate_minutes)
+    confirmation=observed("confirmation",confirmation_minutes)
+    assimilation=observed("assimilation",assimilation_minutes)
+    status="READY" if all(x is not None for x in (immediate,confirmation,assimilation)) else "PARTIAL"
+    return {**base,"status":status,"pre_event":_snapshot(before[-1][1]),
+            "immediate":immediate,"confirmation":confirmation,"assimilation":assimilation,
+            "horizon_status":horizon_status,
+            "rule":"Only observations visible by as_of and within bounded horizon lateness are eligible; no trade outcome is consulted."}
