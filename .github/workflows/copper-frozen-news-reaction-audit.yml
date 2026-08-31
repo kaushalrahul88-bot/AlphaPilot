@@ -65,11 +65,17 @@ jobs:
           assert sum(report.get("coverage_counts",{}).values())==report["events"], report
           assert sum(report.get("observed_path_counts",{}).values())==report["classified"], report
           assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
+          volume_semantics=report.get("volume_semantics") or {}
+          assert volume_semantics.get("mode")=="SESSION_CUMULATIVE_INFERRED", volume_semantics
+          assert volume_semantics.get("outcome_blind") is True, volume_semantics
           outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
           assert len(outside)==1, report
           assert all("reaction" not in r and "observed_path" not in r and "participation" not in r for r in outside), outside
           classifiable=[r for r in report["records"] if r.get("coverage_status")=="CLASSIFIABLE"]
           assert classifiable and all((r.get("observed_path") or {}).get("observation_status")=="OBSERVED" for r in classifiable), classifiable
+          normalized=[r for r in classifiable if ((r.get("participation") or {}).get("volume") or {}).get("basis")=="NORMALIZED_BAR_VOLUME"]
+          assert normalized, classifiable
+          assert all((((r.get("participation") or {}).get("volume") or {}).get("baseline_method")=="PRIOR_SESSION_MATCHED_CLOCK_SLOT") for r in normalized), normalized
           weekend=[r for r in classifiable if (r.get("event") or {}).get("headline")=="Congo Bans Copper and Cobalt Concentrate Exports"]
           assert len(weekend)==1, weekend
           weekend_window=weekend[0].get("window") or {}
@@ -81,6 +87,7 @@ jobs:
               "events":report["events"],
               "classified":report["classified"],
               "market_coverage":report["market_coverage"],
+              "volume_semantics":report["volume_semantics"],
               "coverage_counts":report["coverage_counts"],
               "observed_path_counts":report["observed_path_counts"],
               "reaction_counts":report["reaction_counts"],
@@ -95,6 +102,7 @@ jobs:
               observed=row.get("observed_path") or {}
               reaction=row.get("reaction") or {}
               participation=row.get("participation") or {}
+              volume=participation.get("volume") or {}
               print(json.dumps({
                   "event":index,
                   "available_at":event.get("available_at") or event.get("published_at"),
@@ -113,6 +121,15 @@ jobs:
                   "reaction_state":reaction.get("reaction_state"),
                   "expected_price_direction":reaction.get("expected_price_direction"),
                   "participation_state":participation.get("participation_state"),
+                  "volume_basis":volume.get("basis"),
+                  "volume_state":volume.get("state"),
+                  "volume_change":volume.get("change"),
+                  "volume_baseline_method":volume.get("baseline_method"),
+                  "volume_baseline_clock_slot":volume.get("baseline_clock_slot"),
+                  "volume_baseline_sessions_used":volume.get("baseline_sessions_used"),
+                  "volume_baseline_dates":volume.get("baseline_dates"),
+                  "volume_baseline_median_bar_volume":volume.get("baseline_median_bar_volume"),
+                  "volume_observed_bar_volume":volume.get("observed_bar_volume"),
               },sort_keys=True))
           PY
 
@@ -127,7 +144,7 @@ jobs:
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "audit_as_of":os.environ["AUDIT_AS_OF"],
-              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
+              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; session-cumulative volume is normalized to bar activity and compared only with prior-session activity at the same clock slot; observed price path remains separate from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
           }
           Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
