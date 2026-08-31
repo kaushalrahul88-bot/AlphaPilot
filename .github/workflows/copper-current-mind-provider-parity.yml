@@ -1,13 +1,7 @@
 name: Copper Current Mind Provider Parity Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/current_mind_provider_parity_audit.py"
-      - "app/commodity_backtest.py"
-      - "app/main.py"
-      - ".github/workflows/copper-current-mind-provider-parity.yml"
+
 permissions:
   contents: read
 jobs:
