@@ -1,0 +1,102 @@
+name: Copper Frozen News Reaction Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copper-frozen-news-reaction-audit.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: copper-frozen-news-reaction-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPANDED_NEWS_RUN_ID: "33357324842"
+      EXPANDED_NEWS_ARTIFACT: "copper-current-mind-expanded-68-news-replay"
+      FROZEN_CANDLES_RUN_ID: "33405492674"
+      FROZEN_CANDLES_ARTIFACT: "copper-frozen-reaction-candles"
+      AUDIT_AS_OF: "2026-08-31T12:00:00+05:30"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen source artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p expanded-source frozen-candles
+          gh run download "$EXPANDED_NEWS_RUN_ID" --name "$EXPANDED_NEWS_ARTIFACT" --dir expanded-source
+          gh run download "$FROZEN_CANDLES_RUN_ID" --name "$FROZEN_CANDLES_ARTIFACT" --dir frozen-candles
+          test -f expanded-source/expanded-news-payload.json
+          test -f frozen-candles/copper-frozen-reaction-candles.json
+
+      - name: Run outcome-blind market-news reaction audit
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python scripts/audit_market_news_reactions.py \
+            --news expanded-source/expanded-news-payload.json \
+            --candles frozen-candles/copper-frozen-reaction-candles.json \
+            --as-of "$AUDIT_AS_OF" \
+            --output copper-market-news-reaction-audit.json
+
+      - name: Verify audit invariants and summarize
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report=json.loads(Path("copper-market-news-reaction-audit.json").read_text())
+          assert report["mode"]=="MARKET_NEWS_REACTION_AUDIT_V1", report
+          assert report["outcome_blind"] is True, report
+          assert report["outcomes_read"] is False, report
+          assert report["events"]==8, report
+          assert sum(report.get("coverage_counts",{}).values())==report["events"], report
+          assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
+          outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
+          assert outside, report
+          assert all("reaction" not in r and "participation" not in r for r in outside), outside
+          summary={
+              "events":report["events"],
+              "classified":report["classified"],
+              "market_coverage":report["market_coverage"],
+              "coverage_counts":report["coverage_counts"],
+              "reaction_counts":report["reaction_counts"],
+              "participation_counts":report["participation_counts"],
+          }
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          manifest={
+              "outcome_blind":True,
+              "network_refetch":False,
+              "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
+              "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
+              "audit_as_of":os.environ["AUDIT_AS_OF"],
+              "rule":"Only the frozen news payload and frozen stored-candle artifact are read; trade outcomes and P&L are not audit inputs.",
+          }
+          Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-frozen-news-reaction-audit
+          path: |
+            copper-market-news-reaction-audit.json
+            copper-market-news-reaction-audit-manifest.json
+          if-no-files-found: error
+          retention-days: 30
