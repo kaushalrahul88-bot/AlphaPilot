@@ -304,11 +304,23 @@ async def copper_current_mind_news_replay_start(request:Request,x_collector_toke
         except Exception as exc:raise HTTPException(status_code=400,detail=f"Invalid frozen news payload: {exc}")
         if not isinstance(frozen_payload,dict) or not isinstance(frozen_payload.get("records"),list):
             raise HTTPException(status_code=400,detail="Frozen news payload must contain records[]")
-        if len(frozen_payload["records"])!=1:
-            raise HTTPException(status_code=400,detail="Controlled frozen-news replay requires exactly one News Intelligence ALLOW record")
-        ni=(frozen_payload["records"][0].get("news_intelligence") or {})
-        if ni.get("disposition")!="ALLOW":
-            raise HTTPException(status_code=400,detail="Frozen news record must carry News Intelligence disposition ALLOW")
+        records=frozen_payload["records"]
+        metadata=frozen_payload.get("metadata") or {}
+        expanded=metadata.get("declared_raw_input_count")==68
+        if expanded:
+            if metadata.get("original_frozen_count")!=54 or metadata.get("independent_unique_count")!=14:
+                raise HTTPException(status_code=400,detail="Expanded news replay metadata must prove 68 = 54 + 14")
+            if metadata.get("point_in_time") is not True or metadata.get("network_refetch") is not False:
+                raise HTTPException(status_code=400,detail="Expanded news replay requires point-in-time=true and network_refetch=false")
+            if not records:
+                raise HTTPException(status_code=400,detail="Expanded news replay requires at least one News Intelligence ALLOW record")
+            if any((r.get("news_intelligence") or {}).get("disposition")!="ALLOW" for r in records):
+                raise HTTPException(status_code=400,detail="Expanded replay records must all carry News Intelligence disposition ALLOW")
+        else:
+            if len(records)!=1:
+                raise HTTPException(status_code=400,detail="Controlled frozen-news replay requires exactly one News Intelligence ALLOW record")
+            if (records[0].get("news_intelligence") or {}).get("disposition")!="ALLOW":
+                raise HTTPException(status_code=400,detail="Frozen news record must carry News Intelligence disposition ALLOW")
     _copper_current_mind_news_replay_job={"status":"RUNNING","result":None,"error":None}
     _copper_current_mind_news_replay_task=asyncio.create_task(asyncio.to_thread(_run_copper_current_mind_news_replay_job_sync,settings.database_url,frozen_payload))
     return {"status":"RUNNING","input_mode":"FROZEN_PREVALIDATED" if frozen_payload is not None else "LIVE_FETCH"}
