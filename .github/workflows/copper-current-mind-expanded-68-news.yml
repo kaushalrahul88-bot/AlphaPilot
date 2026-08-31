@@ -1,19 +1,7 @@
 name: Copper Current Mind Expanded 68 News Replay
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/main.py"
-      - "app/current_mind_copper_replay.py"
-      - "app/copper_news_persistence.py"
-      - "app/commodity_time.py"
-      - "app/copper_news_intelligence.py"
-      - "app/copper_historical_news_integrity_audit.py"
-      - "scripts/reaudit_frozen_copper_news.py"
-      - "scripts/build_expanded_68_news_payload.py"
-      - "research/copper_expanded_raw_historical_news_snapshot_v1.json"
-      - ".github/workflows/copper-current-mind-expanded-68-news.yml"
+
 permissions:
   contents: read
   actions: read

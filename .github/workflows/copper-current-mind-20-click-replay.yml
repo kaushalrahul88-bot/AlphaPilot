@@ -1,16 +1,7 @@
 name: Copper Current Mind 20 Click Replay
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/current_mind_copper_replay.py"
-      - "app/current_mind_click_sampler.py"
-      - "app/current_mind_replay_scorecard.py"
-      - "app/current_mind_integrated_replay.py"
-      - "app/current_mind_thesis_builder.py"
-      - "app/main.py"
-      - ".github/workflows/copper-current-mind-20-click-replay.yml"
+
 permissions:
   contents: read
 jobs:

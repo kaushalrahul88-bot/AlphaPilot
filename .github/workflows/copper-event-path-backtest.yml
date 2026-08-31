@@ -2,12 +2,6 @@ name: Copper Event Path Backtest
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_event_path_backtest.py"
-      - "app/main.py"
-      - ".github/workflows/copper-event-path-backtest.yml"
 
 permissions:
   contents: read

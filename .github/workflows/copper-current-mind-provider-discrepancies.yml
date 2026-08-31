@@ -1,12 +1,7 @@
 name: Copper Current Mind Provider Discrepancy Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/current_mind_provider_discrepancy_audit.py"
-      - "app/main.py"
-      - ".github/workflows/copper-current-mind-provider-discrepancies.yml"
+
 permissions:
   contents: read
 jobs:
