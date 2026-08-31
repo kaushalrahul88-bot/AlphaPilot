@@ -1,11 +1,14 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from app.market_news_reaction_windows import build_reaction_window
 from app.market_news_reaction_engine import assess_market_news_reaction
 
 
 class ReactionWindowTests(unittest.TestCase):
     def candles(self):
-        return [{"timestamp":f"2026-08-07T10:{m:02d}:00+05:30","close":100+m/100,"volume":m}
+        ist=timezone(timedelta(hours=5,minutes=30))
+        start=datetime(2026,8,7,10,0,tzinfo=ist)
+        return [{"timestamp":(start+timedelta(minutes=m)).isoformat(),"close":100+m/100,"volume":m}
                 for m in range(0,61,5)]
 
     def test_selects_fixed_causal_horizons(self):
