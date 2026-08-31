@@ -6,6 +6,13 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/copper-frozen-news-reaction-audit.yml"
+      - "scripts/audit_market_news_reactions.py"
+      - "app/market_news_reaction_engine.py"
+      - "app/market_news_reaction_windows.py"
+      - "app/market_news_observed_path.py"
+      - "app/market_news_participation.py"
+      - "app/commodity_time.py"
+      - "app/mcx_calendar.py"
 
 permissions:
   contents: read
