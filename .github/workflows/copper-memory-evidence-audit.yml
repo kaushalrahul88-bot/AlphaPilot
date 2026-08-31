@@ -1,9 +1,6 @@
 name: Copper Memory Evidence Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["app/copper_memory_evidence_audit.py","app/main.py",".github/workflows/copper-memory-evidence-audit.yml"]
 permissions:
   contents: read
 jobs:

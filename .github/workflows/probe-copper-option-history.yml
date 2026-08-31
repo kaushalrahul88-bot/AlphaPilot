@@ -1,14 +1,7 @@
 name: Probe Copper Option History
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "app/main.py"
-      - "app/commodity_option_history.py"
-      - "tests/test_commodity_option_history.py"
-      - ".github/workflows/probe-copper-option-history.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

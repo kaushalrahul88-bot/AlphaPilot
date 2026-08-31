@@ -1,12 +1,6 @@
 name: Copper Current Mind Data Integrity Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/current_mind_data_integrity_audit.py"
-      - "app/main.py"
-      - ".github/workflows/copper-current-mind-data-integrity.yml"
 permissions:
   contents: read
 jobs:

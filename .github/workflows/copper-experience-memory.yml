@@ -2,12 +2,6 @@ name: Copper Experience Memory Audit
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_experience_memory.py"
-      - "app/main.py"
-      - ".github/workflows/copper-experience-memory.yml"
 
 permissions:
   contents: read

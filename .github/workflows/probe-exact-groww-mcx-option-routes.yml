@@ -1,12 +1,6 @@
 name: Probe Exact Groww MCX Option Routes
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/commodity_option_history.py"
-      - "app/main.py"
-      - ".github/workflows/probe-exact-groww-mcx-option-routes.yml"
 permissions:
   contents: read
 jobs:
