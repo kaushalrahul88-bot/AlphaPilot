@@ -1,4 +1,4 @@
-name: Scheduled Derivatives Universe Collector
+name: Scheduled Live Derivatives State Collector
 on:
   schedule:
     - cron: "5,35 3-18 * * 1-5"
@@ -36,5 +36,7 @@ jobs:
           import json
           d=json.load(open("result.json"))
           assert d.get("status")=="COLLECTED",d
+          assert d.get("historical_candles_persisted") is False,d
+          assert d.get("historical_candle_policy")=="FETCH_FROM_GROWW_ON_DEMAND",d
           print(json.dumps(d,indent=2))
           PY
