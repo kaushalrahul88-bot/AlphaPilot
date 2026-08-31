@@ -20,14 +20,14 @@ def _volume_observation(window:dict):
     if isinstance(activity,dict):
         baseline=_number(activity,"median_bar_volume")
         observed=_number(immediate,"bar_volume")
-        if baseline is None or observed is None or baseline<=0:
-            return None,{"basis":"NORMALIZED_BAR_VOLUME","semantics":activity.get("semantics"),
-                         "baseline_median_bar_volume":baseline,"observed_bar_volume":observed}
-        return (observed-baseline)/baseline,{"basis":"NORMALIZED_BAR_VOLUME",
-                                            "semantics":activity.get("semantics"),
-                                            "baseline_median_bar_volume":baseline,
-                                            "observed_bar_volume":observed,
-                                            "baseline_bars_used":activity.get("baseline_bars_used")}
+        meta={"basis":"NORMALIZED_BAR_VOLUME","semantics":activity.get("semantics"),
+              "baseline_method":activity.get("baseline_method"),
+              "baseline_clock_slot":activity.get("baseline_clock_slot"),
+              "baseline_median_bar_volume":baseline,"observed_bar_volume":observed,
+              "baseline_sessions_used":activity.get("baseline_sessions_used"),
+              "baseline_dates":activity.get("baseline_dates")}
+        if baseline is None or observed is None or baseline<=0:return None,meta
+        return (observed-baseline)/baseline,meta
     # Backward-compatible path for callers that predate explicit volume semantics.
     pre=window.get("pre_event")
     return _change(pre,immediate,"volume"),{"basis":"LEGACY_RAW_SNAPSHOT_CHANGE","semantics":"UNDECLARED"}
@@ -65,5 +65,6 @@ def assess_news_participation(window:dict, reaction:dict, *, volume_expansion:fl
             "rules":["Price reaction and participation are separate observations.",
                      "Missing or ambiguous volume or OI cannot confirm participation.",
                      "Session-cumulative volume must be normalized to bar activity before participation comparison.",
+                     "Intraday volume seasonality is controlled with prior-session activity from the same clock slot.",
                      "Volume/OI confirmation cannot manufacture a directional trade thesis.",
                      "No trade outcome or P&L is consulted."]}
