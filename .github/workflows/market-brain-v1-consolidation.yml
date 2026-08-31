@@ -20,7 +20,7 @@ concurrency:
 jobs:
   consolidate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
@@ -61,31 +61,72 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --max-time 180 \
-            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+
+          fetch_internal() {
+            local label="$1"
+            local url="$2"
+            local output="$3"
+            local attempts="${4:-8}"
+            local code
+            for attempt in $(seq 1 "$attempts"); do
+              rm -f "$output.tmp"
+              code=$(curl --silent --show-error --max-time 300 \
+                -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                -o "$output.tmp" -w "%{http_code}" "$url" || echo 000)
+              echo "$label attempt=$attempt HTTP=$code"
+              if [ "$code" = "200" ] && python -m json.tool "$output.tmp" >/dev/null 2>&1; then
+                mv "$output.tmp" "$output"
+                return 0
+              fi
+              if [ -s "$output.tmp" ]; then head -c 1000 "$output.tmp" || true; echo; fi
+              sleep $((attempt * 8))
+            done
+            echo "$label failed after $attempts attempts"
+            return 1
+          }
+
+          fetch_ablation() {
+            local output="$1"
+            local code
+            for attempt in $(seq 1 12); do
+              rm -f "$output.tmp"
+              code=$(curl --silent --show-error --max-time 180 \
+                -H 'Content-Type: application/json' -X POST \
+                -o "$output.tmp" -w "%{http_code}" \
+                "$API_BASE/v1/research/copper/context-ablation-v1" \
+                -d '{"days":3650,"sample_every_bars":3,"round_trip_cost_bps":4.0}' || echo 000)
+              echo "context-ablation attempt=$attempt HTTP=$code"
+              if [ "$code" = "200" ] && python -m json.tool "$output.tmp" >/dev/null 2>&1; then
+                mv "$output.tmp" "$output"
+                return 0
+              fi
+              if [ -s "$output.tmp" ]; then head -c 1000 "$output.tmp" || true; echo; fi
+              sleep $((attempt * 8))
+            done
+            echo "context-ablation failed after retries"
+            return 1
+          }
+
+          fetch_internal "data-integrity" \
             "$API_BASE/v1/internal/copper/current-mind-data-integrity" \
-            -o data-integrity.json
+            data-integrity.json
 
-          curl --fail --silent --show-error --max-time 300 \
-            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+          fetch_internal "direction-audit" \
             "$API_BASE/v1/internal/copper/market-brain-direction-audit?sample_every_bars=3" \
-            -o direction-audit.json
+            direction-audit.json
 
-          curl --fail --silent --show-error --max-time 300 \
-            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+          fetch_internal "error-attribution" \
             "$API_BASE/v1/internal/copper/market-brain-error-attribution?sample_every_bars=3" \
-            -o error-attribution.json
+            error-attribution.json
 
-          curl --fail --silent --show-error --max-time 300 \
-            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+          # Experience/Memory is the heaviest read and can intermittently exceed Render's
+          # upstream response window. Retry the exact frozen request rather than changing
+          # sample frequency or analogue_k after seeing a failure.
+          fetch_internal "experience-memory" \
             "$API_BASE/v1/internal/copper/experience-memory?sample_every_bars=3&analogue_k=75" \
-            -o experience-memory.json
+            experience-memory.json 10
 
-          curl --fail --silent --show-error --max-time 300 \
-            -H 'Content-Type: application/json' -X POST \
-            "$API_BASE/v1/research/copper/context-ablation-v1" \
-            -d '{"days":3650,"sample_every_bars":3,"round_trip_cost_bps":4.0}' \
-            -o context-ablation.json
+          fetch_ablation context-ablation.json
 
       - name: Build consolidation scorecard
         shell: bash
