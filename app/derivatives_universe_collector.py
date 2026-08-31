@@ -171,6 +171,20 @@ def _records(contract,rows,collected_at):
    "open_interest":Decimal(str(row[6])) if len(row)>6 and row[6] is not None else None,"collected_at":collected_at})
  return out
 
+def _http_status(exc:Exception):
+ response=getattr(exc,"response",None)
+ status=getattr(response,"status_code",None)
+ try:return int(status) if status is not None else None
+ except (TypeError,ValueError):return None
+
+def _option_chain_result(symbol:str,exc:Exception):
+ status=_http_status(exc); error=str(exc)[:180]
+ if status==404:
+  return {"symbol":symbol,"ok":False,"classification":"UNSUPPORTED_BY_PROVIDER","http_status":404,
+          "retryable":False,"error":error}
+ return {"symbol":symbol,"ok":False,"classification":"COLLECTION_FAILURE","http_status":status,
+         "retryable":bool(status==429 or (status is not None and status>=500)),"error":error}
+
 async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,shards:int=4,now:datetime|None=None,
                                       offset:int=0,limit:int=4):
  now=now or datetime.now(IST);await store.initialize();u=await discover_active_derivatives_universe(now)
@@ -189,9 +203,11 @@ async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,
    await store.upsert_chain(symbol,str(expiry)[:10],now,chain)
    chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"expiry_source":expiry_source,"ok":True})
   except Exception as exc:
-   chain_stats.append({"symbol":symbol,"ok":False,"error":str(exc)[:180]})
- successes=sum(x["ok"] for x in chain_stats); failures=len(chain_stats)-successes
- status="COLLECTED" if failures==0 else "PARTIAL" if successes else "FAILED"
+   chain_stats.append(_option_chain_result(symbol,exc))
+ successes=sum(bool(x.get("ok")) for x in chain_stats)
+ unsupported=[x for x in chain_stats if x.get("classification")=="UNSUPPORTED_BY_PROVIDER"]
+ failures=sum(x.get("classification")=="COLLECTION_FAILURE" for x in chain_stats)
+ status="COLLECTED" if failures==0 else "PARTIAL" if successes or unsupported else "FAILED"
  return {"status":status,"collected_at":now.isoformat(),"shard":shard,"shards":shards,
   "universe_counts":u["counts"],"shard_underlyings":len(symbols),"offset":offset,"limit":limit,
   "batch_size":len(batch),"next_offset":offset+len(batch),"done":offset+len(batch)>=len(symbols),
@@ -199,4 +215,7 @@ async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,
   "historical_candle_policy":"FETCH_FROM_GROWW_ON_DEMAND",
   "live_ephemeral_policy":"PERSIST_POINT_IN_TIME_STATE_NOT_RELIABLY_RECONSTRUCTIBLE",
   "option_chains_attempted":len(chain_stats),"option_chain_success":successes,
-  "option_chain_failed":failures,"results":chain_stats}
+  "option_chain_unsupported":len(unsupported),"option_chain_failed":failures,
+  "unsupported_underlyings":[{"underlying":x["symbol"],"http_status":x.get("http_status"),
+                              "reason":x.get("classification")} for x in unsupported],
+  "results":chain_stats}
