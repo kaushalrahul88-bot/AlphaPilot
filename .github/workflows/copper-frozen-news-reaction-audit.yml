@@ -60,14 +60,23 @@ jobs:
           assert report["outcome_blind"] is True, report
           assert report["outcomes_read"] is False, report
           assert report["events"]==8, report
+          assert report["classified"]==7, report
+          assert report.get("coverage_counts")=={"CLASSIFIABLE":7,"OUTSIDE_CANDLE_COVERAGE":1}, report
           assert sum(report.get("coverage_counts",{}).values())==report["events"], report
           assert sum(report.get("observed_path_counts",{}).values())==report["classified"], report
           assert report.get("market_coverage",{}).get("last_timestamp")=="2026-08-28T23:00:00+05:30", report
           outside=[r for r in report["records"] if r.get("coverage_status")=="OUTSIDE_CANDLE_COVERAGE"]
-          assert outside, report
+          assert len(outside)==1, report
           assert all("reaction" not in r and "observed_path" not in r and "participation" not in r for r in outside), outside
           classifiable=[r for r in report["records"] if r.get("coverage_status")=="CLASSIFIABLE"]
           assert classifiable and all((r.get("observed_path") or {}).get("observation_status")=="OBSERVED" for r in classifiable), classifiable
+          weekend=[r for r in classifiable if (r.get("event") or {}).get("headline")=="Congo Bans Copper and Cobalt Concentrate Exports"]
+          assert len(weekend)==1, weekend
+          weekend_window=weekend[0].get("window") or {}
+          assert weekend_window.get("event_timestamp")=="2026-08-08T04:15:00+00:00", weekend_window
+          assert weekend_window.get("reaction_anchor_timestamp")=="2026-08-10T09:00:00+05:30", weekend_window
+          assert weekend_window.get("reaction_anchor_shift_minutes",0)>0, weekend_window
+          assert weekend_window.get("horizon_status")=={"immediate":"OBSERVED","confirmation":"OBSERVED","assimilation":"OBSERVED"}, weekend_window
           summary={
               "events":report["events"],
               "classified":report["classified"],
@@ -82,12 +91,15 @@ jobs:
           print("EVENT_ROWS")
           for index,row in enumerate(report["records"],1):
               event=row.get("event") or {}
+              window=row.get("window") or {}
               observed=row.get("observed_path") or {}
               reaction=row.get("reaction") or {}
               participation=row.get("participation") or {}
               print(json.dumps({
                   "event":index,
                   "available_at":event.get("available_at") or event.get("published_at"),
+                  "reaction_anchor_timestamp":window.get("reaction_anchor_timestamp"),
+                  "reaction_anchor_shift_minutes":window.get("reaction_anchor_shift_minutes"),
                   "source":event.get("source"),
                   "headline":event.get("headline"),
                   "stance":event.get("stance"),
@@ -115,7 +127,7 @@ jobs:
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "audit_as_of":os.environ["AUDIT_AS_OF"],
-              "rule":"Only the frozen news payload and frozen stored-candle artifact are read; observed price path is separated from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
+              "rule":"Only frozen news and stored candles are read; closed-market Copper news anchors reaction horizons to the next scheduled MCX metals open; observed price path remains separate from directional headline interpretation; trade outcomes and P&L are not audit inputs.",
           }
           Path("copper-market-news-reaction-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
