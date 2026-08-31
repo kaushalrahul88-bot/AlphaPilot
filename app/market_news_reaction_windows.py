@@ -26,13 +26,7 @@ def _close(row:dict):
 
 
 def infer_volume_semantics(candles:list[dict],*,min_sessions:int=3,min_points_per_session:int=12)->dict:
-    """Infer whether raw volume behaves like a session-cumulative field.
-
-    The inference is market-data-only and outcome-blind. It requires several
-    sufficiently populated sessions whose raw volume never decreases intraday.
-    Anything less remains UNKNOWN so participation cannot be manufactured from an
-    ambiguous volume field.
-    """
+    """Infer whether raw volume behaves like a session-cumulative field."""
     if min_sessions < 1 or min_points_per_session < 2:
         raise ValueError("volume inference requires min_sessions>=1 and min_points_per_session>=2")
     grouped=defaultdict(list)
@@ -74,21 +68,25 @@ def _rows_with_bar_volume(rows:list[tuple],volume_semantics:str)->list[tuple]:
     return enriched
 
 
+def _empty_volume_activity(volume_semantics:str,requested:int,minimum:int)->dict:
+    return {"semantics":volume_semantics,"baseline_method":"PRIOR_SESSION_MATCHED_CLOCK_SLOT",
+            "baseline_sessions_requested":requested,"baseline_min_sessions":minimum,
+            "baseline_sessions_used":0,"baseline_clock_slot":None,"median_bar_volume":None}
+
+
 def build_reaction_window(event:dict,candles:list[dict],*,as_of:str,
                           immediate_minutes:int=5,confirmation_minutes:int=30,
                           assimilation_minutes:int=60,max_lateness_minutes:int=5,
                           reaction_anchor:str|None=None,volume_semantics:str="UNKNOWN",
-                          volume_baseline_bars:int=12)->dict:
+                          volume_baseline_sessions:int=5,volume_baseline_min_sessions:int=3)->dict:
     """Select strictly point-in-time market snapshots around an event.
 
-    ``as_of`` is mandatory: observations later than it are invisible. A requested
-    horizon is also unavailable until its target time has passed. ``reaction_anchor``
-    may move horizon timing forward to a known market-session open for news released
-    while the market was closed; it can never precede the news event. The next candle
-    may satisfy a horizon only within ``max_lateness_minutes`` so unmodelled session
-    gaps cannot masquerade as a +5m/+30m reaction. When raw volume is explicitly
-    identified as session-cumulative, selected snapshots carry derived bar volume and
-    a pre-event median bar-volume baseline. Trade outcomes are never read.
+    Closed-market events may anchor horizons to the next market open. If raw volume
+    is session-cumulative, it is converted to per-bar activity. Immediate activity is
+    compared only with the same clock slot from prior sessions, avoiding the strong
+    intraday seasonality distortion that occurs when an opening bar is compared with
+    the previous session's closing hour. All baseline observations must predate the
+    news event. Trade outcomes are never read.
     """
     raw=event.get("available_at") or event.get("published_at")
     if not raw:raise ValueError("event requires available_at or published_at")
@@ -96,11 +94,14 @@ def build_reaction_window(event:dict,candles:list[dict],*,as_of:str,
     if not (0 < immediate_minutes <= confirmation_minutes <= assimilation_minutes):
         raise ValueError("reaction horizons must satisfy 0 < immediate <= confirmation <= assimilation")
     if max_lateness_minutes < 0:raise ValueError("max_lateness_minutes must be non-negative")
-    if volume_baseline_bars < 1:raise ValueError("volume_baseline_bars must be positive")
+    if volume_baseline_sessions < 1:raise ValueError("volume_baseline_sessions must be positive")
+    if not (1 <= volume_baseline_min_sessions <= volume_baseline_sessions):
+        raise ValueError("volume baseline requires 1 <= minimum <= requested sessions")
 
     event_ts=parse_ist_timestamp(raw);as_of_ts=parse_ist_timestamp(as_of)
     anchor_ts=parse_ist_timestamp(reaction_anchor) if reaction_anchor else event_ts
     if anchor_ts < event_ts:raise ValueError("reaction_anchor cannot precede event timestamp")
+    empty_activity=_empty_volume_activity(volume_semantics,volume_baseline_sessions,volume_baseline_min_sessions)
     base={"event":event,"event_timestamp":raw,"as_of":as_of,"outcome_blind":True,
           "reaction_anchor_timestamp":anchor_ts.isoformat(),
           "reaction_anchor_shift_minutes":(anchor_ts-event_ts).total_seconds()/60.0,
@@ -109,30 +110,18 @@ def build_reaction_window(event:dict,candles:list[dict],*,as_of:str,
     if as_of_ts < event_ts:
         return {**base,"status":"EVENT_NOT_YET_AVAILABLE","pre_event":None,
                 "immediate":None,"confirmation":None,"assimilation":None,"horizon_status":{},
-                "volume_activity":{"semantics":volume_semantics,"baseline_bars_requested":volume_baseline_bars,
-                                   "baseline_bars_used":0,"median_bar_volume":None}}
+                "volume_activity":empty_activity}
 
     parsed=[]
     for candle in candles:
         ts=_ts(candle)
         if ts is not None and ts <= as_of_ts:parsed.append((ts,candle))
     rows=_rows_with_bar_volume(sorted(parsed,key=lambda x:x[0]),volume_semantics)
-    # Candle timestamps are observation timestamps. An observation exactly at the
-    # event can already contain event-period movement, so pre-event is strict to the
-    # news timestamp even when reaction horizons are anchored to a later market open.
     before=[row for row in rows if row[0] < event_ts]
     if not before:
         return {**base,"status":"NO_PRE_EVENT_MARKET","pre_event":None,
                 "immediate":None,"confirmation":None,"assimilation":None,"horizon_status":{},
-                "volume_activity":{"semantics":volume_semantics,"baseline_bars_requested":volume_baseline_bars,
-                                   "baseline_bars_used":0,"median_bar_volume":None}}
-
-    pre_day=before[-1][0].date()
-    baseline_values=[bar_volume for ts,_,bar_volume in before if ts.date()==pre_day and bar_volume is not None]
-    baseline_values=baseline_values[-volume_baseline_bars:]
-    volume_activity={"semantics":volume_semantics,"baseline_bars_requested":volume_baseline_bars,
-                     "baseline_bars_used":len(baseline_values),
-                     "median_bar_volume":median(baseline_values) if baseline_values else None}
+                "volume_activity":empty_activity}
 
     tolerance=timedelta(minutes=max_lateness_minutes)
     horizon_status={}
@@ -148,9 +137,23 @@ def build_reaction_window(event:dict,candles:list[dict],*,as_of:str,
     immediate=observed("immediate",immediate_minutes)
     confirmation=observed("confirmation",confirmation_minutes)
     assimilation=observed("assimilation",assimilation_minutes)
+
+    volume_activity=dict(empty_activity)
+    if immediate is not None and immediate.get("bar_volume") is not None:
+        immediate_ts=parse_ist_timestamp(immediate["timestamp"])
+        clock_slot=immediate_ts.time()
+        candidates=[(ts,bar_volume) for ts,_,bar_volume in before
+                    if bar_volume is not None and ts.time()==clock_slot]
+        candidates=candidates[-volume_baseline_sessions:]
+        values=[value for _,value in candidates]
+        volume_activity.update({"baseline_sessions_used":len(values),
+                                "baseline_clock_slot":clock_slot.isoformat(),
+                                "baseline_dates":[ts.date().isoformat() for ts,_ in candidates],
+                                "median_bar_volume":median(values) if len(values)>=volume_baseline_min_sessions else None})
+
     status="READY" if all(x is not None for x in (immediate,confirmation,assimilation)) else "PARTIAL"
     return {**base,"status":status,
             "pre_event":_snapshot(before[-1][1],bar_volume=before[-1][2],volume_semantics=volume_semantics),
             "immediate":immediate,"confirmation":confirmation,"assimilation":assimilation,
             "horizon_status":horizon_status,"volume_activity":volume_activity,
-            "rule":"Only observations visible by as_of and within bounded horizon lateness are eligible; closed-market events may use an explicit later session anchor; cumulative volume may be converted to bar volume only when its semantics are explicitly inferred; no trade outcome is consulted."}
+            "rule":"Only observations visible by as_of and within bounded horizon lateness are eligible; closed-market events may use an explicit later session anchor; cumulative volume is normalized only after explicit semantics inference and compared with prior-session activity at the same clock slot; no trade outcome is consulted."}
