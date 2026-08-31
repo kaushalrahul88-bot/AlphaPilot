@@ -2,12 +2,6 @@ name: Copper Market Brain Error Attribution
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/copper_market_brain_error_attribution.py"
-      - "app/main.py"
-      - ".github/workflows/copper-market-brain-error-attribution.yml"
 
 permissions:
   contents: read
