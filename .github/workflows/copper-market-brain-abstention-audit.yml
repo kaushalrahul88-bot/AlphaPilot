@@ -1,0 +1,134 @@
+name: Copper Market Brain Abstention Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copper-market-brain-abstention-audit.yml"
+      - "app/copper_market_brain_abstention_audit.py"
+      - "scripts/audit_copper_market_brain_abstention.py"
+      - "tests/test_copper_market_brain_abstention_audit.py"
+      - "app/copper_market_brain_direction_audit.py"
+      - "app/copper_research_brain.py"
+      - "app/mcx_calendar.py"
+      - "app/commodity_time.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: copper-market-brain-abstention-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FROZEN_CANDLES_RUN_ID: "33405492674"
+      FROZEN_CANDLES_ARTIFACT: "copper-frozen-reaction-candles"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download frozen Copper candles
+        run: |
+          set -euo pipefail
+          mkdir -p frozen-candles
+          gh run download "$FROZEN_CANDLES_RUN_ID" --name "$FROZEN_CANDLES_ARTIFACT" --dir frozen-candles
+          test -f frozen-candles/copper-frozen-reaction-candles.json
+
+      - name: Run point-in-time abstention audit
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python scripts/audit_copper_market_brain_abstention.py \
+            --candles frozen-candles/copper-frozen-reaction-candles.json \
+            --sample-every-bars 3 \
+            --output copper-market-brain-abstention-audit.json
+
+      - name: Verify abstention invariants and summarize
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report=json.loads(Path("copper-market-brain-abstention-audit.json").read_text())
+          assert report["mode"]=="COPPER_MARKET_BRAIN_ABSTENTION_AUDIT_V1",report
+          assert report["research_only"] is True,report
+          assert report["descriptive_only"] is True,report
+          assert report["production_rules_changed"] is False,report
+          assert report["strategy_rules_changed"] is False,report
+          assert report["trade_instrument"]=="OPTIONS",report
+          assert report["underlying_reference_role"]=="REFERENCE_ONLY",report
+          assert report["futures_pnl_calculated"] is False,report
+          assert report["synthetic_option_premium_used"] is False,report
+          assert report["same_session_only"] is True,report
+          assert report["candidate_brain"]=="B",report
+          assert report["primary_horizon_minutes"]==60,report
+          assert report["primary_large_move_threshold_pct"]==0.30,report
+          assert report["move_thresholds_pct"]==[0.1,0.2,0.3],report
+          assert report["gap_attribution_status"]=="NOT_RUN",report
+          assert report["frozen_source"]["mode"]=="FROZEN_MARKET_CANDLES_V1",report
+          assert report["frozen_source"]["trading_symbol"]=="COPPER31AUG26FUT",report
+          assert report["frozen_source"]["network_refetch"] is False,report
+          assert report["frozen_source"]["point_in_time"] is True,report
+          assert report["no_trade_observations"]>0,report
+          assert report["primary_score_days"],report
+          assert "2026-08-27" in report["excluded_partial_days"],report
+          assert "2026-08-28" in report["excluded_partial_days"],report
+          for brain in ("A","B"):
+              for horizon in ("30","60","120"):
+                  row=report["brains"][brain][horizon]
+                  assert row["no_trade_observations"]>0,(brain,horizon,row)
+                  assert set(row["path_excursion_thresholds"])=={"ge_0_10_pct","ge_0_20_pct","ge_0_30_pct"},row
+                  assert set(row["close_move_thresholds"])=={"ge_0_10_pct","ge_0_20_pct","ge_0_30_pct"},row
+          summary={
+              "candidate_brain":report["candidate_brain"],
+              "primary_horizon_minutes":report["primary_horizon_minutes"],
+              "no_trade_observations":report["no_trade_observations"],
+              "no_trade_followed_by_large_move":report["no_trade_followed_by_large_move"],
+              "no_trade_opportunity_cost":report["no_trade_opportunity_cost"],
+              "brain_a_60":{k:v for k,v in report["brains"]["A"]["60"].items() if k not in {"latest_observations"}},
+              "brain_b_60":{k:v for k,v in report["brains"]["B"]["60"].items() if k not in {"latest_observations"}},
+          }
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path("copper-market-brain-abstention-audit.json").read_text())
+          manifest={
+              "mode":"COPPER_MARKET_BRAIN_ABSTENTION_AUDIT_MANIFEST_V1",
+              "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"],"sha256":report["frozen_source"].get("candles_sha256")},
+              "sample_every_bars":report["sample_every_bars"],
+              "horizons_minutes":[30,60,120],
+              "move_thresholds_pct":report["move_thresholds_pct"],
+              "primary_large_move_threshold_pct":report["primary_large_move_threshold_pct"],
+              "network_refetch":False,
+              "futures_pnl_calculated":False,
+              "synthetic_option_premium_used":False,
+              "rule":"Measure same-session underlying motion after frozen Brain A/B NO_TRADE decisions. Large moves are forensic learning candidates, not ex-post trade signals or P&L.",
+          }
+          Path("copper-market-brain-abstention-audit-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-market-brain-abstention-audit
+          path: |
+            copper-market-brain-abstention-audit.json
+            copper-market-brain-abstention-audit-manifest.json
+          if-no-files-found: error
+          retention-days: 30
