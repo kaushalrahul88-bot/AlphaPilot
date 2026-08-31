@@ -166,6 +166,17 @@ class CommodityOptionHistoryTests(unittest.TestCase):
         self.assertEqual(normalized["underlying"], "COPPER")
         self.assertEqual(normalized["lot_size"], 2500)
 
+    def test_unfiltered_master_accepts_all_active_mcx_option_underlyings(self):
+        row = {
+            "exchange": "MCX", "segment": "COMMODITY", "underlying_symbol": "GOLD",
+            "instrument_type": "PE", "expiry_date": "2026-09-30", "strike_price": "100000",
+            "groww_symbol": "MCX-GOLD-30Sep26-100000-PE", "trading_symbol": "GOLD30SEP26100000PE",
+            "lot_size": "100", "tick_size": "100.0", "buy_allowed": "1",
+        }
+        normalized = _option_row(row, set())
+        self.assertEqual(normalized["underlying"], "GOLD")
+        self.assertEqual(normalized["option_type"], "PE")
+
     def test_affordability_uses_whole_lots_under_15000(self):
         affordable = option_lot_affordability(2.0, 2500, 15000)
         self.assertTrue(affordable["affordable"])

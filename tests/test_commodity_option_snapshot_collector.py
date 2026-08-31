@@ -7,6 +7,7 @@ from app.commodity_option_snapshot_collector import (
     _bucket_5m,
     _normalize_quote_body,
     collect_copper_option_snapshots,
+    collect_mcx_option_snapshot_batch,
 )
 
 
@@ -332,3 +333,100 @@ def test_missing_stored_underlying_does_not_block_live_snapshot_collection():
     assert result["underlying_candle_health"]["status"]=="MISSING"
     assert result["underlying_candle_health"]["pass"] is False
     assert result["underlying_price_source"]=="LIVE_MCX_FUTURE_QUOTE"
+
+
+def test_bounded_mcx_batch_collects_non_copper_options_without_candles():
+    snapshots=SnapshotStore()
+    future={
+        "underlying_symbol":"GOLD",
+        "exchange":"MCX",
+        "segment":"COMMODITY",
+        "instrument_type":"FUT",
+        "expiry_date":"2026-09-30",
+        "trading_symbol":"GOLD30SEP26FUT",
+        "groww_symbol":"MCX-GOLD-30Sep26-FUT",
+    }
+    master=[]
+    for option_type in ("CE","PE"):
+        for strike in (99800,100000,100200):
+            master.append({
+                "underlying":"GOLD",
+                "exchange":"MCX",
+                "segment":"COMMODITY",
+                "option_type":option_type,
+                "expiry":"2026-09-30",
+                "strike":float(strike),
+                "groww_symbol":f"MCX-GOLD-30Sep26-{strike}-{option_type}",
+                "trading_symbol":f"GOLD30SEP26{strike}{option_type}",
+                "lot_size":100,
+                "buy_allowed":True,
+            })
+
+    async def quote(_provider,selected):
+        if str(selected.get("trading_symbol")).endswith("FUT"):
+            return {"last_price":100050.0,"payload":{"last_price":100050.0}}
+        return {
+            "last_price":125.0,
+            "volume":100,
+            "open_interest":500,
+            "bid_price":124.5,
+            "ask_price":125.5,
+            "payload":{"last_price":125.0},
+        }
+
+    async def run():
+        with patch(
+            "app.commodity_option_snapshot_collector.discover_active_derivatives_universe",
+            new=AsyncMock(return_value={
+                "mcx_futures":[future],
+                "mcx_option_underlyings":["GOLD"],
+                "counts":{"mcx_option_underlyings":1},
+            }),
+        ), patch(
+            "app.commodity_option_snapshot_collector._current_all_master",
+            new=AsyncMock(return_value=master),
+        ), patch(
+            "app.commodity_option_snapshot_collector.fetch_mcx_option_live_quote",
+            new=AsyncMock(side_effect=quote),
+        ):
+            return await collect_mcx_option_snapshot_batch(
+                object(),
+                snapshots,
+                now=datetime(2026,8,31,10,2,tzinfo=IST),
+                offset=0,
+                limit=1,
+                strikes_per_type=3,
+            )
+
+    result=asyncio.run(run())
+    assert result["status"]=="COLLECTED"
+    assert result["universe_underlyings"]==1
+    assert result["done"] is True
+    assert result["snapshots"]==6
+    assert result["underlyings_collected"]==1
+    assert result["historical_candles_persisted"] is False
+    assert result["historical_candle_policy"]=="FETCH_FROM_GROWW_ON_DEMAND"
+    assert all(row["underlying_symbol"]=="GOLD" for row in snapshots.records)
+    assert all("open" not in row and "high" not in row and "low" not in row for row in snapshots.records)
+
+
+def test_bounded_mcx_batch_market_closed_skips_discovery_and_storage():
+    snapshots=SnapshotStore()
+
+    async def run():
+        with patch(
+            "app.commodity_option_snapshot_collector.discover_active_derivatives_universe",
+            new=AsyncMock(),
+        ) as discover:
+            result=await collect_mcx_option_snapshot_batch(
+                object(),
+                snapshots,
+                now=datetime(2026,8,29,12,0,tzinfo=IST),
+            )
+            return result,discover
+
+    result,discover=asyncio.run(run())
+    assert result["status"]=="MARKET_CLOSED"
+    assert result["snapshots"]==0
+    assert snapshots.initialized is False
+    discover.assert_not_awaited()

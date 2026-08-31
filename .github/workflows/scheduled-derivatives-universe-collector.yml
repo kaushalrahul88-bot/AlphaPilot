@@ -32,7 +32,15 @@ jobs:
               curl --silent --max-time 15 "$API_BASE/health" >/dev/null || true
               CODE=$(curl --silent --show-error --max-time 120 -w "%{http_code}"                 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST                 "$API_BASE/v1/internal/derivatives-universe/collect?shard=${{ matrix.shard }}&shards=4&offset=$OFFSET&limit=4"                 -o result.json || echo 000)
               echo "shard=${{ matrix.shard }} offset=$OFFSET attempt=$attempt HTTP=$CODE"
-              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              if [ "$CODE" = "200" ] && python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d.get("status")=="COLLECTED",d
+          assert int(d.get("option_chain_failed") or 0)==0,d
+          assert int(d.get("option_chain_success") or 0)==int(d.get("batch_size") or 0),d
+          PY
+              then SUCCESS=1; break; fi
+              cat result.json 2>/dev/null || true
               sleep $((attempt*10))
             done
             [ "$SUCCESS" = "1" ] || { cat result.json 2>/dev/null || true; exit 1; }
@@ -42,6 +50,8 @@ jobs:
           assert d.get("status")=="COLLECTED",d
           assert d.get("historical_candles_persisted") is False,d
           assert d.get("historical_candle_policy")=="FETCH_FROM_GROWW_ON_DEMAND",d
+          assert int(d.get("option_chain_failed") or 0)==0,d
+          assert int(d.get("option_chain_success") or 0)==int(d.get("batch_size") or 0),d
           print(json.dumps({k:d.get(k) for k in ("shard","shard_underlyings","offset","batch_size","next_offset","done","option_chain_success","option_chain_failed")},indent=2))
           PY
             DONE=$(python -c 'import json;print("1" if json.load(open("result.json")).get("done") else "0")')

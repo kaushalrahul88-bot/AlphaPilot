@@ -44,7 +44,7 @@ from .commodity_live import run_commodity_live_scan
 from .commodity_next_session import run_commodity_next_session
 from .commodity_option_history import probe_exact_mcx_option_routes, probe_mcx_option_history, scan_mcx_option_history_band
 from .commodity_option_candle_collector import PostgresOptionCandleStore, collect_copper_option_candles
-from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots
+from .commodity_option_snapshot_collector import PostgresOptionSnapshotStore, collect_copper_option_snapshots, collect_mcx_option_snapshot_batch
 from .commodities import commodity_candles, commodity_probe, commodity_quote, resolve_nearest_mcx_future
 from .commodity_scanner import commodity_mtf_scan
 from .edge_discovery import run_edge_discovery
@@ -516,6 +516,29 @@ async def commodity_option_snapshots_collect(
         )
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
     except Exception as exc:_safe_upstream_error("Copper option snapshot collection",exc)
+
+@app.post("/v1/internal/mcx-options/snapshot-collect")
+async def mcx_option_snapshots_collect(
+    offset:int=0,
+    limit:int=1,
+    strikes_per_type:int=3,
+    x_collector_token:str|None=Header(default=None),
+):
+    _collector_store(x_collector_token)
+    if offset<0 or limit<1 or limit>4:
+        raise HTTPException(status_code=400,detail="Invalid offset/limit")
+    if strikes_per_type<3 or strikes_per_type>8:
+        raise HTTPException(status_code=400,detail="strikes_per_type must be between 3 and 8")
+    try:
+        return await collect_mcx_option_snapshot_batch(
+            get_provider(settings),
+            PostgresOptionSnapshotStore(settings.database_url),
+            offset=offset,
+            limit=limit,
+            strikes_per_type=strikes_per_type,
+        )
+    except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
+    except Exception as exc:_safe_upstream_error("bounded MCX option snapshot collection",exc)
 
 @app.get("/v1/internal/commodity-options/snapshot-status")
 async def commodity_option_snapshots_status(

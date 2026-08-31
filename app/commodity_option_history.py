@@ -52,7 +52,7 @@ def _option_row(row, wanted):
         return None
     if str(row.get("segment") or "").upper() != "COMMODITY":
         return None
-    if symbol not in SUPPORTED or (wanted and symbol not in wanted):
+    if not symbol or (wanted and symbol not in wanted):
         return None
     if option_type not in {"CE", "PE"}:
         return None

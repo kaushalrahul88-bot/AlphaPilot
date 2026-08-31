@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, time as dt_time
+from datetime import date, datetime, time as dt_time
 from decimal import Decimal
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -12,6 +12,7 @@ import httpx
 
 from .commodity_option_history import fetch_mcx_option_master, ranked_mcx_option_contracts
 from .commodities import commodity_quote, mcx_session_status
+from .derivatives_universe_collector import discover_active_derivatives_universe
 from .options_only_policy import assert_option_contract, mark_underlying_reference, options_only_policy
 
 
@@ -24,6 +25,7 @@ MAX_UNDERLYING_AGE_MINUTES = 45
 MASTER_CACHE_SECONDS = 30 * 60
 
 _master_cache: dict = {"loaded_at": 0.0, "rows": None}
+_all_master_cache: dict = {"loaded_at": 0.0, "trade_date": None, "rows": None}
 
 
 SCHEMA_SQL = """
@@ -286,6 +288,23 @@ async def _current_master():
     return rows
 
 
+async def _current_all_master():
+    now = time.monotonic()
+    trade_date = datetime.now(IST).date()
+    rows = _all_master_cache.get("rows")
+    if (
+        rows is not None
+        and _all_master_cache.get("trade_date") == trade_date
+        and now - float(_all_master_cache.get("loaded_at") or 0) < MASTER_CACHE_SECONDS
+    ):
+        return rows
+    rows = await fetch_mcx_option_master()
+    _all_master_cache["loaded_at"] = now
+    _all_master_cache["trade_date"] = trade_date
+    _all_master_cache["rows"] = rows
+    return rows
+
+
 def _session_window(day):
     return (
         datetime.combine(day, dt_time(9, 0), tzinfo=IST),
@@ -293,10 +312,10 @@ def _session_window(day):
     )
 
 
-def _snapshot_record(contract, quote, observed_at, underlying_price):
+def _snapshot_record(contract, quote, observed_at, underlying_price, underlying_symbol="COPPER"):
     return {
         "provider": PROVIDER,
-        "underlying_symbol": "COPPER",
+        "underlying_symbol": str(underlying_symbol).upper(),
         "exchange": contract.get("exchange") or "MCX",
         "segment": contract.get("segment") or "COMMODITY",
         "trading_symbol": str(contract.get("trading_symbol") or ""),
@@ -315,6 +334,243 @@ def _snapshot_record(contract, quote, observed_at, underlying_price):
         "ask_price": _decimal(quote.get("ask_price")),
         "raw_payload": json.dumps(quote.get("payload") or {}, separators=(",", ":"), default=str),
         "collected_at": observed_at,
+    }
+
+
+def _rank_active_mcx_options(master_rows, symbol, trade_date, underlying_price, option_type, max_strikes):
+    when = trade_date if isinstance(trade_date, date) else date.fromisoformat(str(trade_date)[:10])
+    candidates = []
+    for row in master_rows or []:
+        if str(row.get("underlying") or "").upper() != symbol:
+            continue
+        if str(row.get("option_type") or "").upper() != option_type:
+            continue
+        if row.get("buy_allowed") is False:
+            continue
+        try:
+            expiry = date.fromisoformat(str(row.get("expiry") or "")[:10])
+            strike = float(row.get("strike"))
+        except (TypeError, ValueError):
+            continue
+        if expiry < when or strike <= 0:
+            continue
+        candidates.append((expiry, abs(strike - underlying_price), strike, row))
+    if not candidates:
+        return []
+    nearest_expiry = min(item[0] for item in candidates)
+    nearest = sorted(
+        (item for item in candidates if item[0] == nearest_expiry),
+        key=lambda item: (item[1], item[2]),
+    )[:max_strikes]
+    return [
+        {
+            **row,
+            "expiry_dte": (expiry - when).days,
+            "strike_selection_rank": rank,
+            "distance_from_underlying": round(distance, 4),
+            "research_only": True,
+        }
+        for rank, (expiry, distance, _strike, row) in enumerate(nearest, start=1)
+    ]
+
+
+async def _collect_live_contract_records(
+    provider,
+    contracts,
+    observed_at,
+    underlying_price,
+    underlying_symbol,
+    concurrency=3,
+):
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+
+    async def fetch(contract):
+        async with semaphore:
+            try:
+                quote = await fetch_mcx_option_live_quote(provider, contract)
+                record = _snapshot_record(
+                    contract,
+                    quote,
+                    observed_at,
+                    underlying_price,
+                    underlying_symbol,
+                )
+                if (
+                    not record["trading_symbol"]
+                    or not record["groww_symbol"]
+                    or record["option_type"] not in {"CE", "PE"}
+                    or record["strike"] is None
+                    or record["last_price"] is None
+                    or record["last_price"] <= 0
+                ):
+                    raise RuntimeError("normalized option snapshot is incomplete")
+                return record, {
+                    "trading_symbol": record["trading_symbol"],
+                    "option_type": record["option_type"],
+                    "strike": float(record["strike"]),
+                    "last_price": float(record["last_price"]),
+                    "status": "COLLECTED",
+                }
+            except Exception as exc:
+                return None, {
+                    "trading_symbol": contract.get("trading_symbol"),
+                    "option_type": contract.get("option_type"),
+                    "strike": contract.get("strike"),
+                    "status": "DATA_ERROR",
+                    "error": f"{exc.__class__.__name__}: {str(exc)[:160]}",
+                }
+
+    fetched = await asyncio.gather(*(fetch(contract) for contract in contracts))
+    return [record for record, _detail in fetched if record], [detail for _record, detail in fetched]
+
+
+async def collect_mcx_option_snapshot_batch(
+    provider,
+    snapshot_store: OptionSnapshotStore,
+    now: datetime | None = None,
+    offset: int = 0,
+    limit: int = 1,
+    strikes_per_type: int = MIN_VALID_SNAPSHOTS_PER_TYPE,
+):
+    """Persist a bounded slice of all active MCX option underlyings.
+
+    Only point-in-time live quotes are stored. Historical candles remain an
+    on-demand Groww input and are intentionally not fetched or persisted here.
+    """
+    observed_at = _timestamp(now or datetime.now(IST))
+    session_state = mcx_session_status(observed_at)
+    if not session_state.get("is_open"):
+        return {
+            "status": "MARKET_CLOSED",
+            "observed_at": observed_at.isoformat(),
+            "market_session": session_state,
+            "research_only": True,
+            "production_rules_changed": False,
+            "live_execution_enabled": False,
+            "historical_candles_persisted": False,
+            "historical_candle_policy": "FETCH_FROM_GROWW_ON_DEMAND",
+            "done": True,
+            "snapshots": 0,
+        }
+
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 4))
+    strike_count = max(MIN_VALID_SNAPSHOTS_PER_TYPE, min(int(strikes_per_type), 8))
+    await snapshot_store.initialize()
+    universe = await discover_active_derivatives_universe(observed_at)
+    future_by_symbol = {
+        str(contract.get("underlying_symbol") or "").upper(): contract
+        for contract in universe.get("mcx_futures") or []
+    }
+    symbols = [
+        symbol
+        for symbol in universe.get("mcx_option_underlyings") or []
+        if symbol in future_by_symbol
+    ]
+    batch = symbols[offset:offset + limit]
+    master = await _current_all_master()
+    results = []
+    all_records = []
+
+    for symbol in batch:
+        future = future_by_symbol[symbol]
+        try:
+            future_quote = await fetch_mcx_option_live_quote(provider, future)
+            underlying_price = _number(future_quote.get("last_price"))
+            if underlying_price is None or underlying_price <= 0:
+                raise RuntimeError("live MCX future quote has no positive last price")
+            selected = []
+            for option_type in ("CE", "PE"):
+                selected.extend(_rank_active_mcx_options(
+                    master,
+                    symbol,
+                    observed_at.date(),
+                    underlying_price,
+                    option_type,
+                    strike_count,
+                ))
+            contracts = {}
+            for contract in selected:
+                try:
+                    assert_option_contract(contract)
+                except ValueError:
+                    continue
+                trading_symbol = str(contract.get("trading_symbol") or "")
+                if trading_symbol:
+                    contracts[trading_symbol] = contract
+            if not contracts:
+                raise RuntimeError("no eligible active MCX option contracts")
+
+            records, details = await _collect_live_contract_records(
+                provider,
+                list(contracts.values()),
+                observed_at,
+                underlying_price,
+                symbol,
+            )
+            counts = {
+                option_type: sum(record["option_type"] == option_type for record in records)
+                for option_type in ("CE", "PE")
+            }
+            quality_pass = all(
+                counts[option_type] >= MIN_VALID_SNAPSHOTS_PER_TYPE
+                for option_type in ("CE", "PE")
+            )
+            all_records.extend(records)
+            results.append({
+                "symbol": symbol,
+                "status": "COLLECTED" if quality_pass and len(records) == len(contracts) else "PARTIAL" if quality_pass else "INSUFFICIENT_OPTION_QUOTES",
+                "underlying_price": underlying_price,
+                "underlying_contract": future.get("trading_symbol"),
+                "contracts_requested": len(contracts),
+                "snapshots": len(records),
+                "ce_snapshots": counts["CE"],
+                "pe_snapshots": counts["PE"],
+                "quality_pass": quality_pass,
+                "contracts": details,
+            })
+        except Exception as exc:
+            results.append({
+                "symbol": symbol,
+                "status": "DATA_ERROR",
+                "snapshots": 0,
+                "quality_pass": False,
+                "error": f"{exc.__class__.__name__}: {str(exc)[:180]}",
+            })
+
+    upserted = await snapshot_store.upsert(all_records)
+    quality_underlyings = sum(bool(result.get("quality_pass")) for result in results)
+    if batch and quality_underlyings == len(batch):
+        status = "COLLECTED"
+    elif all_records:
+        status = "PARTIAL"
+    else:
+        status = "FAILED" if batch else "COLLECTED"
+    next_offset = offset + len(batch)
+    return {
+        "status": status,
+        "research_only": True,
+        "production_rules_changed": False,
+        "live_execution_enabled": False,
+        "data_type": "LIVE_5M_LTP_SNAPSHOTS_NOT_OHLC",
+        "observed_at": observed_at.isoformat(),
+        "sample_bucket_at": _bucket_5m(observed_at).isoformat(),
+        "universe_underlyings": len(symbols),
+        "offset": offset,
+        "limit": limit,
+        "batch_size": len(batch),
+        "next_offset": next_offset,
+        "done": next_offset >= len(symbols),
+        "underlyings_collected": quality_underlyings,
+        "underlyings_failed": len(batch) - quality_underlyings,
+        "snapshots": len(all_records),
+        "upserted": upserted,
+        "historical_candles_persisted": False,
+        "historical_candle_policy": "FETCH_FROM_GROWW_ON_DEMAND",
+        "live_ephemeral_policy": "PERSIST_POINT_IN_TIME_STATE_NOT_RELIABLY_RECONSTRUCTIBLE",
+        "trade_instrument": "OPTIONS",
+        "options_only_policy": options_only_policy(),
+        "results": results,
     }
 
 

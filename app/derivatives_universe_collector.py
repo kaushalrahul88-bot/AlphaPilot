@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio,csv,io
+import asyncio,csv,io,time
 from datetime import date,datetime,timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -8,6 +8,8 @@ import httpx
 IST=ZoneInfo("Asia/Kolkata")
 INSTRUMENT_CSV_URL="https://growwapi-assets.groww.in/instruments/instrument.csv"
 PROVIDER="GROWW"
+UNIVERSE_CACHE_SECONDS=30*60
+_universe_cache={"loaded_at":0.0,"trade_date":None,"value":None}
 
 SCHEMA_SQL="""
 CREATE TABLE IF NOT EXISTS universe_candles (
@@ -57,12 +59,8 @@ def _expiry(v):
  try:return date.fromisoformat(str(v or "")[:10])
  except Exception:return None
 
-async def discover_active_derivatives_universe(now:datetime|None=None):
- today=(now or datetime.now(IST)).date()
- async with httpx.AsyncClient(timeout=45) as client:
-  r=await client.get(INSTRUMENT_CSV_URL);r.raise_for_status()
- rows=list(csv.DictReader(io.StringIO(r.text)))
- mcx=[]; nse_futures=[]; option_underlyings=set()
+def _active_derivatives_from_rows(rows,today:date):
+ mcx=[]; nse_futures=[]; option_underlyings=set(); mcx_option_underlyings=set()
  for row in rows:
   ex=str(row.get("exchange") or "").upper();seg=str(row.get("segment") or "").upper()
   it=str(row.get("instrument_type") or "").upper();exp=_expiry(row.get("expiry_date"))
@@ -73,8 +71,9 @@ async def discover_active_derivatives_universe(now:datetime|None=None):
   gs=str(row.get("groww_symbol") or row.get("groww_ticker") or "").strip()
   base={"exchange":ex,"segment":seg,"underlying_symbol":u or ts,"trading_symbol":ts,
         "groww_symbol":gs,"instrument_type":it,"expiry_date":exp.isoformat()}
-  if ex=="MCX" and seg=="COMMODITY" and (it in {"FUT","FUTURE","FUTURES"} or ts.endswith("FUT")):
-   mcx.append(base)
+  if ex=="MCX" and seg=="COMMODITY":
+   if it in {"FUT","FUTURE","FUTURES"} or ts.endswith("FUT"):mcx.append(base)
+   elif it in {"CE","PE"} and u:mcx_option_underlyings.add(u)
   elif ex=="NSE" and seg=="FNO":
    if it in {"FUT","FUTURE","FUTURES"} or ts.endswith("FUT"):nse_futures.append(base)
    elif it in {"CE","PE"} and u:option_underlyings.add(u)
@@ -85,10 +84,28 @@ async def discover_active_derivatives_universe(now:datetime|None=None):
    k=x["underlying_symbol"]; cur=best.get(k)
    if cur is None or x["expiry_date"]<cur["expiry_date"]:best[k]=x
   return [best[k] for k in sorted(best)]
- return {"mcx_futures":nearest(mcx),"nse_futures":nearest(nse_futures),
+ mcx_nearest=nearest(mcx); nse_nearest=nearest(nse_futures)
+ mcx_future_symbols={row["underlying_symbol"] for row in mcx_nearest}
+ active_mcx_options=sorted(mcx_option_underlyings & mcx_future_symbols)
+ return {"mcx_futures":mcx_nearest,"nse_futures":nse_nearest,
+         "mcx_option_underlyings":active_mcx_options,
          "fno_option_underlyings":sorted(option_underlyings),
-         "counts":{"mcx_futures":len(nearest(mcx)),"nse_futures":len(nearest(nse_futures)),
+         "counts":{"mcx_futures":len(mcx_nearest),"nse_futures":len(nse_nearest),
+                   "mcx_option_underlyings":len(active_mcx_options),
                    "fno_option_underlyings":len(option_underlyings)}}
+
+async def discover_active_derivatives_universe(now:datetime|None=None,force:bool=False):
+ today=(now or datetime.now(IST)).date(); loaded_at=time.monotonic()
+ cached=_universe_cache.get("value")
+ if (not force and cached and _universe_cache.get("trade_date")==today
+     and loaded_at-float(_universe_cache.get("loaded_at") or 0)<UNIVERSE_CACHE_SECONDS):
+  return cached
+ async with httpx.AsyncClient(timeout=45) as client:
+  r=await client.get(INSTRUMENT_CSV_URL);r.raise_for_status()
+ rows=list(csv.DictReader(io.StringIO(r.text)))
+ value=_active_derivatives_from_rows(rows,today)
+ _universe_cache.update({"loaded_at":loaded_at,"trade_date":today,"value":value})
+ return value
 
 class UniverseStore:
  def __init__(self,database_url):self.database_url=str(database_url or "").strip()
@@ -166,11 +183,13 @@ async def collect_derivatives_universe(provider,store:UniverseStore,shard:int=0,
    chain_stats.append({"symbol":symbol,"expiry":str(expiry)[:10],"ok":True})
   except Exception as exc:
    chain_stats.append({"symbol":symbol,"ok":False,"error":str(exc)[:180]})
- return {"status":"COLLECTED","collected_at":now.isoformat(),"shard":shard,"shards":shards,
+ successes=sum(x["ok"] for x in chain_stats); failures=len(chain_stats)-successes
+ status="COLLECTED" if failures==0 else "PARTIAL" if successes else "FAILED"
+ return {"status":status,"collected_at":now.isoformat(),"shard":shard,"shards":shards,
   "universe_counts":u["counts"],"shard_underlyings":len(symbols),"offset":offset,"limit":limit,
   "batch_size":len(batch),"next_offset":offset+len(batch),"done":offset+len(batch)>=len(symbols),
   "historical_candles_persisted":False,
   "historical_candle_policy":"FETCH_FROM_GROWW_ON_DEMAND",
   "live_ephemeral_policy":"PERSIST_POINT_IN_TIME_STATE_NOT_RELIABLY_RECONSTRUCTIBLE",
-  "option_chains_attempted":len(chain_stats),"option_chain_success":sum(x["ok"] for x in chain_stats),
-  "option_chain_failed":sum(not x["ok"] for x in chain_stats),"results":chain_stats}
+  "option_chains_attempted":len(chain_stats),"option_chain_success":successes,
+  "option_chain_failed":failures,"results":chain_stats}
