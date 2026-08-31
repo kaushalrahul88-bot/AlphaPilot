@@ -1,0 +1,156 @@
+name: Copper News Reaction vs No News
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copper-news-reaction-vs-no-news.yml"
+      - "app/current_mind_news_reaction_comparison.py"
+      - "app/current_mind_copper_replay.py"
+      - "app/market_news_reaction_engine.py"
+      - "app/market_news_reaction_windows.py"
+      - "app/market_news_observed_path.py"
+      - "app/market_news_participation.py"
+      - "app/market_news_volatility_context.py"
+      - "app/market_news_assimilation.py"
+      - "app/market_news_path_materiality.py"
+      - "app/market_news_materiality_qualified_path.py"
+      - "scripts/audit_market_news_reactions.py"
+      - "scripts/compare_current_mind_news_reaction.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: copper-news-reaction-vs-no-news
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPANDED_NEWS_RUN_ID: "33357324842"
+      EXPANDED_NEWS_ARTIFACT: "copper-current-mind-expanded-68-news-replay"
+      FROZEN_CANDLES_RUN_ID: "33405492674"
+      FROZEN_CANDLES_ARTIFACT: "copper-frozen-reaction-candles"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download frozen comparison inputs
+        run: |
+          set -euo pipefail
+          mkdir -p news-source frozen-candles
+          gh run download "$EXPANDED_NEWS_RUN_ID" --name "$EXPANDED_NEWS_ARTIFACT" --dir news-source
+          gh run download "$FROZEN_CANDLES_RUN_ID" --name "$FROZEN_CANDLES_ARTIFACT" --dir frozen-candles
+          test -f news-source/expanded-news-payload.json
+          test -f frozen-candles/copper-frozen-reaction-candles.json
+
+      - name: Run no-news versus reaction-aware comparison
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python scripts/compare_current_mind_news_reaction.py \
+            --news news-source/expanded-news-payload.json \
+            --candles frozen-candles/copper-frozen-reaction-candles.json \
+            --output copper-news-reaction-vs-no-news.json
+
+      - name: Verify comparison invariants and summarize
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report=json.loads(Path("copper-news-reaction-vs-no-news.json").read_text())
+          assert report["mode"]=="COPPER_CURRENT_MIND_NEWS_REACTION_VS_NO_NEWS_V1",report
+          assert report["research_only"] is True,report
+          assert report["descriptive_only"] is True,report
+          assert report["production_rules_changed"] is False,report
+          assert report["strategy_rules_changed"] is False,report
+          assert report["validation_status"]=="DIAGNOSTIC_REPLAY_NOT_UNTOUCHED_HOLDOUT",report
+          policy=report["decision_policy"]
+          assert policy["can_create_trade"] is False,policy
+          assert policy["can_reverse_direction"] is False,policy
+          assert policy["can_upgrade_no_trade"] is False,policy
+          integrity=report["outcome_integrity"]
+          assert integrity["outcomes_read_for_overlay_decision"] is False,integrity
+          assert integrity["outcomes_read_after_overlay_freeze_for_evaluation"] is True,integrity
+          assert integrity["headline_stance_used_as_reaction_direction"] is False,integrity
+          source=report["sources"]
+          assert source["frozen_candles"]["trading_symbol"]=="COPPER31AUG26FUT",source
+          assert source["frozen_candles"]["network_refetch"] is False,source
+          assert source["frozen_candles"]["point_in_time"] is True,source
+          assert source["baseline_replay"]["scheduled_clicks"]==360,source
+          assert source["baseline_replay"]["evaluated_clicks"]==360,source
+          assert source["baseline_replay"]["click_coverage_exact"] is True,source
+          assert source["reaction_audit"]["events"]==8,source
+          assert source["reaction_audit"]["classified"]==7,source
+          assert report["clicks"]==360,report
+          assert report["reaction_guard"]["trades"]<=report["baseline"]["trades"],report
+          assert report["changed_clicks"]==report["baseline"]["trades"]-report["reaction_guard"]["trades"],report
+          assert sum(report["suppressed_baseline_outcomes"].values())==report["changed_clicks"],report
+          for row in report["changed_rows"]:
+              assert row["baseline_action"] in {"BUY_CE","BUY_PE"},row
+              assert row["reaction_guard_action"]=="WAIT",row
+              assert row["reaction_direction"] in {"BULLISH","BEARISH"},row
+              assert row["baseline_direction"]!=row["reaction_direction"],row
+          summary={
+              "baseline":report["baseline"],
+              "reaction_guard":report["reaction_guard"],
+              "delta":report["delta"],
+              "changed_clicks":report["changed_clicks"],
+              "prevented_stops":report["prevented_stops"],
+              "blocked_targets":report["blocked_targets"],
+              "suppressed_no_entry":report["suppressed_no_entry"],
+              "suppressed_session_end":report["suppressed_session_end"],
+              "reaction_context_counts":report["reaction_context_counts"],
+          }
+          print("NEWS_REACTION_VS_NO_NEWS_SUMMARY")
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          print("CHANGED_ROWS")
+          for row in report["changed_rows"]:
+              print(json.dumps({
+                  "click_timestamp":row["click_timestamp"],
+                  "baseline_action":row["baseline_action"],
+                  "reaction_guard_action":row["reaction_guard_action"],
+                  "reaction_direction":row["reaction_direction"],
+                  "baseline_result":(row.get("baseline_outcome") or {}).get("result"),
+                  "active_reactions":(row.get("reaction_context") or {}).get("active_reactions"),
+              },sort_keys=True))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path("copper-news-reaction-vs-no-news.json").read_text())
+          manifest={
+              "mode":"COPPER_NEWS_REACTION_VS_NO_NEWS_MANIFEST_V1",
+              "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
+              "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
+              "network_refetch":False,
+              "outcome_blind_overlay_decision":True,
+              "outcomes_used_only_for_post_freeze_evaluation":True,
+              "validation_status":report["validation_status"],
+              "rule":"Compare frozen no-news Current Mind with a conservative News Brain guard that can only delay an existing CE/PE action when completed materiality-qualified market assimilation points the other way. It cannot create or reverse a trade.",
+          }
+          Path("copper-news-reaction-vs-no-news-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-news-reaction-vs-no-news
+          path: |
+            copper-news-reaction-vs-no-news.json
+            copper-news-reaction-vs-no-news-manifest.json
+          if-no-files-found: error
+          retention-days: 30
