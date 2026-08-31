@@ -77,7 +77,12 @@ jobs:
         run: |
           set -euo pipefail
           for i in {1..80}; do
-            curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-news-replay/status" -o state.json
+            if ! curl --silent --show-error --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/copper/current-mind-news-replay/status" -o state.json; then
+              echo "Transient status transport failure; replay continues server-side"; sleep 15; continue
+            fi
+            if ! python -c 'import json;json.load(open("state.json"))' >/dev/null 2>&1; then
+              echo "Transient non-JSON status response; replay continues server-side"; sleep 15; continue
+            fi
             S=$(python -c 'import json;print(json.load(open("state.json")).get("status"))'); echo "Replay state: $S"
             if [ "$S" = "COMPLETED" ]; then python -c 'import json;d=json.load(open("state.json"));json.dump(d["result"],open("result.json","w"),indent=2)'; break; fi
             if [ "$S" = "FAILED" ]; then cat state.json; exit 1; fi; sleep 15
