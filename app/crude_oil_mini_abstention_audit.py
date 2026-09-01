@@ -24,6 +24,20 @@ def _pct(numerator: int, denominator: int) -> float:
     return round(float(numerator) / float(denominator) * 100.0, 2) if denominator else 0.0
 
 
+def _regime_observations(decision: dict) -> dict:
+    """Return the causal regime observations stored by Market Regime Observer.
+
+    Current Mind journals wrap the market labels under ``regime.observations``.
+    Older research fixtures sometimes supplied the labels directly. Supporting
+    both shapes keeps the audit backward compatible without inventing a label.
+    """
+    regime = decision.get("regime") or {}
+    nested = regime.get("observations") if isinstance(regime, dict) else None
+    if isinstance(nested, dict):
+        return nested
+    return regime if isinstance(regime, dict) else {}
+
+
 def _audit_row(decision: dict) -> dict | None:
     if str(decision.get("action") or "") != "WAIT":
         return None
@@ -43,7 +57,7 @@ def _audit_row(decision: dict) -> dict | None:
     else:
         direction = "BALANCED"
     large = bool(outcome.get("future_move_without_setup")) if threshold is not None else None
-    regime = decision.get("regime") or {}
+    regime = _regime_observations(decision)
     evidence = decision.get("evidence") or {}
     return {
         "session": decision.get("session"),
@@ -135,6 +149,7 @@ def evaluate_abstention_audit(replay_report: dict) -> dict:
         "guardrails": [
             "This audit consumes already-frozen Current Mind decisions and never recomputes them with future information.",
             "Post-WAIT path direction and excursion are outcome annotations only.",
+            "Regime labels come from the already-recorded point-in-time Market Regime Observer observations.",
             "No outcome-derived filter or playbook is promoted from this audit.",
             "No Copper market data, news, option premium or synthetic option P&L is used.",
         ],
