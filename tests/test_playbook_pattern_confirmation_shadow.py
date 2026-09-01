@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 import unittest
 
-from app.playbook_pattern_confirmation_shadow import assess_declared_playbook_pattern
+from app.playbook_pattern_confirmation_shadow import (
+    assess_declared_playbook_pattern,
+    pattern_gate_action,
+)
 
 
 def _row(ts, o, h, l, c, v=100.0):
@@ -82,6 +85,23 @@ class PlaybookPatternConfirmationShadowTests(unittest.TestCase):
         mutated = copy.deepcopy(journal)
         mutated["outcome"] = {"result": "TARGET", "realized_r": 1.5}
         second = assess_declared_playbook_pattern(rows, 5, mutated)
+        self.assertEqual(first, second)
+
+    def test_pattern_gate_only_delays_unconfirmed_directional_actions(self):
+        confirmed = {"confirmed": True}
+        missing = {"confirmed": False}
+        self.assertEqual(pattern_gate_action("BUY_CE", confirmed)["action"], "BUY_CE")
+        self.assertEqual(pattern_gate_action("BUY_PE", confirmed)["action"], "BUY_PE")
+        self.assertEqual(pattern_gate_action("BUY_CE", missing)["action"], "WAIT")
+        self.assertEqual(pattern_gate_action("BUY_PE", missing)["action"], "WAIT")
+        self.assertEqual(pattern_gate_action("NO_TRADE", missing)["action"], "NO_TRADE")
+        self.assertEqual(pattern_gate_action("WAIT", missing)["action"], "WAIT")
+
+    def test_pattern_gate_is_independent_of_outcome_fields(self):
+        pattern = {"confirmed": False, "outcome": {"result": "STOP"}}
+        first = pattern_gate_action("BUY_PE", pattern)
+        pattern["outcome"] = {"result": "TARGET"}
+        second = pattern_gate_action("BUY_PE", pattern)
         self.assertEqual(first, second)
 
 
