@@ -19,9 +19,11 @@ jobs:
   reaction-audit:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,6 +34,53 @@ jobs:
 
       - name: Run unit tests for Crude news intelligence
         run: python -m unittest tests.test_crude_news_intelligence -v
+
+      - name: Backfill exact historical Crude event sessions from Groww
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --silent --show-error --max-time 20 "$API_BASE/health" >/dev/null || true
+          for RANGE in \
+            "2026-08-18T09:00:00+05:30|2026-08-18T23:30:00+05:30" \
+            "2026-08-31T09:00:00+05:30|2026-08-31T23:30:00+05:30"
+          do
+            IFS='|' read -r START_AT END_AT <<< "$RANGE"
+            PAYLOAD=$(python - "$START_AT" "$END_AT" <<'PY'
+          import json,sys
+          print(json.dumps({
+              "symbol":"CRUDEOIL",
+              "start_at":sys.argv[1],
+              "end_at":sys.argv[2],
+              "timeframe_minutes":5,
+          }))
+          PY
+            )
+            SUCCESS=0
+            for ATTEMPT in {1..5}; do
+              CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+                -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                -H "Content-Type: application/json" \
+                -X POST "$API_BASE/v1/internal/commodity-candles/backfill-continuous" \
+                --data "$PAYLOAD" -o backfill.json || echo "000")
+              echo "Crude backfill $START_AT attempt=$ATTEMPT HTTP=$CODE"
+              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              cat backfill.json 2>/dev/null || true
+              sleep $((ATTEMPT*10))
+            done
+            [ "$SUCCESS" = "1" ] || { cat backfill.json 2>/dev/null || true; exit 1; }
+            python - <<'PY'
+          import json
+          d=json.load(open("backfill.json"))
+          assert d.get("symbol")=="CRUDEOIL",d
+          assert d.get("timeframe_minutes")==5,d
+          assert d.get("status") in {"BACKFILLED_CONTINUOUS","NO_ARCHIVED_INTRADAY_DATA"},d
+          print(json.dumps({k:d.get(k) for k in (
+              "status","contract","contract_expiry","start","end","fetched","completed","upserted",
+              "usable_for_continuous_research","data_limitation"
+          )},indent=2,sort_keys=True))
+          PY
+          done
 
       - name: Read stored MCX Crude candles and score frozen news reactions
         env:
@@ -80,7 +129,7 @@ jobs:
           assert result["production_rules_changed"] is False
           assert result["live_execution_enabled"] is False
           assert result["option_premium_scored"] is False
-          assert result["input_candles"] > 0, "No stored CRUDEOIL 5m candles in requested window"
+          assert result["input_candles"] > 0, "Groww returned no archived CRUDEOIL 5m candles for the exact event sessions"
           PY
 
       - uses: actions/upload-artifact@v4
