@@ -14,6 +14,7 @@ on:
       - "app/setup_playbook_selector.py"
       - "scripts/audit_market_news_reactions.py"
       - "scripts/audit_market_news_thesis_interaction.py"
+      - "scripts/audit_playbook_pattern_gate_shadow.py"
 
 permissions:
   contents: read
@@ -63,7 +64,7 @@ jobs:
             --candles frozen-candles/copper-frozen-reaction-candles.json \
             --output copper-news-thesis-interaction-shadow.json
 
-      - name: Verify invariants and summarize
+      - name: Verify thesis and pattern invariants
         run: |
           python - <<'PY'
           import json
@@ -120,43 +121,79 @@ jobs:
               assert pattern["outcome_blind"] is True,pattern
               assert pattern["shadow_only"] is True,pattern
               assert pattern["changes_decision"] is False,pattern
-          for row in report["active_opposing_rows"]:
-              assert row["catalyst_control_shadow"]["state"]=="CONTROL_ACTIVE",row
-              assert row["news_thesis_interaction_shadow"]["alignment"]=="OPPOSED",row
+          PY
 
-          summary={
-              "catalyst_control_counts":report["catalyst_control_counts"],
-              "thesis_interaction_counts":report["thesis_interaction_counts"],
-              "declared_playbook_counts":report["declared_playbook_counts"],
-              "pattern_confirmation_status_counts":report["pattern_confirmation_status_counts"],
-              "pattern_confirmation_by_playbook":report["pattern_confirmation_by_playbook"],
-              "confirmed_pattern_by_playbook":report["confirmed_pattern_by_playbook"],
-              "opposing_catalyst_playbook_counts":report["opposing_catalyst_playbook_counts"],
-              "active_opposing_catalyst_playbook_counts":report["active_opposing_catalyst_playbook_counts"],
-              "active_opposing_pattern_counts":report["active_opposing_pattern_counts"],
-              "active_opposing_catalyst_outcomes_post_freeze":report["active_opposing_catalyst_outcomes_post_freeze"],
-          }
-          print("NEWS_THESIS_INTERACTION_SHADOW_SUMMARY")
-          print(json.dumps(summary,indent=2,sort_keys=True))
+      - name: Run playbook pattern gate shadow
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python scripts/audit_playbook_pattern_gate_shadow.py \
+            --thesis-report copper-news-thesis-interaction-shadow.json \
+            --output copper-playbook-pattern-gate-shadow.json
+
+      - name: Verify pattern gate invariants and summarize
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          thesis=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
+          gate=json.loads(Path("copper-playbook-pattern-gate-shadow.json").read_text())
+          assert gate["mode"]=="COPPER_PLAYBOOK_PATTERN_GATE_SHADOW_V1",gate
+          assert gate["research_only"] is True,gate
+          assert gate["descriptive_only"] is True,gate
+          assert gate["shadow_only"] is True,gate
+          assert gate["production_rules_changed"] is False,gate
+          assert gate["strategy_rules_changed"] is False,gate
+          assert gate["validation_status"]=="POST_HOC_DIAGNOSTIC_REQUIRES_UNTOUCHED_FORWARD_TEST",gate
+          policy=gate["candidate_policy"]
+          assert policy["can_create_trade"] is False,policy
+          assert policy["can_reverse_direction"] is False,policy
+          assert policy["can_upgrade_abstention"] is False,policy
+          assert policy["unconfirmed_action_effect"]=="DELAY_EXISTING_ACTION_TO_WAIT",policy
+          assert policy["pattern_definition_changed_after_august_outcomes_seen"] is False,policy
+          assert policy["gate_formalized_after_august_pattern_outcomes_seen"] is True,policy
+          assert policy["promotion_from_august_result_allowed"] is False,policy
+          assert policy["untouched_forward_validation_required"] is True,policy
+          integrity=gate["outcome_integrity"]
+          assert integrity["outcomes_read_for_gate_action"] is False,integrity
+          assert integrity["outcomes_read_after_gate_action_freeze_for_evaluation"] is True,integrity
+          assert gate["clicks"]==360,gate
+          assert len(gate["rows"])==360,gate
+          assert gate["baseline"]["trades"]==171,gate
+          assert gate["baseline"]["resolved_trades"]==135,gate
+          assert gate["pattern_gate"]["trades"]==thesis["pattern_confirmation_status_counts"].get("PATTERN_CONFIRMED",0),gate
+          assert gate["changed_clicks"]==gate["baseline"]["trades"]-gate["pattern_gate"]["trades"],gate
+          for row in gate["rows"]:
+              if row["baseline_action"] in {"BUY_CE","BUY_PE"}:
+                  if row["pattern_confirmed"]:
+                      assert row["pattern_gate_action"]==row["baseline_action"],row
+                  else:
+                      assert row["pattern_gate_action"]=="WAIT",row
+              else:
+                  assert row["pattern_gate_action"]==row["baseline_action"],row
+
+          print("PLAYBOOK_PATTERN_GATE_SHADOW_SUMMARY")
+          print(json.dumps({
+              "baseline":gate["baseline"],
+              "pattern_gate":gate["pattern_gate"],
+              "delta":gate["delta"],
+              "changed_clicks":gate["changed_clicks"],
+              "suppressed_baseline_outcomes":gate["suppressed_baseline_outcomes"],
+              "suppressed_playbooks":gate["suppressed_playbooks"],
+              "validation_status":gate["validation_status"],
+          },indent=2,sort_keys=True))
           print("ACTIVE_OPPOSING_ROWS")
-          for row in report["active_opposing_rows"]:
-              interaction=row["news_thesis_interaction_shadow"]
-              semantic=interaction["playbook_audit"]
-              pattern=row["playbook_pattern_confirmation_shadow"]
-              control=row["catalyst_control_shadow"]
+          for row in thesis["active_opposing_rows"]:
               print(json.dumps({
                   "click_timestamp":row["click_timestamp"],
                   "baseline_action":row["baseline_action"],
                   "declared_playbook":row["declared_playbook"],
-                  "playbook_family":row["playbook_family"],
-                  "interaction":interaction["interaction"],
-                  "playbook_semantic_status":semantic["status"],
-                  "literal_pattern_status":pattern["status"],
-                  "literal_pattern_detail":pattern.get("detail"),
-                  "regime_labels":row["regime_labels"],
-                  "regime_observations":row["regime_observations"],
-                  "catalyst_direction":control.get("direction"),
-                  "catalyst_control_state":control.get("state"),
+                  "literal_pattern_status":row["playbook_pattern_confirmation_shadow"]["status"],
+                  "literal_pattern_detail":row["playbook_pattern_confirmation_shadow"].get("detail"),
+                  "catalyst_direction":row["catalyst_control_shadow"].get("direction"),
+                  "catalyst_control_state":row["catalyst_control_shadow"].get("state"),
                   "baseline_result_post_freeze":(row.get("baseline_outcome") or {}).get("result"),
               },sort_keys=True))
           PY
@@ -167,18 +204,22 @@ jobs:
           import json,os
           from pathlib import Path
           report=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
+          gate=json.loads(Path("copper-playbook-pattern-gate-shadow.json").read_text())
           manifest={
-              "mode":"COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_MANIFEST_V2",
+              "mode":"COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_MANIFEST_V3",
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "network_refetch":False,
               "outcome_blind_thesis_interaction_state":True,
               "outcome_blind_playbook_pattern_state":True,
-              "outcomes_used_only_after_both_shadows_freeze":True,
+              "outcome_blind_pattern_gate_action":True,
+              "outcomes_used_only_after_shadow_freeze":True,
               "production_rules_changed":False,
               "strategy_rules_changed":False,
-              "validation_status":report["validation_status"],
-              "rule":"Audit how frozen catalyst-control state relates to the already-frozen Current Mind thesis and whether the declared playbook has literal chart-pattern confirmation visible by the click. The audit is shadow-only and cannot change an action.",
+              "thesis_validation_status":report["validation_status"],
+              "pattern_gate_validation_status":gate["validation_status"],
+              "pattern_gate_promotion_from_august_allowed":False,
+              "rule":"Audit catalyst/thesis interaction, literal declared-playbook confirmation, and a post-hoc shadow gate that only delays unconfirmed named-playbook actions. August performance cannot promote the gate; untouched forward validation is required.",
           }
           Path("copper-news-thesis-interaction-shadow-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
@@ -188,6 +229,7 @@ jobs:
           name: copper-news-thesis-interaction-shadow
           path: |
             copper-news-thesis-interaction-shadow.json
+            copper-playbook-pattern-gate-shadow.json
             copper-news-thesis-interaction-shadow-manifest.json
           if-no-files-found: error
           retention-days: 30
