@@ -1,0 +1,115 @@
+name: Crude Oil Mini Postdeploy Aug Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/crude-oil-mini-postdeploy-aug-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Wait for deployed Mini history fix and audit Aug 26-31
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import time
+          import urllib.parse
+          import urllib.request
+          from collections import defaultdict
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          IST=ZoneInfo("Asia/Kolkata")
+          base="https://alphapilot-api-pnio.onrender.com/v1/candles/CRUDEOILM"
+          url=base+"?"+urllib.parse.urlencode({"timeframe":"5m"})
+          targets=["2026-08-26","2026-08-27","2026-08-28","2026-08-29","2026-08-30","2026-08-31"]
+          last_result=None
+
+          for attempt in range(1,41):
+              try:
+                  with urllib.request.urlopen(url, timeout=180) as response:
+                      body=json.load(response)
+              except Exception as exc:
+                  print(f"attempt={attempt} request_error={exc}", flush=True)
+                  time.sleep(15)
+                  continue
+
+              rows=body.get("candles") or []
+              by_day=defaultdict(list)
+              for row in rows:
+                  raw=str(row[0])
+                  stamp=datetime.fromisoformat(raw.replace("Z","+00:00"))
+                  if stamp.tzinfo is None:
+                      stamp=stamp.replace(tzinfo=IST)
+                  stamp=stamp.astimezone(IST)
+                  by_day[stamp.date().isoformat()].append((stamp,row))
+
+              target_rows=[]
+              for day in targets:
+                  rr=sorted(by_day.get(day,[]),key=lambda x:x[0])
+                  if not rr:
+                      target_rows.append({"date":day,"status":"NO_DATA","candles":0,"complete_for_20_click_research":False})
+                      continue
+                  first,last=rr[0][0],rr[-1][0]
+                  complete=len(rr)>=140 and last.hour>=21
+                  target_rows.append({
+                      "date":day,
+                      "status":"COMPLETE" if complete else "PARTIAL",
+                      "candles":len(rr),
+                      "first_at":first.isoformat(),
+                      "last_at":last.isoformat(),
+                      "complete_for_20_click_research":complete,
+                  })
+
+              complete_all=[]
+              for day,rr in sorted(by_day.items()):
+                  rr=sorted(rr,key=lambda x:x[0])
+                  if rr and len(rr)>=140 and rr[-1][0].hour>=21:
+                      complete_all.append(day)
+
+              last_result={
+                  "mode":"CRUDE_OIL_MINI_POSTDEPLOY_AUG26_31_AUDIT_V1",
+                  "expected_reference_contract":"CRUDEOILM21SEP26FUT",
+                  "rows_returned":len(rows),
+                  "first_at":str(rows[0][0]) if rows else None,
+                  "last_at":str(rows[-1][0]) if rows else None,
+                  "target_days":target_rows,
+                  "complete_sessions_total":len(complete_all),
+                  "complete_session_first":complete_all[0] if complete_all else None,
+                  "complete_session_last":complete_all[-1] if complete_all else None,
+                  "eligible_backtest_sessions_through_aug31":[d for d in complete_all if d<="2026-08-31"],
+                  "sep1_excluded_as_in_progress":True,
+                  "attempt":attempt,
+              }
+              print(json.dumps(last_result,indent=2,sort_keys=True),flush=True)
+
+              recovered={r["date"]:r for r in target_rows}
+              if all(recovered[d]["complete_for_20_click_research"] for d in ("2026-08-27","2026-08-28","2026-08-31")):
+                  break
+              time.sleep(15)
+
+          if last_result is None:
+              raise SystemExit("No successful deployed CRUDEOILM response")
+          Path("crude-oil-mini-postdeploy-aug-audit.json").write_text(json.dumps(last_result,indent=2,sort_keys=True)+"\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crude-oil-mini-postdeploy-aug-audit
+          path: crude-oil-mini-postdeploy-aug-audit.json
+          if-no-files-found: warn
+          retention-days: 30
