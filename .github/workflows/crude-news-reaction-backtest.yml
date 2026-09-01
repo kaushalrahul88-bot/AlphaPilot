@@ -19,7 +19,7 @@ jobs:
   reaction-audit:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       API_BASE: https://alphapilot-api-pnio.onrender.com
@@ -56,25 +56,32 @@ jobs:
           }))
           PY
             )
-            SUCCESS=0
-            for ATTEMPT in {1..5}; do
-              CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+
+            CODE=$(curl --silent --show-error --max-time 120 -w "%{http_code}" \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              -H "Content-Type: application/json" \
+              -X POST "$API_BASE/v1/internal/commodity-candles/backfill-continuous" \
+              --data "$PAYLOAD" -o backfill.json || echo "000")
+            echo "Continuous Crude backfill $START_AT HTTP=$CODE"
+
+            if [ "$CODE" != "200" ]; then
+              cat backfill.json 2>/dev/null || true
+              echo "Archived-contract discovery unavailable; trying the currently listed Crude contract as a bounded data-availability fallback."
+              CODE=$(curl --silent --show-error --max-time 120 -w "%{http_code}" \
                 -H "X-Collector-Token: $COLLECTOR_TOKEN" \
                 -H "Content-Type: application/json" \
-                -X POST "$API_BASE/v1/internal/commodity-candles/backfill-continuous" \
+                -X POST "$API_BASE/v1/internal/commodity-candles/backfill" \
                 --data "$PAYLOAD" -o backfill.json || echo "000")
-              echo "Crude backfill $START_AT attempt=$ATTEMPT HTTP=$CODE"
-              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
-              cat backfill.json 2>/dev/null || true
-              sleep $((ATTEMPT*10))
-            done
-            [ "$SUCCESS" = "1" ] || { cat backfill.json 2>/dev/null || true; exit 1; }
+              echo "Current-contract Crude backfill $START_AT HTTP=$CODE"
+            fi
+
+            [ "$CODE" = "200" ] || { cat backfill.json 2>/dev/null || true; exit 1; }
             python - <<'PY'
           import json
           d=json.load(open("backfill.json"))
           assert d.get("symbol")=="CRUDEOIL",d
           assert d.get("timeframe_minutes")==5,d
-          assert d.get("status") in {"BACKFILLED_CONTINUOUS","NO_ARCHIVED_INTRADAY_DATA"},d
+          assert d.get("status") in {"BACKFILLED","BACKFILLED_CONTINUOUS","NO_ARCHIVED_INTRADAY_DATA"},d
           print(json.dumps({k:d.get(k) for k in (
               "status","contract","contract_expiry","start","end","fetched","completed","upserted",
               "usable_for_continuous_research","data_limitation"
@@ -129,7 +136,7 @@ jobs:
           assert result["production_rules_changed"] is False
           assert result["live_execution_enabled"] is False
           assert result["option_premium_scored"] is False
-          assert result["input_candles"] > 0, "Groww returned no archived CRUDEOIL 5m candles for the exact event sessions"
+          assert result["input_candles"] > 0, "Groww returned no CRUDEOIL 5m candles for either exact event session"
           PY
 
       - uses: actions/upload-artifact@v4
