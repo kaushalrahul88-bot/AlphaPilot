@@ -44,7 +44,7 @@ def run(news_payload: dict, candle_payload) -> dict:
         raise RuntimeError("Frozen candle artifact has no usable OHLC rows")
     baseline = evaluate_current_mind_replay(rows)
     reaction_audit = audit_news_reactions(news_payload, candles, as_of=_latest_timestamp(candles))
-    comparison = compare_no_news_vs_reaction_guard(baseline, reaction_audit)
+    comparison = compare_no_news_vs_reaction_guard(baseline, reaction_audit, candles=candles)
     comparison["sources"] = {
         "frozen_candles": {
             "mode": candle_payload.get("mode") if isinstance(candle_payload, dict) else None,
