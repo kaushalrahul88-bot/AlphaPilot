@@ -48,6 +48,7 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
             FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[["2026-08-31T09:00:00",8200,8210,8190,8205,100]]}}),
         ]
         contract={
+            "instrument_type":"FUT",
             "trading_symbol":"CRUDEOILM21SEP26FUT",
             "groww_symbol":"MCX-CRUDEOILM-21Sep26-FUT",
         }
@@ -67,11 +68,19 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(FakeClient.calls[1][1]["trading_symbol"],"CRUDEOILM21SEP26FUT")
         self.assertEqual(FakeClient.calls[1][1]["interval_in_minutes"],"5")
 
-    async def test_modern_history_short_circuits_legacy_route(self):
+    async def test_future_merges_partial_modern_with_legacy_and_modern_wins_overlap(self):
         FakeClient.responses=[
-            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[["2026-09-01T09:00:00",8200,8210,8190,8205,100]]}}),
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[
+                ["2026-08-31T09:05:00",8205,8215,8195,8210,200],
+                ["2026-09-01T09:00:00",8300,8310,8290,8305,300],
+            ]}}),
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[
+                ["2026-08-31T09:00:00",8200,8210,8190,8205,100],
+                ["2026-08-31T09:05:00",1,2,0.5,1.5,999],
+            ]}}),
         ]
         contract={
+            "instrument_type":"FUT",
             "trading_symbol":"CRUDEOILM21SEP26FUT",
             "groww_symbol":"MCX-CRUDEOILM-21Sep26-FUT",
         }
@@ -81,8 +90,37 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
                 contract,
                 candle_interval="5minute",
                 legacy_minutes=5,
+                start=datetime(2026,8,31,9,0,tzinfo=IST),
+                end=datetime(2026,9,1,12,0,tzinfo=IST),
+            )
+        self.assertEqual(len(FakeClient.calls),2)
+        self.assertEqual(len(rows),3)
+        by_stamp={row[0]:row for row in rows}
+        overlap="2026-08-31T09:05:00+05:30"
+        self.assertIn(overlap,by_stamp)
+        self.assertEqual(by_stamp[overlap][4],8210)
+        self.assertEqual(by_stamp[overlap][5],200)
+        self.assertIn("2026-08-31T09:00:00+05:30",by_stamp)
+        self.assertIn("2026-09-01T09:00:00+05:30",by_stamp)
+
+    async def test_option_modern_history_still_short_circuits_legacy_route(self):
+        FakeClient.responses=[
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[["2026-09-01T09:00:00",100,110,90,105,10]]}}),
+        ]
+        contract={
+            "instrument_type":"CE",
+            "trading_symbol":"CRUDEOILM17SEP268250CE",
+            "groww_symbol":"MCX-CRUDEOILM-17Sep26-8250-CE",
+        }
+        with patch.object(RateLimitedGrowwProvider,"_throttle",new=AsyncMock()), \
+             patch("app.providers.groww_rate_limited.httpx.AsyncClient",FakeClient):
+            rows=await self.provider._mini_fetch_chunk(
+                contract,
+                candle_interval="5minute",
+                legacy_minutes=5,
                 start=datetime(2026,9,1,9,0,tzinfo=IST),
                 end=datetime(2026,9,1,12,0,tzinfo=IST),
+                tolerate_legacy_miss=True,
             )
         self.assertEqual(len(rows),1)
         self.assertEqual(len(FakeClient.calls),1)
@@ -110,7 +148,7 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows,[])
         self.assertEqual(len(FakeClient.calls),2)
 
-    async def test_future_legacy_error_still_fails_closed(self):
+    async def test_future_legacy_error_still_fails_closed_when_modern_is_empty(self):
         FakeClient.responses=[
             FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[]}}),
             FakeResponse(404,{"status":"FAILURE","message":"unexpected future history failure"}),
@@ -130,6 +168,28 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
                     start=datetime(2026,8,1,9,0,tzinfo=IST),
                     end=datetime(2026,8,7,23,30,tzinfo=IST),
                 )
+
+    async def test_future_uses_modern_data_if_legacy_route_errors(self):
+        FakeClient.responses=[
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[["2026-09-01T09:00:00",8300,8310,8290,8305,300]]}}),
+            FakeResponse(404,{"status":"FAILURE","message":"legacy unavailable"}),
+        ]
+        contract={
+            "instrument_type":"FUT",
+            "trading_symbol":"CRUDEOILM21SEP26FUT",
+            "groww_symbol":"MCX-CRUDEOILM-21Sep26-FUT",
+        }
+        with patch.object(RateLimitedGrowwProvider,"_throttle",new=AsyncMock()), \
+             patch("app.providers.groww_rate_limited.httpx.AsyncClient",FakeClient):
+            rows=await self.provider._mini_fetch_chunk(
+                contract,
+                candle_interval="5minute",
+                legacy_minutes=5,
+                start=datetime(2026,9,1,9,0,tzinfo=IST),
+                end=datetime(2026,9,1,12,0,tzinfo=IST),
+            )
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0][0],"2026-09-01T09:00:00+05:30")
 
 
 if __name__ == "__main__":
