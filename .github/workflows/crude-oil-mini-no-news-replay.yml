@@ -1,0 +1,88 @@
+name: Crude Oil Mini No-News Current Mind V1
+
+on:
+  pull_request:
+    paths:
+      - "app/crude_oil_mini_no_news_brain.py"
+      - "tests/test_crude_oil_mini_no_news_brain.py"
+      - ".github/workflows/crude-oil-mini-no-news-replay.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+
+      - name: Verify causal Mini brain mechanics
+        run: python -m unittest tests.test_crude_oil_mini_no_news_brain -v
+
+      - name: Run outcome-blind 20-click no-news replay on certified Mini tape
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import httpx
+
+          from app.crude_oil_mini_no_news_brain import evaluate_crude_oil_mini_no_news
+
+          api=os.environ['API_BASE'].rstrip('/')
+          with httpx.Client(timeout=420) as client:
+              quote_response=client.get(f'{api}/v1/quote/CRUDEOILM')
+              quote_response.raise_for_status()
+              quote=quote_response.json()
+              candle_response=client.get(f'{api}/v1/candles/CRUDEOILM',params={'timeframe':'5m'})
+              candle_response.raise_for_status()
+              candles=(candle_response.json().get('candles') or [])
+
+          contract=quote.get('contract') or {}
+          result=evaluate_crude_oil_mini_no_news(candles,contract)
+          Path('crude-oil-mini-no-news-current-mind-v1.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
+          print(json.dumps({
+              'mode':result['mode'],
+              'reference_contract':result['reference_contract'],
+              'reference_contract_scope':result['reference_contract_scope'],
+              'data':result['data'],
+              'development':result['development'],
+              'holdout':result['holdout'],
+              'decision_policy':result['decision_policy'],
+              'integrity':result['integrity'],
+              'historical_option_premium_scoring':result['historical_option_premium_scoring'],
+          },indent=2,sort_keys=True))
+
+          assert contract.get('trading_symbol')=='CRUDEOILM21SEP26FUT',result
+          assert contract.get('lot_size')==10,result
+          assert result['reference_contract']=='CRUDEOILM21SEP26FUT',result
+          assert result['data']['complete_sessions']>=51,result
+          assert result['data']['total_clicks']==result['data']['complete_sessions']*20,result
+          assert result['data']['development_sessions']>0,result
+          assert result['data']['holdout_sessions']>0,result
+          assert result['news_enabled'] is False,result
+          assert result['historical_option_premium_scoring'] is False,result
+          assert result['integrity']['regular_crude_used'] is False,result
+          assert result['integrity']['older_futures_contracts_used'] is False,result
+          assert result['integrity']['synthetic_option_prices_used'] is False,result
+          # Strategy performance is intentionally NOT a workflow pass/fail gate.
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crude-oil-mini-no-news-current-mind-v1
+          path: crude-oil-mini-no-news-current-mind-v1.json
+          if-no-files-found: warn
+          retention-days: 30
