@@ -15,10 +15,14 @@ on:
       - "app/crude_oil_mini_current_mind_error_attribution.py"
       - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
+      - "app/crude_oil_mini_context_tape.py"
+      - "app/crude_oil_mini_context_ablation.py"
       - "app/crude_oil_mini_research_framework.py"
+      - "app/crude_oil_pit_context_probe.py"
       - "tests/test_crude_oil_mini_current_mind_architecture.py"
       - "tests/test_crude_oil_mini_research_framework.py"
       - "tests/test_crude_oil_mini_research_tape.py"
+      - "tests/test_crude_oil_mini_context_tape_ablation.py"
       - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
   push:
     branches: [main]
@@ -35,7 +39,10 @@ on:
       - "app/crude_oil_mini_current_mind_error_attribution.py"
       - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
+      - "app/crude_oil_mini_context_tape.py"
+      - "app/crude_oil_mini_context_ablation.py"
       - "app/crude_oil_mini_research_framework.py"
+      - "app/crude_oil_pit_context_probe.py"
       - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
   workflow_dispatch:
 
@@ -58,7 +65,8 @@ jobs:
           python -m unittest \
             tests.test_crude_oil_mini_current_mind_architecture \
             tests.test_crude_oil_mini_research_framework \
-            tests.test_crude_oil_mini_research_tape -v
+            tests.test_crude_oil_mini_research_tape \
+            tests.test_crude_oil_mini_context_tape_ablation -v
 
   frozen-research-audit:
     if: github.event_name != 'pull_request'
@@ -88,7 +96,7 @@ jobs:
           done
           echo "Timed out waiting for Render to deploy $GITHUB_SHA"
           exit 1
-      - name: Build certified tape and run frozen framework audit
+      - name: Build certified tapes and run frozen framework audit
         run: |
           set -euo pipefail
           STARTED=0
@@ -139,6 +147,10 @@ jobs:
           assert s.get('click_coverage_exact') is True, s
           assert s.get('tape_sha256'), s
           assert s.get('click_schedule_sha256'), s
+          assert s.get('context_tape_status') == 'CERTIFIED_DISCOVERY', s
+          assert s.get('context_tape_sha256'), s
+          assert s.get('context_source_grade') == 'E_DISCOVERY', s
+          assert s.get('context_promotion_allowed') is False, s
           assert s.get('no_news_brain_freeze_status') == 'HUMAN_REVIEW_REQUIRED', s
           print(json.dumps(s,indent=2,sort_keys=True))
           PY
@@ -162,6 +174,9 @@ jobs:
           assert d['integrity']['news_used_in_decisions'] is False
           assert d['integrity']['option_market_data_used'] is False
           assert d['integrity']['outcome_audits_can_mutate_decisions'] is False
+          assert d['integrity']['discovery_context_can_mutate_decisions'] is False
+          assert d['integrity']['discovery_context_promotion_allowed'] is False
+          assert d['integrity']['discovery_context_requires_independent_validation'] is True
           assert d['integrity']['performance_is_ci_gate'] is False
           assert d['integrity']['live_execution_enabled'] is False
           shadow=d['playbook_pattern_shadow']
@@ -169,6 +184,12 @@ jobs:
           assert shadow['pattern_definition_predates_crude_outcome_review'] is True
           assert shadow['candidate_gate_predates_crude_outcome_review'] is True
           assert shadow['outcomes_used_to_select_pattern_thresholds'] is False
+          context=d['discovery_context_ablation']
+          assert context['analysis_class'] == 'EXPLORATORY_POST_BASELINE'
+          assert context['promotion_allowed'] is False
+          assert context['decision_path_changed'] is False
+          assert context['baseline_decisions_mutated'] is False
+          assert context['clicks'] == d['no_news_replay']['evaluated_clicks']
           # No outcome/performance statistic is asserted as an acceptance gate.
           PY
       - uses: actions/upload-artifact@v4
