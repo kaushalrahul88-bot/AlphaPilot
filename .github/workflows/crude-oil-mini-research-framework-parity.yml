@@ -12,6 +12,7 @@ on:
       - "app/crude_oil_mini_memory_evidence_audit.py"
       - "app/crude_oil_mini_abstention_audit.py"
       - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
       - "app/crude_oil_mini_research_framework.py"
       - "tests/test_crude_oil_mini_current_mind_architecture.py"
@@ -30,6 +31,7 @@ on:
       - "app/crude_oil_mini_memory_evidence_audit.py"
       - "app/crude_oil_mini_abstention_audit.py"
       - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
       - "app/crude_oil_mini_research_framework.py"
       - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
@@ -153,11 +155,18 @@ jobs:
           assert d['integrity']['regular_crude_used'] is False
           assert d['integrity']['copper_market_data_used'] is False
           assert d['integrity']['copper_fitted_thresholds_used'] is False
+          assert d['integrity']['shared_playbook_pattern_architecture_used'] is True
+          assert d['integrity']['playbook_pattern_shadow_can_mutate_decisions'] is False
           assert d['integrity']['news_used_in_decisions'] is False
           assert d['integrity']['option_market_data_used'] is False
           assert d['integrity']['outcome_audits_can_mutate_decisions'] is False
           assert d['integrity']['performance_is_ci_gate'] is False
           assert d['integrity']['live_execution_enabled'] is False
+          shadow=d['playbook_pattern_shadow']
+          assert shadow['strategy_rules_changed'] is False
+          assert shadow['pattern_definition_predates_crude_outcome_review'] is True
+          assert shadow['candidate_gate_predates_crude_outcome_review'] is True
+          assert shadow['outcomes_used_to_select_pattern_thresholds'] is False
           # No outcome/performance statistic is asserted as an acceptance gate.
           PY
       - uses: actions/upload-artifact@v4
