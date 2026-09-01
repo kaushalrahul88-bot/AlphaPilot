@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 from statistics import mean
 
 from .commodity_time import parse_ist_timestamp
@@ -35,9 +36,8 @@ def _first_tradable_row(rows, event_at):
 
 def _window(rows, start_index, minutes):
     start = rows[start_index][0]
-    end = start + __import__("datetime").timedelta(minutes=minutes)
-    selected = [row for row in rows[start_index:] if row[0] < end]
-    return selected
+    end = start + timedelta(minutes=minutes)
+    return [row for row in rows[start_index:] if row[0] < end]
 
 
 def _reaction(rows, start_index, effect, horizons):
