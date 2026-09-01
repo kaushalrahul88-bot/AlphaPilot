@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 
 from .crude_oil_mini_abstention_audit import evaluate_abstention_audit
+from .crude_oil_mini_context_ablation import evaluate_crude_context_ablation
+from .crude_oil_mini_context_tape import PostgresCrudeContextTapeStore, build_or_read_frozen_context_tape
 from .crude_oil_mini_current_mind_error_attribution import evaluate_error_attribution
 from .crude_oil_mini_memory_evidence_audit import evaluate_memory_evidence
 from .crude_oil_mini_playbook_pattern_shadow import evaluate_crude_playbook_pattern_shadow
@@ -45,6 +47,9 @@ def framework_summary(report: dict) -> dict:
     error = report.get("error_attribution") or {}
     pattern = report.get("playbook_pattern_shadow") or {}
     tape = report.get("research_tape") or {}
+    context_tape = ((report.get("discovery_context_tape") or {}).get("certification") or {})
+    context_ablation = report.get("discovery_context_ablation") or {}
+    variants = context_ablation.get("variants") or {}
     return {
         "mode": report.get("mode"),
         "status": report.get("status"),
@@ -67,18 +72,31 @@ def framework_summary(report: dict) -> dict:
         "literal_pattern_confirmed_trades": (pattern.get("pattern_gate") or {}).get("trades"),
         "literal_pattern_changed_clicks": pattern.get("changed_clicks"),
         "literal_pattern_candidate_expectancy_r": (pattern.get("pattern_gate") or {}).get("expectancy_r_resolved"),
+        "context_tape_status": context_tape.get("status"),
+        "context_tape_sha256": context_tape.get("tape_sha256"),
+        "context_source_grade": context_tape.get("source_grade"),
+        "context_variant_A": ((variants.get("A") or {}).get("summary")),
+        "context_variant_B": ((variants.get("B") or {}).get("summary")),
+        "context_variant_C": ((variants.get("C") or {}).get("summary")),
+        "context_promotion_allowed": context_ablation.get("promotion_allowed"),
         "no_news_brain_freeze_status": report.get("no_news_brain_freeze_status"),
         "next_step": report.get("next_step"),
     }
 
 
-async def run_crude_oil_mini_research_framework(provider, store, *, now: datetime | None = None) -> dict:
+async def run_crude_oil_mini_research_framework(
+    provider,
+    store,
+    *,
+    now: datetime | None = None,
+    context_tape_store=None,
+) -> dict:
     """Run the Crude no-news Research Brain from one certified durable tape.
 
-    This is the Crude counterpart of the Copper research workflow. The tape and
-    click schedule are frozen before outcome-aware audits are inspected. Audits
-    remain descriptive: they may generate later hypotheses but cannot mutate this
-    run's decisions, evidence lanes, click timestamps or data.
+    The local CRUDEOILM tape and click schedule are frozen before outcome-aware
+    audits are inspected. Optional global context is also frozen independently
+    before its exploratory ablation reads outcomes. Context ablation is shadow-only
+    and cannot mutate the Current Mind decisions produced by this run.
     """
     tape = await refresh_frozen_research_tape(provider, store, now=now)
     if tape.get("status") != "CERTIFIED":
@@ -89,9 +107,6 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
         "lot_size": 10,
     })
 
-    # Replay/memory audits are CPU-heavy on thousands of 5m bars. Run them off the
-    # ASGI event loop so the status endpoint remains responsive while the background
-    # research job is working.
     replay = await asyncio.to_thread(evaluate_crude_oil_mini_current_mind_no_news, candles, contract)
     if replay.get("reference_contract") != FROZEN_CURRENT_CONTRACT:
         raise RuntimeError("No-news replay changed the frozen Crude reference contract")
@@ -120,9 +135,31 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
         }
         for row in replay.get("decisions") or []
     ]
-    # Freeze schedule/decision identities before any outcome-aware audit below.
     click_schedule_sha256 = _sha256_json(click_schedule)
     no_news_decision_sha256 = _sha256_json(decision_fingerprints)
+
+    # Freeze discovery-grade external context before any context/outcome interaction
+    # is evaluated. A persistent snapshot is immutable once inserted.
+    if context_tape_store is None:
+        database_url = str(getattr(store, "database_url", "") or "").strip()
+        if database_url:
+            context_tape_store = PostgresCrudeContextTapeStore(database_url)
+    discovery_context_tape = None
+    discovery_context_ablation = None
+    if context_tape_store is not None:
+        discovery_context_tape = await build_or_read_frozen_context_tape(context_tape_store)
+        certification = discovery_context_tape.get("certification") or {}
+        if certification.get("status") != "CERTIFIED_DISCOVERY":
+            raise RuntimeError(f"Discovery Crude context tape failed certification: {certification}")
+        discovery_context_ablation = await asyncio.to_thread(
+            evaluate_crude_context_ablation,
+            replay,
+            discovery_context_tape["payload"],
+        )
+        if discovery_context_ablation.get("decision_path_changed") is not False:
+            raise RuntimeError("Context ablation attempted to mutate the Crude decision path")
+        if discovery_context_ablation.get("promotion_allowed") is not False:
+            raise RuntimeError("Discovery-grade context was incorrectly marked promotable")
 
     memory = await asyncio.to_thread(evaluate_memory_evidence, candles, 3)
     abstention = await asyncio.to_thread(evaluate_abstention_audit, replay)
@@ -151,12 +188,15 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
         "playbook_pattern_shadow": pattern,
         "context_coverage_primary_only": context_coverage,
         "context_acquisition_manifest": acquisition_manifest(),
+        "discovery_context_tape": discovery_context_tape,
+        "discovery_context_ablation": discovery_context_ablation,
         "no_news_brain_freeze_status": "HUMAN_REVIEW_REQUIRED",
         "next_step": (
-            "Review Context/Memory/WAIT/error attribution and the shared literal-playbook pattern shadow. "
-            "Do not freeze the no-news Crude Current Mind while a declared playbook is only a regime-eligible "
-            "hypothesis rather than a verified chart sequence. If an architecture correction is accepted, hold "
-            "the corrected decision path fixed before attaching PIT historical Crude news to the same tape/clicks."
+            "Review Crude-only Memory/WAIT/error attribution together with the discovery-grade global-context ablation. "
+            "Do not promote Yahoo-derived WTI/Brent/USDINR/DXY into the Current Mind from this already-inspected "
+            "June-August sample. If the context effect is coherent, reproduce it on an authorized/independent data "
+            "source and then validate it chronologically or prospectively before freezing the no-news Brain. News "
+            "remains a later same-click experiment after that freeze."
         ),
         "integrity": {
             "architecture_reference": "COPPER_CURRENT_MIND",
@@ -172,6 +212,9 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
             "option_market_data_used": False,
             "synthetic_option_premium_used": False,
             "outcome_audits_can_mutate_decisions": False,
+            "discovery_context_can_mutate_decisions": False,
+            "discovery_context_promotion_allowed": False,
+            "discovery_context_requires_independent_validation": True,
             "performance_is_ci_gate": False,
             "live_execution_enabled": False,
         },
