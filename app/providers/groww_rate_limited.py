@@ -146,15 +146,23 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         end,
         tolerate_legacy_miss=False,
     ):
-        """Use Groww modern history first, then legacy range for the same contract.
+        """Fetch one exact Mini-contract chunk without allowing partial modern data to hide legacy rows.
 
-        Exact Mini options can legitimately have no data before their listing
-        boundary. In that case Groww may answer the modern route with a clean
-        empty payload while the legacy route rejects the older interval. Only
-        CE/PE callers may tolerate that legacy-only miss. A modern-route error,
-        or the same condition for futures, still fails closed.
+        Groww's modern MCX route can return a non-empty but incomplete chunk. For
+        CRUDEOILM futures we therefore query both the modern and legacy endpoints
+        for the same exact contract and merge them by canonical IST timestamp.
+        Modern rows win on overlaps. This recovers missing bars without stitching
+        another expiry or substituting regular CRUDEOIL.
+
+        Exact Mini options retain the narrower fallback behavior because their
+        legacy route can reject pre-listing intervals: a non-empty modern option
+        response is returned directly, otherwise the legacy route is tried and an
+        explicitly tolerated legacy-only miss may resolve to an empty list.
         """
         headers = await self._headers()
+        instrument_type = str(contract.get("instrument_type") or "").upper().strip()
+        is_option = instrument_type in {"CE", "PE"}
+
         modern_params = {
             "exchange": "MCX",
             "segment": "COMMODITY",
@@ -170,9 +178,9 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                 headers=headers,
                 params=modern_params,
             )
-        candles = self._response_candles(modern)
-        if candles:
-            return candles
+        modern_candles = self._response_candles(modern)
+        if is_option and modern_candles:
+            return modern_candles
 
         legacy_params = {
             "exchange": "MCX",
@@ -190,14 +198,35 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                 params=legacy_params,
             )
         legacy_candles = self._response_candles(legacy)
-        if legacy_candles:
-            return legacy_candles
+
+        if is_option:
+            if legacy_candles:
+                return legacy_candles
+            if modern.status_code != 200:
+                modern.raise_for_status()
+            if legacy.status_code != 200:
+                if tolerate_legacy_miss:
+                    return []
+                legacy.raise_for_status()
+            return []
+
+        merged = {}
+        for row in legacy_candles or []:
+            normalized = self._normalize_mini_candle(row)
+            if normalized is not None:
+                timestamp, normalized_row = normalized
+                merged[timestamp] = normalized_row
+        for row in modern_candles or []:
+            normalized = self._normalize_mini_candle(row)
+            if normalized is not None:
+                timestamp, normalized_row = normalized
+                merged[timestamp] = normalized_row
+        if merged:
+            return [merged[key] for key in sorted(merged)]
 
         if modern.status_code != 200:
             modern.raise_for_status()
         if legacy.status_code != 200:
-            if tolerate_legacy_miss:
-                return []
             legacy.raise_for_status()
         return []
 
