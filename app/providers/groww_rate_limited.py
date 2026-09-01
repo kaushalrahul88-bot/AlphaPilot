@@ -128,12 +128,15 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         legacy_minutes,
         start,
         end,
+        tolerate_legacy_miss=False,
     ):
-        """Use Groww modern history first, then the legacy range route if empty.
+        """Use Groww modern history first, then legacy range for the same contract.
 
-        This mirrors the resilient history behavior used by AlphaPilot's existing
-        commodity research. The fallback is still the exact same Mini contract;
-        no earlier expiry or regular CRUDEOIL contract is substituted.
+        Exact Mini options can legitimately have no data before their listing
+        boundary. In that case Groww may answer the modern route with a clean
+        empty payload while the legacy route rejects the older interval. Only
+        CE/PE callers may tolerate that legacy-only miss. A modern-route error,
+        or the same condition for futures, still fails closed.
         """
         headers = await self._headers()
         modern_params = {
@@ -177,6 +180,8 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         if modern.status_code != 200:
             modern.raise_for_status()
         if legacy.status_code != 200:
+            if tolerate_legacy_miss:
+                return []
             legacy.raise_for_status()
         return []
 
@@ -192,7 +197,8 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
             timeframe, ("15minute", 15, 180, 14)
         )
         instrument_type = str(contract.get("instrument_type") or "").upper()
-        lookback_days = 63 if instrument_type in {"CE", "PE"} else future_lookback_days
+        is_option = instrument_type in {"CE", "PE"}
+        lookback_days = 63 if is_option else future_lookback_days
         now = datetime.now(IST)
         start = now - timedelta(days=lookback_days)
         cursor = start
@@ -207,6 +213,7 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                 legacy_minutes=interval_minutes,
                 start=cursor,
                 end=chunk_end,
+                tolerate_legacy_miss=is_option,
             )
             for row in candles or []:
                 if isinstance(row, (list, tuple)) and len(row) >= 5:
