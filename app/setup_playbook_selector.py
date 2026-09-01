@@ -23,3 +23,28 @@ def setup_candidate(playbook:str, *, thesis=None,confirmation=None,entry_trigger
     missing=[k for k,v in {"thesis":thesis,"confirmation":confirmation,"entry_trigger":entry_trigger,"invalidation":invalidation,"target_logic":target_logic}.items() if not v]
     return {"status":"READY_FOR_RISK_REVIEW" if not missing else "WAIT","playbook":playbook,"missing":missing,
             "thesis":thesis,"confirmation":confirmation,"entry_trigger":entry_trigger,"invalidation":invalidation,"target_logic":target_logic}
+
+
+def playbook_selection_semantics(playbook:str|None, *, default_selector:bool=True)->dict:
+    """Describe what a declared playbook means without changing the decision path.
+
+    Current Mind's default selector chooses a regime-eligible playbook hypothesis. The
+    generic evidence/geometry confirmation used by the thesis builder is not proof
+    that the named chart pattern itself occurred. Literal pattern confirmation is a
+    separate research/audit concern until explicitly integrated and validated.
+    """
+    base={
+      "mode":"PLAYBOOK_SELECTION_SEMANTICS_V1",
+      "declared_playbook":playbook,
+      "decision_effect":"ANNOTATION_ONLY",
+      "literal_pattern_confirmation":"NOT_VERIFIED_IN_DECISION_PATH" if playbook else "NOT_APPLICABLE",
+      "generic_confirmation_is_literal_pattern_confirmation":False,
+      "rule":"A named playbook is not pattern-confirmed merely because generic evidence and structural trade geometry are available.",
+    }
+    if not default_selector:
+        return {**base,"status":"EXTERNAL_DECISION_BUILDER","selection_basis":"NOT_INFERRED"}
+    if not playbook:
+        return {**base,"status":"NO_DECLARED_PLAYBOOK","selection_basis":"REGIME_ELIGIBILITY_ONLY"}
+    if playbook not in PLAYBOOKS:
+        return {**base,"status":"UNKNOWN_DECLARED_PLAYBOOK","selection_basis":"UNKNOWN"}
+    return {**base,"status":"REGIME_ELIGIBLE_HYPOTHESIS","selection_basis":"REGIME_ELIGIBILITY_ONLY"}
