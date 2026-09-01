@@ -24,7 +24,7 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
     checks, retries and 44-symbol universe scans cannot create short bursts that
     push the account into HTTP 429 rate limiting.
 
-    CRUDEOILM is intentionally handled as a dedicated MCX family.  It never
+    CRUDEOILM is intentionally handled as a dedicated MCX family. It never
     aliases regular CRUDEOIL, and this provider-only path does not change the
     scheduled Copper/commodity collector universe.
     """
@@ -126,17 +126,19 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
     async def _mini_candles(self, symbol, timeframe="15m"):
         contract = await self._mini_contract(symbol)
         interval_map = {
-            "5m": ("5minute", 5, 63, 7),
-            "15m": ("15minute", 15, 63, 14),
-            "1h": ("1hour", 60, 90, 30),
-            "1d": ("1day", 1440, 180, 90),
+            "5m": ("5minute", 5, 180, 7),
+            "15m": ("15minute", 15, 180, 14),
+            "1h": ("1hour", 60, 180, 30),
+            "1d": ("1day", 1440, 365, 90),
         }
-        candle_interval, interval_minutes, lookback_days, chunk_days = interval_map.get(
-            timeframe, ("15minute", 15, 63, 14)
+        candle_interval, interval_minutes, future_lookback_days, chunk_days = interval_map.get(
+            timeframe, ("15minute", 15, 180, 14)
         )
-        # Mini options only need their actually listed history. Asking Groww for
-        # the same bounded window is harmless; the provider simply returns no
-        # candles before listing. No earlier option is substituted.
+        instrument_type = str(contract.get("instrument_type") or "").upper()
+        # The current Mini future is probed deeply so Groww, not AlphaPilot,
+        # determines the first date with data. Listed Mini CE/PE contracts are
+        # bounded to 63 calendar days to avoid many guaranteed-empty requests.
+        lookback_days = 63 if instrument_type in {"CE", "PE"} else future_lookback_days
         now = datetime.now(IST)
         start = now - timedelta(days=lookback_days)
         cursor = start
