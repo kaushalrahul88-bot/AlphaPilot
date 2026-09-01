@@ -3,6 +3,7 @@ name: Crude Oil Mini Research Framework Parity
 on:
   pull_request:
     paths:
+      - "app/__init__.py"
       - "app/asgi.py"
       - "app/crude_oil_mini_market_perception.py"
       - "app/crude_oil_mini_experience_memory.py"
@@ -22,6 +23,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "app/__init__.py"
       - "app/asgi.py"
       - "app/crude_oil_mini_market_perception.py"
       - "app/crude_oil_mini_experience_memory.py"
