@@ -278,3 +278,30 @@ def assess_declared_playbook_pattern(rows: list, index: int, journal: dict) -> d
             "trade geometry, catalyst direction, and later trade outcome are not substitutes."
         ),
     }
+
+
+def pattern_gate_action(baseline_action: str, pattern_shadow: dict) -> dict:
+    """Outcome-blind candidate gate: require semantic confirmation for a named playbook action.
+
+    This remains shadow-only. It cannot create a trade, reverse direction, or upgrade an
+    abstention. Because the August replay was already inspected before this gate was formalized,
+    its August performance is diagnostic only and cannot qualify the rule for promotion.
+    """
+    baseline_action = str(baseline_action or "NO_TRADE")
+    if baseline_action not in ACTION_DIRECTION:
+        return {
+            "action": baseline_action,
+            "changed": False,
+            "reason": "BASELINE_NON_DIRECTIONAL",
+        }
+    if bool(_dict(pattern_shadow).get("confirmed")):
+        return {
+            "action": baseline_action,
+            "changed": False,
+            "reason": "DECLARED_PLAYBOOK_PATTERN_CONFIRMED",
+        }
+    return {
+        "action": "WAIT",
+        "changed": True,
+        "reason": "DECLARED_PLAYBOOK_PATTERN_NOT_CONFIRMED",
+    }
