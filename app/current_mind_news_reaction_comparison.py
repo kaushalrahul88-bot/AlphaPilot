@@ -6,6 +6,7 @@ from statistics import mean
 from typing import Any
 
 from .commodity_time import parse_ist_timestamp
+from .market_news_catalyst_control import catalyst_control_context
 
 REACTION_CONTEXT_HOURS = 8.0
 ACTION_DIRECTION = {"BUY_CE": "BULLISH", "BUY_PE": "BEARISH"}
@@ -137,26 +138,81 @@ def _performance(rows: list[dict], action_key: str) -> dict:
     }
 
 
-def compare_no_news_vs_reaction_guard(baseline_report: dict, reaction_audit: dict) -> dict:
+def _market_structure(journal: dict) -> str:
+    return str(
+        _dict(_dict(journal.get("regime")).get("observations")).get("trend_structure")
+        or "UNKNOWN"
+    ).upper()
+
+
+def _unavailable_control_shadow() -> dict:
+    return {
+        "mode": "MARKET_NEWS_CATALYST_CONTROL_CONTEXT_SHADOW_V1",
+        "outcome_blind": True,
+        "shadow_only": True,
+        "state": "SHADOW_INPUT_UNAVAILABLE",
+        "direction": "UNKNOWN",
+        "controls_direction": False,
+        "primary": None,
+        "controls": [],
+        "reason": "FROZEN_CANDLES_NOT_SUPPLIED_TO_COMPARISON",
+    }
+
+
+def compare_no_news_vs_reaction_guard(
+    baseline_report: dict,
+    reaction_audit: dict,
+    *,
+    candles: list | None = None,
+) -> dict:
     """Compare frozen Current Mind with and without a conservative reaction-aware guard.
 
-    The decision overlay is outcome-blind. Historical outcomes are attached only after the overlay
-    action has been determined so that prevented stops and blocked targets can be measured.
+    The V1 decision overlay remains outcome-blind and unchanged. In parallel, when frozen candles
+    are supplied, a new shadow-only catalyst-control model asks whether each completed reaction is
+    still retained, assimilating, contested, or overridden at the click. That shadow is diagnostic
+    only and is never consulted by the V1 overlay action. Historical outcomes are attached only
+    after both counterfactual contexts are frozen.
     """
     decisions = list(baseline_report.get("decisions") or [])
     reaction_records = list(reaction_audit.get("records") or [])
     rows = []
     context_counts = Counter()
+    control_state_counts = Counter()
+    control_alignment_counts = Counter()
     for journal in decisions:
         click = journal.get("click_timestamp") or journal.get("timestamp")
         if not click:
             raise ValueError("Baseline decision missing click timestamp")
         baseline_action = str(_dict(journal.get("decision")).get("action") or "NO_TRADE")
+        baseline_direction = ACTION_DIRECTION.get(baseline_action)
+
         context = _reaction_context_for_click(reaction_records, click)
         overlay = reaction_guard_action(baseline_action, context)
-        # Outcome is deliberately read only after the counterfactual action is frozen above.
+
+        if candles is None:
+            control_shadow = _unavailable_control_shadow()
+        else:
+            control_shadow = catalyst_control_context(
+                reaction_records,
+                candles,
+                click_timestamp=click,
+                market_structure=_market_structure(journal),
+                max_horizon_hours=REACTION_CONTEXT_HOURS,
+            )
+        control_state = str(control_shadow.get("state") or "UNKNOWN")
+        control_state_counts[control_state] += 1
+        control_direction = str(control_shadow.get("direction") or "UNKNOWN")
+        if control_direction in {"BULLISH", "BEARISH"}:
+            if baseline_direction == control_direction:
+                alignment = "SUPPORTS_BASELINE"
+            elif baseline_direction in {"BULLISH", "BEARISH"}:
+                alignment = "OPPOSES_BASELINE"
+            else:
+                alignment = "BASELINE_ABSTAINS"
+            control_alignment_counts[f"{control_state}__{alignment}"] += 1
+
+        # Outcome is deliberately read only after both the V1 overlay and shadow context are frozen.
         outcome = _dict(journal.get("outcome"))
-        baseline_direction = ACTION_DIRECTION.get(baseline_action)
         if context["direction"] in {"BULLISH", "BEARISH"}:
             if baseline_direction == context["direction"]:
                 context_counts["SUPPORTS_BASELINE_DIRECTION"] += 1
@@ -177,6 +233,7 @@ def compare_no_news_vs_reaction_guard(baseline_report: dict, reaction_audit: dic
             "baseline_direction": overlay["baseline_direction"],
             "reaction_direction": overlay["reaction_direction"],
             "reaction_context": context,
+            "catalyst_control_shadow": control_shadow,
             "baseline_outcome": outcome,
         })
 
@@ -204,8 +261,26 @@ def compare_no_news_vs_reaction_guard(baseline_report: dict, reaction_audit: dic
             "conflicting_reactions_fail_closed_to_no_change": True,
             "opposing_reaction_effect": "DELAY_EXISTING_ACTION_TO_WAIT",
         },
+        "catalyst_control_shadow_policy": {
+            "name": "MARKET_NEWS_CATALYST_CONTROL_SHADOW_V1",
+            "shadow_only": True,
+            "changes_v1_guard_action": False,
+            "outcomes_used_for_state": False,
+            "headline_stance_used_for_direction": False,
+            "direction_source": "MATERIALITY_QUALIFIED_ASSIMILATION_PRICE_PATH",
+            "origin_reference": "PRE_EVENT_CLOSE",
+            "accepted_reaction_reference": "PLUS_60M_ASSIMILATION_CLOSE",
+            "active_rule": "RETAIN_ACCEPTED_REACTION_LEVEL_WITHOUT_OPPOSITE_CLICK_TIME_STRUCTURE",
+            "assimilating_rule": "RETAIN_REACTION_SIDE_OF_ORIGIN_AFTER_LOSS_OF_ACCEPTED_LEVEL",
+            "contested_rule": "OPPOSITE_CLICK_TIME_STRUCTURE_BEFORE_ORIGIN_BREAK",
+            "overridden_rule": "ANY_POST_ASSIMILATION_CLOSE_THROUGH_ORIGIN_OPPOSITE_REACTION_DIRECTION",
+            "overridden_is_latched_within_inspected_path": True,
+            "maximum_observation_horizon_hours": REACTION_CONTEXT_HOURS,
+            "thresholds_fitted_to_august_outcomes": False,
+        },
         "outcome_integrity": {
             "outcomes_read_for_overlay_decision": False,
+            "outcomes_read_for_catalyst_control_shadow": False,
             "outcomes_read_after_overlay_freeze_for_evaluation": True,
             "headline_stance_used_as_reaction_direction": False,
             "reaction_direction_source": "MATERIALITY_QUALIFIED_ASSIMILATION_PRICE_PATH",
@@ -225,6 +300,8 @@ def compare_no_news_vs_reaction_guard(baseline_report: dict, reaction_audit: dic
             ),
         },
         "reaction_context_counts": dict(sorted(context_counts.items())),
+        "catalyst_control_shadow_counts": dict(sorted(control_state_counts.items())),
+        "catalyst_control_alignment_counts": dict(sorted(control_alignment_counts.items())),
         "changed_clicks": len(changed),
         "suppressed_baseline_outcomes": dict(sorted(changed_results.items())),
         "prevented_stops": int(changed_results.get("STOP") or 0),
@@ -232,13 +309,17 @@ def compare_no_news_vs_reaction_guard(baseline_report: dict, reaction_audit: dic
         "suppressed_no_entry": int(changed_results.get("NO_ENTRY") or 0),
         "suppressed_session_end": int(changed_results.get("SESSION_END") or 0),
         "changed_rows": changed,
+        "rows": rows,
         "guardrails": [
             "The no-news Current Mind decision is frozen before reaction context is applied.",
             "Reaction context cannot manufacture BUY_CE or BUY_PE and cannot reverse an existing option side.",
-            "Only a completed +60m materiality-qualified assimilation direction may delay an opposing baseline action.",
-            "Headline sentiment does not provide the guard direction; observed material price assimilation does.",
-            "Reaction evidence later than the click is never eligible.",
-            "Historical trade outcomes are evaluated only after the reaction-guard action is frozen.",
+            "Only a completed +60m materiality-qualified assimilation direction may delay an opposing baseline action in the unchanged V1 guard.",
+            "The catalyst-control model is shadow-only and cannot alter any V1 guard action or production decision.",
+            "Catalyst control uses only candles at or before the click plus click-time market structure; future candles and trade outcomes are invisible.",
+            "Headline sentiment does not provide either reaction or catalyst-control direction; observed material price assimilation does.",
+            "A post-assimilation close through the pre-event origin latches the inspected catalyst as overridden even if price later recovers.",
+            "No elapsed-time threshold was tuned against August outcomes; the existing eight-hour horizon is retained only as the frozen maximum context envelope.",
+            "Historical trade outcomes are evaluated only after the reaction-guard action and catalyst-control shadow are frozen.",
             "This August dataset has already been inspected during AlphaPilot research, so the result is diagnostic rather than untouched out-of-sample validation.",
             "No production Market Brain, Option Brain, risk rule, or live execution behavior changes from this comparison.",
         ],
