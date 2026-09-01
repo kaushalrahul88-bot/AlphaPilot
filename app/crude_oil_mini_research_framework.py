@@ -8,6 +8,7 @@ from datetime import datetime
 from .crude_oil_mini_abstention_audit import evaluate_abstention_audit
 from .crude_oil_mini_current_mind_error_attribution import evaluate_error_attribution
 from .crude_oil_mini_memory_evidence_audit import evaluate_memory_evidence
+from .crude_oil_mini_playbook_pattern_shadow import evaluate_crude_playbook_pattern_shadow
 from .crude_oil_mini_point_in_time_context import acquisition_manifest, audit_context_coverage
 from .crude_oil_mini_research_tape import (
     FROZEN_CURRENT_CONTRACT,
@@ -42,6 +43,7 @@ def framework_summary(report: dict) -> dict:
     memory = report.get("memory_evidence_audit") or {}
     abstention = report.get("abstention_audit") or {}
     error = report.get("error_attribution") or {}
+    pattern = report.get("playbook_pattern_shadow") or {}
     tape = report.get("research_tape") or {}
     return {
         "mode": report.get("mode"),
@@ -62,6 +64,9 @@ def framework_summary(report: dict) -> dict:
         "error_trade_observations": error.get("trade_observations"),
         "stable_good_states": len(error.get("stable_above_50_pct_states") or []),
         "stable_bad_states": len(error.get("stable_below_50_pct_states") or []),
+        "literal_pattern_confirmed_trades": (pattern.get("pattern_gate") or {}).get("trades"),
+        "literal_pattern_changed_clicks": pattern.get("changed_clicks"),
+        "literal_pattern_candidate_expectancy_r": (pattern.get("pattern_gate") or {}).get("expectancy_r_resolved"),
         "no_news_brain_freeze_status": report.get("no_news_brain_freeze_status"),
         "next_step": report.get("next_step"),
     }
@@ -122,6 +127,7 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
     memory = await asyncio.to_thread(evaluate_memory_evidence, candles, 3)
     abstention = await asyncio.to_thread(evaluate_abstention_audit, replay)
     error = await asyncio.to_thread(evaluate_error_attribution, replay)
+    pattern = await asyncio.to_thread(evaluate_crude_playbook_pattern_shadow, candles, replay)
 
     primary_records = _primary_context_from_replay(replay)
     click_timestamps = [row["click_timestamp"] for row in replay.get("decisions") or []]
@@ -142,13 +148,15 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
         "memory_evidence_audit": memory,
         "abstention_audit": abstention,
         "error_attribution": error,
+        "playbook_pattern_shadow": pattern,
         "context_coverage_primary_only": context_coverage,
         "context_acquisition_manifest": acquisition_manifest(),
         "no_news_brain_freeze_status": "HUMAN_REVIEW_REQUIRED",
         "next_step": (
-            "Review Context/Memory/WAIT/error evidence without changing the frozen tape or click schedule. "
-            "If the no-news Current Mind is accepted, freeze its decision path; only then attach PIT historical "
-            "Crude news to these exact clicks for the A/B comparison."
+            "Review Context/Memory/WAIT/error attribution and the shared literal-playbook pattern shadow. "
+            "Do not freeze the no-news Crude Current Mind while a declared playbook is only a regime-eligible "
+            "hypothesis rather than a verified chart sequence. If an architecture correction is accepted, hold "
+            "the corrected decision path fixed before attaching PIT historical Crude news to the same tape/clicks."
         ),
         "integrity": {
             "architecture_reference": "COPPER_CURRENT_MIND",
@@ -158,6 +166,8 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
             "regular_crude_used": False,
             "copper_market_data_used": False,
             "copper_fitted_thresholds_used": False,
+            "shared_playbook_pattern_architecture_used": True,
+            "playbook_pattern_shadow_can_mutate_decisions": False,
             "news_used_in_decisions": False,
             "option_market_data_used": False,
             "synthetic_option_premium_used": False,
