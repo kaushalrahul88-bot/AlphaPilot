@@ -1,0 +1,163 @@
+name: Copper Current Mind Forward Phase 1
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 23:40 IST, ten minutes after the September MCX metals close.
+    - cron: "10 18 * * 1-5"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copper-current-mind-forward-phase1.yml"
+      - "app/asgi.py"
+      - "app/current_mind_copper_forward.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-current-mind-forward-phase1
+  cancel-in-progress: false
+
+jobs:
+  forward-phase1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Check preregistered calendar window
+        id: window
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          now=datetime.now(ZoneInfo("Asia/Kolkata"))
+          active=(now.year,now.month)==(2026,9) and 1<=now.day<=11
+          print(f"active={'true' if active else 'false'}")
+          print(f"ist_date={now.date().isoformat()}")
+          PY
+
+      - name: Wait for sealed forward endpoint deployment
+        if: steps.window.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..60}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ] && curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
+                if python - <<'PY'
+          import json,sys
+          paths=(json.load(open("openapi.json")).get("paths") or {})
+          required={
+            "/v1/internal/copper/current-mind-forward-phase1/start",
+            "/v1/internal/copper/current-mind-forward-phase1/status",
+            "/v1/internal/copper/current-mind-forward-phase1/result",
+          }
+          sys.exit(0 if required.issubset(paths) else 1)
+          PY
+                then
+                  sleep 10
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for the sealed forward runner on $GITHUB_SHA"
+          exit 1
+
+      - name: Run score-sealed forward pass
+        if: steps.window.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -X POST \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/current-mind-forward-phase1/start" \
+            -o forward-start.json
+
+          for poll in {1..60}; do
+            if ! curl -fsS --max-time 30 \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/copper/current-mind-forward-phase1/status" \
+              -o forward-status.json; then
+              echo "Transient status failure on poll $poll"
+              sleep 15
+              continue
+            fi
+            STATE=$(python -c 'import json;print(json.load(open("forward-status.json")).get("status","UNKNOWN"))')
+            echo "Forward runner state: $STATE"
+            if [ "$STATE" = "COMPLETED" ]; then break; fi
+            if [ "$STATE" = "FAILED" ]; then
+              python - <<'PY'
+          import json
+          d=json.load(open("forward-status.json"))
+          print(json.dumps({"status":d.get("status"),"error":d.get("error"),"score_revealed":d.get("score_revealed")},indent=2))
+          PY
+              exit 1
+            fi
+            sleep 15
+          done
+
+          python - <<'PY'
+          import json
+          d=json.load(open("forward-status.json"))
+          assert d.get("status")=="COMPLETED",d
+          assert d.get("research_only") is True,d
+          assert d.get("production_rules_changed") is False,d
+          assert d.get("live_execution_enabled") is False,d
+          assert d.get("score_revealed") is False,d
+          assert d.get("bar_timing")=="CANDLE_START_PLUS_5_MINUTES",d
+          assert d.get("scheduled_clicks")==d.get("evaluated_clicks"),d
+          assert d.get("click_coverage_exact") is True,d
+          forbidden={"actions","trades","resolved_trades","targets","stops","no_entry","session_end","expectancy_r_resolved","scorecard","decisions"}
+          assert not forbidden.intersection(d),d
+          print("FORWARD_PHASE1_OPERATIONAL_STATUS")
+          print(json.dumps({k:d.get(k) for k in (
+            "status","mode","as_of","reference_contract","contract_metadata","bar_timing",
+            "eligible_sessions","excluded_sessions","phase1_complete","scheduled_clicks",
+            "evaluated_clicks","click_coverage_exact","validation_status","score_revealed"
+          )},indent=2,sort_keys=True))
+          PY
+
+      - name: Reveal score only after full preregistered phase
+        if: steps.window.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMPLETE=$(python -c 'import json;print("true" if json.load(open("forward-status.json")).get("phase1_complete") else "false")')
+          if [ "$COMPLETE" != "true" ]; then
+            echo "Phase 1 is incomplete; interim score remains sealed."
+            exit 0
+          fi
+          curl -fsS --max-time 60 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/current-mind-forward-phase1/result" \
+            -o forward-result.json
+          python - <<'PY'
+          import json
+          d=json.load(open("forward-result.json"))
+          assert d.get("phase1_complete") is True,d
+          assert d.get("validation_status")=="PHASE1_COMPLETE_READY_FOR_REVIEW",d
+          assert d.get("evaluated_clicks")==160,d
+          print("Phase 1 full result has been sealed into the workflow artifact for review.")
+          PY
+
+      - name: Upload score-sealed forward artifact
+        if: always() && steps.window.outputs.active == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-current-mind-forward-phase1
+          path: |
+            forward-start.json
+            forward-status.json
+            forward-result.json
+          if-no-files-found: warn
+          retention-days: 30
