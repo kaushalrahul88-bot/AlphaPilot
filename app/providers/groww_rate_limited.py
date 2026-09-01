@@ -34,9 +34,6 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
     _request_times = deque()
     _rate_lock = None
 
-    # Market Brain v2.2 research breadth universe. These are ordinary NSE cash
-    # instruments and this mapping only broadens data access; it does not change
-    # any production scan, setup, risk or execution rule.
     MARKET_BREADTH_CASH_SYMBOLS = {
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN",
         "AXISBANK", "KOTAKBANK", "BAJFINANCE", "LT", "BHARTIARTL", "ITC",
@@ -63,22 +60,16 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
             wait_for = 0.0
             async with cls._lock():
                 now = time.monotonic()
-
                 while cls._request_times and now - cls._request_times[0] >= 60.0:
                     cls._request_times.popleft()
-
                 recent_second = [t for t in cls._request_times if now - t < 1.0]
-
                 if len(cls._request_times) < cls.MAX_PER_MINUTE and len(recent_second) < cls.MAX_PER_SECOND:
                     cls._request_times.append(now)
                     return
-
                 if len(recent_second) >= cls.MAX_PER_SECOND:
                     wait_for = max(wait_for, 1.02 - (now - recent_second[0]))
-
                 if len(cls._request_times) >= cls.MAX_PER_MINUTE:
                     wait_for = max(wait_for, 60.05 - (now - cls._request_times[0]))
-
             await asyncio.sleep(max(0.05, wait_for))
 
     @staticmethod
@@ -87,12 +78,10 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
 
     @staticmethod
     def _mini_contract_from_rows(rows, symbol, as_of=None):
-        """Resolve either the current Mini future or one exact listed Mini contract."""
         wanted = str(symbol or "").upper().strip()
         observed = as_of or datetime.now(IST)
         if wanted == CRUDE_OIL_MINI:
             return dict(resolve_crude_oil_mini_universe(rows, observed)["future"])
-
         exact = [
             dict(row) for row in rows or []
             if str(row.get("underlying") or "").upper() == CRUDE_OIL_MINI
@@ -123,6 +112,74 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         except Exception:
             return str(value)
 
+    @staticmethod
+    def _response_candles(response):
+        if response.status_code != 200:
+            return []
+        body = response.json()
+        payload = body.get("payload", body) if isinstance(body, dict) else {}
+        return payload.get("candles", []) if isinstance(payload, dict) else []
+
+    async def _mini_fetch_chunk(
+        self,
+        contract,
+        *,
+        candle_interval,
+        legacy_minutes,
+        start,
+        end,
+    ):
+        """Use Groww modern history first, then the legacy range route if empty.
+
+        This mirrors the resilient history behavior used by AlphaPilot's existing
+        commodity research. The fallback is still the exact same Mini contract;
+        no earlier expiry or regular CRUDEOIL contract is substituted.
+        """
+        headers = await self._headers()
+        modern_params = {
+            "exchange": "MCX",
+            "segment": "COMMODITY",
+            "groww_symbol": contract.get("groww_symbol"),
+            "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+            "candle_interval": candle_interval,
+        }
+        await self._throttle()
+        async with httpx.AsyncClient(timeout=40) as client:
+            modern = await client.get(
+                f"{self.BASE_URL}/v1/historical/candles",
+                headers=headers,
+                params=modern_params,
+            )
+        candles = self._response_candles(modern)
+        if candles:
+            return candles
+
+        legacy_params = {
+            "exchange": "MCX",
+            "segment": "COMMODITY",
+            "trading_symbol": contract.get("trading_symbol"),
+            "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+            "interval_in_minutes": str(int(legacy_minutes)),
+        }
+        await self._throttle()
+        async with httpx.AsyncClient(timeout=40) as client:
+            legacy = await client.get(
+                f"{self.BASE_URL}/v1/historical/candle/range",
+                headers=headers,
+                params=legacy_params,
+            )
+        legacy_candles = self._response_candles(legacy)
+        if legacy_candles:
+            return legacy_candles
+
+        if modern.status_code != 200:
+            modern.raise_for_status()
+        if legacy.status_code != 200:
+            legacy.raise_for_status()
+        return []
+
     async def _mini_candles(self, symbol, timeframe="15m"):
         contract = await self._mini_contract(symbol)
         interval_map = {
@@ -135,9 +192,6 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
             timeframe, ("15minute", 15, 180, 14)
         )
         instrument_type = str(contract.get("instrument_type") or "").upper()
-        # The current Mini future is probed deeply so Groww, not AlphaPilot,
-        # determines the first date with data. Listed Mini CE/PE contracts are
-        # bounded to 63 calendar days to avoid many guaranteed-empty requests.
         lookback_days = 63 if instrument_type in {"CE", "PE"} else future_lookback_days
         now = datetime.now(IST)
         start = now - timedelta(days=lookback_days)
@@ -147,25 +201,13 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
 
         while cursor <= now:
             chunk_end = min(now, cursor + timedelta(days=chunk_days) - step)
-            await self._throttle()
-            params = {
-                "exchange": "MCX",
-                "segment": "COMMODITY",
-                "groww_symbol": contract.get("groww_symbol"),
-                "start_time": cursor.strftime("%Y-%m-%d %H:%M:%S"),
-                "end_time": chunk_end.strftime("%Y-%m-%d %H:%M:%S"),
-                "candle_interval": candle_interval,
-            }
-            async with httpx.AsyncClient(timeout=40) as client:
-                response = await client.get(
-                    f"{self.BASE_URL}/v1/historical/candles",
-                    headers=await self._headers(),
-                    params=params,
-                )
-            response.raise_for_status()
-            body = response.json()
-            payload = body.get("payload", body) if isinstance(body, dict) else {}
-            candles = payload.get("candles", []) if isinstance(payload, dict) else []
+            candles = await self._mini_fetch_chunk(
+                contract,
+                candle_interval=candle_interval,
+                legacy_minutes=interval_minutes,
+                start=cursor,
+                end=chunk_end,
+            )
             for row in candles or []:
                 if isinstance(row, (list, tuple)) and len(row) >= 5:
                     deduplicated[self._raw_timestamp_key(row[0])] = list(row)
@@ -211,14 +253,10 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         return await super().candles(symbol, timeframe)
 
     async def expiries(self, symbol):
-        # Groww's expiry lookup can issue more than one upstream request. Reserve
-        # two slots so the option-chain path remains comfortably within budget.
         await self._throttle()
         await self._throttle()
         return await super().expiries(symbol)
 
     async def option_chain(self, symbol, expiry=None):
-        # Reserve one slot for the chain request itself. If expiry is omitted,
-        # expiries() above also reserves its own upstream-call budget.
         await self._throttle()
         return await super().option_chain(symbol, expiry)
