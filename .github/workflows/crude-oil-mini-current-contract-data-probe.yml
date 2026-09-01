@@ -1,17 +1,21 @@
-name: Crude Oil Mini Current Contract Data Probe
+name: Crude Oil Mini 5m Tape Certification
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/crude-oil-mini-current-contract-data-probe.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  probe:
+  certify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
+      EXPECTED_DEPLOYMENT: fb04610f1cece0070e83876dc694611d5a472678
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,144 +23,149 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - name: Verify Mini probe helpers
-        run: python -m unittest tests.test_crude_oil_mini_data_probe tests.test_groww_crude_oil_mini_provider -v
 
-      - name: Wait for deployed Mini provider route
+      - name: Wait for exact timestamp-normalization deployment
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in {1..48}; do
-            CODE=$(curl --silent --show-error --max-time 30 -o mini-quote.json -w "%{http_code}" \
-              "$API_BASE/v1/quote/CRUDEOILM" || true)
+          for attempt in {1..60}; do
+            CODE=$(curl --silent --show-error --max-time 30 -o health.json -w "%{http_code}" "$API_BASE/health" || true)
             if [ "$CODE" = "200" ]; then
-              python -m json.tool mini-quote.json
-              exit 0
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "attempt=$attempt deployed=$DEPLOYED expected=$EXPECTED_DEPLOYMENT"
+              if [ "$DEPLOYED" = "$EXPECTED_DEPLOYMENT" ]; then
+                cat health.json
+                exit 0
+              fi
             fi
-            echo "Mini provider not deployed yet: attempt=$attempt HTTP=$CODE"
             sleep 10
           done
-          cat mini-quote.json 2>/dev/null || true
+          cat health.json 2>/dev/null || true
           exit 1
 
-      - name: Probe current Mini future and real Mini option history
+      - name: Certify exact CRUDEOILM 5m tape
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import asyncio
-          import json
-          import os
-          from datetime import date
+          import json, os
+          from collections import Counter
+          from datetime import datetime, timedelta
           from pathlib import Path
-
+          from zoneinfo import ZoneInfo
           import httpx
 
-          from app.crude_oil_mini_contracts import (
-              CRUDE_OIL_MINI,
-              fetch_crude_oil_mini_master,
-              resolve_crude_oil_mini_universe,
-          )
-          from app.crude_oil_mini_data_probe import (
-              _close_near_mid_session,
-              _complete_sessions,
-              _nearest_option,
-          )
+          from app.crude_oil_mini_data_probe import _complete_sessions
 
-          api = os.environ["API_BASE"].rstrip("/")
+          IST=ZoneInfo('Asia/Kolkata')
+          api=os.environ['API_BASE'].rstrip('/')
 
-          def get_candles(symbol):
-              with httpx.Client(timeout=180) as client:
-                  response = client.get(f"{api}/v1/candles/{symbol}", params={"timeframe":"5m"})
-                  response.raise_for_status()
-                  body = response.json()
-              rows = body.get("candles") or []
-              return rows
+          with httpx.Client(timeout=420) as client:
+              q=client.get(f'{api}/v1/quote/CRUDEOILM')
+              q.raise_for_status()
+              quote=q.json()
+              c=client.get(f'{api}/v1/candles/CRUDEOILM',params={'timeframe':'5m'})
+              c.raise_for_status()
+              rows=(c.json().get('candles') or [])
 
-          future_rows = get_candles(CRUDE_OIL_MINI)
-          sessions = _complete_sessions(future_rows)
-          complete = [row for row in sessions if row["complete_for_20_click_research"]]
-          if not complete:
-              raise SystemExit("Current CRUDEOILM future returned no complete sessions")
-
-          latest_complete = date.fromisoformat(complete[-1]["date"])
-          reference = _close_near_mid_session(future_rows, latest_complete)
-          if reference is None:
-              raise SystemExit("Could not derive point-in-time Mini reference price")
-
-          master = asyncio.run(fetch_crude_oil_mini_master())
-          universe = resolve_crude_oil_mini_universe(master, date.today())
-          option_expiry = universe["nearest_option_expiry"]
-          option_probes = []
-          for option_type in ("CE","PE"):
-              contract = _nearest_option(
-                  master,
-                  expiry=option_expiry,
-                  option_type=option_type,
-                  price=reference,
-              )
-              if contract is None:
-                  option_probes.append({"option_type":option_type,"status":"CONTRACT_NOT_FOUND"})
+          contract=quote.get('contract') or {}
+          parsed=[]
+          timestamp_format_errors=[]
+          ohlcv_errors=[]
+          off_grid=[]
+          for index,row in enumerate(rows):
+              if not isinstance(row,(list,tuple)) or len(row)<5:
+                  ohlcv_errors.append({'index':index,'reason':'ROW_SHAPE'})
                   continue
-              rows = get_candles(contract["trading_symbol"])
-              same_day = [r for r in rows if str(r[0])[:10] == latest_complete.isoformat()]
-              option_probes.append({
-                  "option_type":option_type,
-                  "status":"AVAILABLE" if rows else "NO_CANDLES",
-                  "trading_symbol":contract["trading_symbol"],
-                  "groww_symbol":contract["groww_symbol"],
-                  "expiry":contract["expiry"],
-                  "strike":contract["strike"],
-                  "lot_size":contract["lot_size"],
-                  "reference_underlying":reference,
-                  "all_returned_candles":len(rows),
-                  "latest_complete_day_candles":len(same_day),
-                  "first_at":rows[0][0] if rows else None,
-                  "last_at":rows[-1][0] if rows else None,
-              })
+              stamp=row[0]
+              if not isinstance(stamp,str):
+                  timestamp_format_errors.append({'index':index,'value':stamp,'reason':'NOT_STRING'})
+                  continue
+              try:
+                  dt=datetime.fromisoformat(stamp)
+              except Exception:
+                  timestamp_format_errors.append({'index':index,'value':stamp,'reason':'NOT_ISO'})
+                  continue
+              if dt.tzinfo is None or dt.utcoffset()!=timedelta(hours=5,minutes=30):
+                  timestamp_format_errors.append({'index':index,'value':stamp,'reason':'NOT_IST_OFFSET_AWARE'})
+                  continue
+              dt=dt.astimezone(IST)
+              parsed.append(dt)
+              if dt.second!=0 or dt.microsecond!=0 or dt.minute%5!=0:
+                  off_grid.append(stamp)
+              try:
+                  o,h,l,cl=[float(x) for x in row[1:5]]
+                  vol=float(row[5]) if len(row)>5 and row[5] is not None else 0.0
+                  if min(o,h,l,cl)<=0 or h<max(o,cl,l) or l>min(o,cl,h) or vol<0:
+                      ohlcv_errors.append({'index':index,'timestamp':stamp,'reason':'INVALID_OHLCV'})
+              except Exception:
+                  ohlcv_errors.append({'index':index,'timestamp':stamp,'reason':'NON_NUMERIC_OHLCV'})
 
-          result = {
-              "mode":"CRUDE_OIL_MINI_DEPLOYED_CURRENT_CONTRACT_DATA_PROBE_V1",
-              "product":"CRUDE_OIL_MINI",
-              "underlying_symbol":CRUDE_OIL_MINI,
-              "research_only":True,
-              "news_enabled":False,
-              "live_execution_enabled":False,
-              "older_futures_contracts_used":False,
-              "regular_crude_used":False,
-              "synthetic_option_prices_used":False,
-              "future":universe["future"],
-              "future_candles":len(future_rows),
-              "future_first_at":future_rows[0][0] if future_rows else None,
-              "future_last_at":future_rows[-1][0] if future_rows else None,
-              "complete_sessions":len(complete),
-              "complete_session_first":complete[0]["date"],
-              "complete_session_last":complete[-1]["date"],
-              "latest_complete_session":latest_complete.isoformat(),
-              "nearest_option_expiry":option_expiry,
-              "option_probes":option_probes,
-              "option_premium_history_found":any(x.get("all_returned_candles",0)>0 for x in option_probes),
-              "ready_for_20_click_no_news_replay":len(complete)>=5,
-              "future_and_option_expiry_independent":universe["future_and_option_expiry_are_independent"],
+          stamps=[dt.isoformat() for dt in parsed]
+          duplicate_count=sum(count-1 for count in Counter(stamps).values() if count>1)
+          non_monotonic=sum(1 for a,b in zip(parsed,parsed[1:]) if b<=a)
+          sessions=_complete_sessions(rows)
+          complete=[s for s in sessions if s.get('complete_for_20_click_research')]
+
+          # Point-in-time rule used by the Mini replay: a 5m bar that starts at T
+          # becomes observable only at T+5m. A click at 10:00 may therefore use
+          # the 09:55 bar, never the 10:00 bar.
+          visibility_sample=None
+          if parsed:
+              first=parsed[0]
+              visibility_sample={
+                  'bar_start':first.isoformat(),
+                  'visible_at':(first+timedelta(minutes=5)).isoformat(),
+              }
+
+          result={
+              'mode':'CRUDE_OIL_MINI_5M_TAPE_CERTIFICATION_V1',
+              'research_only':True,
+              'news_enabled':False,
+              'live_execution_enabled':False,
+              'contract':contract,
+              'raw_candles':len(rows),
+              'parsed_candles':len(parsed),
+              'first_at':rows[0][0] if rows else None,
+              'last_at':rows[-1][0] if rows else None,
+              'timestamp_format_errors':len(timestamp_format_errors),
+              'timestamp_format_error_examples':timestamp_format_errors[:5],
+              'duplicate_timestamp_count':duplicate_count,
+              'non_monotonic_pairs':non_monotonic,
+              'off_5m_grid_count':len(off_grid),
+              'off_5m_grid_examples':off_grid[:5],
+              'ohlcv_error_count':len(ohlcv_errors),
+              'ohlcv_error_examples':ohlcv_errors[:5],
+              'sessions':len(sessions),
+              'complete_sessions':len(complete),
+              'complete_session_first':complete[0]['date'] if complete else None,
+              'complete_session_last':complete[-1]['date'] if complete else None,
+              'bar_visibility_policy':'BAR_START_PLUS_5_MINUTES',
+              'visibility_sample':visibility_sample,
+              'regular_crude_used':False,
+              'older_futures_contracts_used':False,
+              'checks':{
+                  'exact_mini_contract':contract.get('trading_symbol')=='CRUDEOILM21SEP26FUT',
+                  'mini_lot_size_10':contract.get('lot_size')==10,
+                  'all_timestamps_canonical_ist':len(timestamp_format_errors)==0 and len(parsed)==len(rows),
+                  'strictly_increasing':non_monotonic==0,
+                  'no_duplicate_timestamps':duplicate_count==0,
+                  'five_minute_grid':len(off_grid)==0,
+                  'valid_ohlcv':len(ohlcv_errors)==0,
+                  'sufficient_complete_sessions':len(complete)>=5,
+              },
           }
-          Path("crude-oil-mini-current-contract-data-probe.json").write_text(
-              json.dumps(result,indent=2,sort_keys=True)+"\n"
-          )
+          result['certified_for_no_news_replay']=all(result['checks'].values())
+          Path('crude-oil-mini-5m-tape-certification.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
           print(json.dumps(result,indent=2,sort_keys=True))
-
-          assert result["future"]["trading_symbol"] == "CRUDEOILM21SEP26FUT", result
-          assert result["older_futures_contracts_used"] is False, result
-          assert result["regular_crude_used"] is False, result
-          assert result["synthetic_option_prices_used"] is False, result
-          assert result["future_and_option_expiry_independent"] is True, result
-          assert result["ready_for_20_click_no_news_replay"] is True, result
+          assert result['certified_for_no_news_replay'] is True,result
           PY
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: crude-oil-mini-current-contract-data-probe
-          path: crude-oil-mini-current-contract-data-probe.json
+          name: crude-oil-mini-5m-tape-certification
+          path: crude-oil-mini-5m-tape-certification.json
           if-no-files-found: warn
           retention-days: 30
