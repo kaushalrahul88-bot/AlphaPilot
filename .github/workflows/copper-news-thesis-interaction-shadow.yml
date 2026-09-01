@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/copper-news-thesis-interaction-shadow.yml"
       - "app/market_news_thesis_interaction.py"
+      - "app/playbook_pattern_confirmation_shadow.py"
       - "app/market_news_catalyst_control.py"
       - "app/current_mind_copper_replay.py"
       - "app/current_mind_thesis_builder.py"
@@ -69,7 +70,7 @@ jobs:
           from pathlib import Path
 
           report=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
-          assert report["mode"]=="COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_V1",report
+          assert report["mode"]=="COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_V2",report
           assert report["research_only"] is True,report
           assert report["descriptive_only"] is True,report
           assert report["production_rules_changed"] is False,report
@@ -80,17 +81,23 @@ jobs:
           assert shadow["shadow_only"] is True,shadow
           assert shadow["changes_decision"] is False,shadow
           assert shadow["headline_stance_used_for_direction"] is False,shadow
+          assert shadow["literal_playbook_pattern_confirmation_added"] is True,shadow
+          assert shadow["pattern_confirmation_reads_only_bars_at_or_before_click"] is True,shadow
+          assert shadow["pattern_lookback_bars"]==6,shadow
+          assert shadow["pattern_lookback_source"]=="FROZEN_CURRENT_MIND_INVALIDATION_WINDOW",shadow
           assert shadow["pattern_specific_confirmation_required_for_semantic_verification"] is True,shadow
           assert shadow["generic_regime_eligibility_is_not_pattern_confirmation"] is True,shadow
           assert shadow["generic_recent_high_low_trigger_is_not_pattern_confirmation"] is True,shadow
           assert shadow["thresholds_fitted_to_august_outcomes"] is False,shadow
           integrity=report["outcome_integrity"]
-          assert integrity["outcomes_read_for_shadow_state"] is False,integrity
-          assert integrity["outcomes_read_after_shadow_freeze_for_descriptive_evaluation"] is True,integrity
+          assert integrity["outcomes_read_for_thesis_interaction_shadow"] is False,integrity
+          assert integrity["outcomes_read_for_pattern_confirmation_shadow"] is False,integrity
+          assert integrity["outcomes_read_after_both_shadows_freeze_for_descriptive_evaluation"] is True,integrity
           source=report["sources"]
           assert source["frozen_candles"]["trading_symbol"]=="COPPER31AUG26FUT",source
           assert source["frozen_candles"]["network_refetch"] is False,source
           assert source["frozen_candles"]["point_in_time"] is True,source
+          assert source["frozen_candles"]["normalized_rows"]==3318,source
           assert source["baseline_replay"]["scheduled_clicks"]==360,source
           assert source["baseline_replay"]["evaluated_clicks"]==360,source
           assert source["baseline_replay"]["click_coverage_exact"] is True,source
@@ -102,12 +109,17 @@ jobs:
           assert sum(report["thesis_interaction_counts"].values())==360,report
           assert sum(report["declared_playbook_counts"].values())==360,report
           assert sum(report["playbook_semantic_status_counts"].values())==360,report
+          assert sum(report["pattern_confirmation_status_counts"].values())==360,report
           assert sum(report["active_opposing_catalyst_playbook_counts"].values())==len(report["active_opposing_rows"]),report
           for row in report["rows"]:
-              shadow_row=row["news_thesis_interaction_shadow"]
-              assert shadow_row["outcome_blind"] is True,shadow_row
-              assert shadow_row["shadow_only"] is True,shadow_row
-              assert shadow_row["changes_decision"] is False,shadow_row
+              interaction=row["news_thesis_interaction_shadow"]
+              pattern=row["playbook_pattern_confirmation_shadow"]
+              assert interaction["outcome_blind"] is True,interaction
+              assert interaction["shadow_only"] is True,interaction
+              assert interaction["changes_decision"] is False,interaction
+              assert pattern["outcome_blind"] is True,pattern
+              assert pattern["shadow_only"] is True,pattern
+              assert pattern["changes_decision"] is False,pattern
           for row in report["active_opposing_rows"]:
               assert row["catalyst_control_shadow"]["state"]=="CONTROL_ACTIVE",row
               assert row["news_thesis_interaction_shadow"]["alignment"]=="OPPOSED",row
@@ -116,9 +128,12 @@ jobs:
               "catalyst_control_counts":report["catalyst_control_counts"],
               "thesis_interaction_counts":report["thesis_interaction_counts"],
               "declared_playbook_counts":report["declared_playbook_counts"],
-              "playbook_semantic_status_counts":report["playbook_semantic_status_counts"],
+              "pattern_confirmation_status_counts":report["pattern_confirmation_status_counts"],
+              "pattern_confirmation_by_playbook":report["pattern_confirmation_by_playbook"],
+              "confirmed_pattern_by_playbook":report["confirmed_pattern_by_playbook"],
               "opposing_catalyst_playbook_counts":report["opposing_catalyst_playbook_counts"],
               "active_opposing_catalyst_playbook_counts":report["active_opposing_catalyst_playbook_counts"],
+              "active_opposing_pattern_counts":report["active_opposing_pattern_counts"],
               "active_opposing_catalyst_outcomes_post_freeze":report["active_opposing_catalyst_outcomes_post_freeze"],
           }
           print("NEWS_THESIS_INTERACTION_SHADOW_SUMMARY")
@@ -126,7 +141,8 @@ jobs:
           print("ACTIVE_OPPOSING_ROWS")
           for row in report["active_opposing_rows"]:
               interaction=row["news_thesis_interaction_shadow"]
-              audit=interaction["playbook_audit"]
+              semantic=interaction["playbook_audit"]
+              pattern=row["playbook_pattern_confirmation_shadow"]
               control=row["catalyst_control_shadow"]
               print(json.dumps({
                   "click_timestamp":row["click_timestamp"],
@@ -134,8 +150,9 @@ jobs:
                   "declared_playbook":row["declared_playbook"],
                   "playbook_family":row["playbook_family"],
                   "interaction":interaction["interaction"],
-                  "playbook_semantic_status":audit["status"],
-                  "range_edge_location_proxy":audit.get("range_edge_location_proxy"),
+                  "playbook_semantic_status":semantic["status"],
+                  "literal_pattern_status":pattern["status"],
+                  "literal_pattern_detail":pattern.get("detail"),
                   "regime_labels":row["regime_labels"],
                   "regime_observations":row["regime_observations"],
                   "catalyst_direction":control.get("direction"),
@@ -151,16 +168,17 @@ jobs:
           from pathlib import Path
           report=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
           manifest={
-              "mode":"COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_MANIFEST_V1",
+              "mode":"COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_MANIFEST_V2",
               "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "network_refetch":False,
-              "outcome_blind_shadow_state":True,
-              "outcomes_used_only_after_shadow_freeze":True,
+              "outcome_blind_thesis_interaction_state":True,
+              "outcome_blind_playbook_pattern_state":True,
+              "outcomes_used_only_after_both_shadows_freeze":True,
               "production_rules_changed":False,
               "strategy_rules_changed":False,
               "validation_status":report["validation_status"],
-              "rule":"Audit how frozen catalyst-control state relates to the already-frozen Current Mind playbook and direction. Regime eligibility and generic trade geometry are not treated as proof of a named chart pattern. The audit is shadow-only and cannot change an action.",
+              "rule":"Audit how frozen catalyst-control state relates to the already-frozen Current Mind thesis and whether the declared playbook has literal chart-pattern confirmation visible by the click. The audit is shadow-only and cannot change an action.",
           }
           Path("copper-news-thesis-interaction-shadow-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
