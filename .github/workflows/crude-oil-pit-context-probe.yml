@@ -1,0 +1,33 @@
+name: Crude Oil PIT Context Probe
+
+on:
+  pull_request:
+    paths:
+      - "app/crude_oil_pit_context_probe.py"
+      - "app/crude_oil_context_source_inventory.py"
+      - "scripts/run_crude_oil_pit_context_probe.py"
+      - "tests/test_crude_oil_pit_context_probe.py"
+      - "tests/test_crude_oil_context_source_inventory.py"
+      - ".github/workflows/crude-oil-pit-context-probe.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install probe dependencies
+        run: pip install httpx pytest
+      - name: Run PIT semantics tests
+        run: pytest -q tests/test_crude_oil_pit_context_probe.py tests/test_crude_oil_context_source_inventory.py
+      - name: Probe June-August hourly context
+        run: python scripts/run_crude_oil_pit_context_probe.py --output crude_oil_pit_context_probe.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crude-oil-pit-context-probe-v1
+          path: crude_oil_pit_context_probe.json
+          if-no-files-found: error
