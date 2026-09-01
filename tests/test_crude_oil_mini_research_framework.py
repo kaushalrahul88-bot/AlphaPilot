@@ -73,11 +73,14 @@ class CrudeOilMiniResearchFrameworkTests(unittest.TestCase):
                         "future_move_without_setup": True,
                     },
                     "regime": {
-                        "trend_structure": "RANGE",
-                        "volatility_regime": "NORMAL",
-                        "location": "IN_VALUE",
-                        "participation": "NORMAL",
-                        "opening_behavior": "BALANCED",
+                        "mode": "MARKET_REGIME_OBSERVER_V1",
+                        "observations": {
+                            "trend_structure": "RANGE",
+                            "volatility_regime": "NORMAL",
+                            "location": "IN_VALUE",
+                            "participation": "NORMAL",
+                            "opening_behavior": "BALANCED",
+                        },
                     },
                     "decision": {"reason": "INSUFFICIENT_ALIGNMENT"},
                 },
@@ -94,6 +97,35 @@ class CrudeOilMiniResearchFrameworkTests(unittest.TestCase):
         self.assertEqual(report["overall"]["waits"], 1)
         self.assertEqual(report["overall"]["large_move_candidates"], 1)
         self.assertEqual(report["large_move_candidates"][0]["dominant_path_direction"], "UP")
+        self.assertEqual(report["large_move_candidates"][0]["regime"]["trend_structure"], "RANGE")
+        self.assertIn("RANGE", report["by_regime"]["trend_structure"])
+        self.assertNotIn("UNKNOWN", report["by_regime"]["trend_structure"])
+
+    def test_abstention_audit_keeps_legacy_flat_regime_fixture_compatible(self):
+        replay = {
+            "decisions": [{
+                "session": "2026-08-18",
+                "click_timestamp": "2026-08-18T12:30:00+05:30",
+                "action": "WAIT",
+                "outcome": {
+                    "result": "WAIT",
+                    "max_up_pct": 0.2,
+                    "max_down_pct": 0.4,
+                    "large_move_threshold_pct": 0.5,
+                    "future_move_without_setup": False,
+                },
+                "regime": {
+                    "trend_structure": "DOWNTREND",
+                    "volatility_regime": "HIGH",
+                    "location": "IN_VALUE",
+                    "participation": "NORMAL",
+                    "opening_behavior": "BREAKDOWN",
+                },
+            }]
+        }
+        report = abstention.evaluate_abstention_audit(replay)
+        self.assertIn("DOWNTREND", report["by_regime"]["trend_structure"])
+        self.assertIn("HIGH", report["by_regime"]["volatility_regime"])
 
     def test_memory_evidence_audit_uses_crude_only_and_runs_causally(self):
         candles = (
