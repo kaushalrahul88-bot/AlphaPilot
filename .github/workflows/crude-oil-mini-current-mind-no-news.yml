@@ -68,12 +68,15 @@ jobs:
               'integrity':result['integrity'],
           },indent=2,sort_keys=True))
 
+          sessions=sorted({row['session'] for row in result.get('decisions',[])})
           assert contract.get('trading_symbol')=='CRUDEOILM21SEP26FUT',contract
           assert contract.get('lot_size')==10,contract
           assert result['reference_contract']=='CRUDEOILM21SEP26FUT',result['reference_contract']
-          assert result['complete_sessions']>0,result
-          assert result['scheduled_clicks']==result['complete_sessions']*20,result
-          assert result['evaluated_clicks']==result['scheduled_clicks'],result
+          # Frozen Sep-1 research snapshot after late-August recovery: 54 complete sessions through Aug 31.
+          assert result['complete_sessions']==54,result
+          assert result['scheduled_clicks']==1080,result
+          assert result['evaluated_clicks']==1080,result
+          assert sessions and sessions[-1]=='2026-08-31',sessions[-3:]
           assert result['click_coverage_exact'] is True,result
           assert result['news_enabled'] is False,result
           assert result['option_market_data_used'] is False,result
