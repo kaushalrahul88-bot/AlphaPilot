@@ -112,6 +112,22 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         except Exception:
             return str(value)
 
+    @classmethod
+    def _normalize_mini_candle(cls, row):
+        """Return one Mini candle with a canonical offset-aware IST timestamp.
+
+        Groww's legacy MCX history can emit epoch seconds while the modern route
+        emits ISO timestamps. The Market Brain must never receive a mixed time
+        representation, so normalization happens before dedupe and before data
+        leaves the provider.
+        """
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            return None
+        timestamp = cls._raw_timestamp_key(row[0])
+        normalized = list(row)
+        normalized[0] = timestamp
+        return timestamp, normalized
+
     @staticmethod
     def _response_candles(response):
         if response.status_code != 200:
@@ -216,8 +232,11 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                 tolerate_legacy_miss=is_option,
             )
             for row in candles or []:
-                if isinstance(row, (list, tuple)) and len(row) >= 5:
-                    deduplicated[self._raw_timestamp_key(row[0])] = list(row)
+                normalized = self._normalize_mini_candle(row)
+                if normalized is None:
+                    continue
+                timestamp, normalized_row = normalized
+                deduplicated[timestamp] = normalized_row
             if chunk_end >= now:
                 break
             cursor = chunk_end + step
