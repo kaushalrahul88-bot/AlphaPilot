@@ -1,10 +1,14 @@
-from fastapi import HTTPException
+import asyncio
+import traceback
+
+from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .candidate_validator import run_candidate_validator
 from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
-from .main import app, settings, _safe_upstream_error
+from .current_mind_copper_forward import run_forward_phase1_from_provider
+from .main import app, settings, _safe_upstream_error, _collector_store
 from .market_regime_research import run_market_regime_research
 from .providers.factory import get_provider
 
@@ -108,3 +112,92 @@ async def candidate_h_option_oos(request: CandidateHOptionRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         _safe_upstream_error("Candidate H option OOS", exc)
+
+
+_copper_forward_phase1_job = {"status": "IDLE", "result": None, "error": None}
+_copper_forward_phase1_task = None
+
+
+def _run_copper_forward_phase1_sync():
+    global _copper_forward_phase1_job
+    try:
+        result = asyncio.run(run_forward_phase1_from_provider(get_provider(settings)))
+        _copper_forward_phase1_job = {"status": "COMPLETED", "result": result, "error": None}
+    except Exception as exc:
+        _copper_forward_phase1_job = {
+            "status": "FAILED",
+            "result": None,
+            "error": str(exc)[:1000],
+            "traceback": traceback.format_exc()[-4000:],
+        }
+
+
+def _forward_phase1_operational_view(job: dict) -> dict:
+    status = str(job.get("status") or "UNKNOWN")
+    if status != "COMPLETED":
+        return {
+            "status": status,
+            "error": job.get("error") if status == "FAILED" else None,
+            "score_revealed": False,
+        }
+    result = job.get("result") or {}
+    return {
+        "status": "COMPLETED",
+        "mode": result.get("mode"),
+        "research_only": result.get("research_only"),
+        "production_rules_changed": result.get("production_rules_changed"),
+        "live_execution_enabled": result.get("live_execution_enabled"),
+        "as_of": result.get("as_of"),
+        "reference_contract": result.get("reference_contract"),
+        "contract_metadata": result.get("contract_metadata"),
+        "bar_timing": result.get("bar_timing"),
+        "eligible_sessions": result.get("eligible_sessions"),
+        "excluded_sessions": result.get("excluded_sessions"),
+        "phase1_complete": result.get("phase1_complete"),
+        "scheduled_clicks": result.get("scheduled_clicks"),
+        "evaluated_clicks": result.get("evaluated_clicks"),
+        "click_coverage_exact": result.get("click_coverage_exact"),
+        "validation_status": result.get("validation_status"),
+        "score_revealed": False,
+        "sealed_fields": [
+            "actions", "trades", "resolved_trades", "targets", "stops",
+            "no_entry", "session_end", "expectancy_r_resolved", "scorecard", "decisions",
+        ],
+    }
+
+
+@app.post("/v1/internal/copper/current-mind-forward-phase1/start")
+async def copper_current_mind_forward_phase1_start(
+    x_collector_token: str | None = Header(default=None),
+):
+    global _copper_forward_phase1_job, _copper_forward_phase1_task
+    _collector_store(x_collector_token)
+    if _copper_forward_phase1_job.get("status") == "RUNNING":
+        return _forward_phase1_operational_view(_copper_forward_phase1_job)
+    _copper_forward_phase1_job = {"status": "RUNNING", "result": None, "error": None}
+    _copper_forward_phase1_task = asyncio.create_task(asyncio.to_thread(_run_copper_forward_phase1_sync))
+    return _forward_phase1_operational_view(_copper_forward_phase1_job)
+
+
+@app.get("/v1/internal/copper/current-mind-forward-phase1/status")
+async def copper_current_mind_forward_phase1_status(
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    return _forward_phase1_operational_view(_copper_forward_phase1_job)
+
+
+@app.get("/v1/internal/copper/current-mind-forward-phase1/result")
+async def copper_current_mind_forward_phase1_result(
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    if _copper_forward_phase1_job.get("status") != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Forward Phase 1 has not completed a runner pass")
+    result = _copper_forward_phase1_job.get("result") or {}
+    if not result.get("phase1_complete"):
+        raise HTTPException(
+            status_code=423,
+            detail="Forward Phase 1 score is sealed until the preregistered Sep 2-11 window is complete",
+        )
+    return result
