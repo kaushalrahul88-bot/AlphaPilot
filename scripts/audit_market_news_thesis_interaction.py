@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from app.commodity_time import parse_ist_timestamp
+from app.copper_market_brain_abstention_audit import normalize_candle_rows
 from app.current_mind_copper_replay import evaluate_current_mind_replay
 from app.market_news_catalyst_control import catalyst_control_context
 from app.market_news_thesis_interaction import assess_news_thesis_interaction
@@ -57,8 +58,11 @@ def run(news_payload: dict, candle_payload) -> dict:
     candles = _candles(candle_payload)
     if not candles:
         raise RuntimeError("Frozen candle artifact is empty")
+    normalized_rows = normalize_candle_rows(candles)
+    if not normalized_rows:
+        raise RuntimeError("Frozen candle artifact has no usable normalized OHLC rows")
 
-    baseline = evaluate_current_mind_replay(candles)
+    baseline = evaluate_current_mind_replay(normalized_rows)
     reaction_audit = audit_news_reactions(news_payload, candles, as_of=_latest_timestamp(candles))
     reaction_records = list(reaction_audit.get("records") or [])
 
@@ -171,6 +175,7 @@ def run(news_payload: dict, candle_payload) -> dict:
                 "network_refetch": candle_payload.get("network_refetch") if isinstance(candle_payload, dict) else None,
                 "point_in_time": candle_payload.get("point_in_time") if isinstance(candle_payload, dict) else None,
                 "candles": len(candles),
+                "normalized_rows": len(normalized_rows),
             },
             "news": {
                 "records": len(news_payload.get("records") or []),
