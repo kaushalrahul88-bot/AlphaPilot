@@ -87,6 +87,50 @@ class MiniHistoryFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows),1)
         self.assertEqual(len(FakeClient.calls),1)
 
+    async def test_option_prelisting_legacy_miss_is_tolerated(self):
+        FakeClient.responses=[
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[]}}),
+            FakeResponse(404,{"status":"FAILURE","message":"contract unavailable for interval"}),
+        ]
+        contract={
+            "instrument_type":"CE",
+            "trading_symbol":"CRUDEOILM17SEP268250CE",
+            "groww_symbol":"MCX-CRUDEOILM-17Sep26-8250-CE",
+        }
+        with patch.object(RateLimitedGrowwProvider,"_throttle",new=AsyncMock()), \
+             patch("app.providers.groww_rate_limited.httpx.AsyncClient",FakeClient):
+            rows=await self.provider._mini_fetch_chunk(
+                contract,
+                candle_interval="5minute",
+                legacy_minutes=5,
+                start=datetime(2026,7,1,9,0,tzinfo=IST),
+                end=datetime(2026,7,7,23,30,tzinfo=IST),
+                tolerate_legacy_miss=True,
+            )
+        self.assertEqual(rows,[])
+        self.assertEqual(len(FakeClient.calls),2)
+
+    async def test_future_legacy_error_still_fails_closed(self):
+        FakeClient.responses=[
+            FakeResponse(200,{"status":"SUCCESS","payload":{"candles":[]}}),
+            FakeResponse(404,{"status":"FAILURE","message":"unexpected future history failure"}),
+        ]
+        contract={
+            "instrument_type":"FUT",
+            "trading_symbol":"CRUDEOILM21SEP26FUT",
+            "groww_symbol":"MCX-CRUDEOILM-21Sep26-FUT",
+        }
+        with patch.object(RateLimitedGrowwProvider,"_throttle",new=AsyncMock()), \
+             patch("app.providers.groww_rate_limited.httpx.AsyncClient",FakeClient):
+            with self.assertRaises(RuntimeError):
+                await self.provider._mini_fetch_chunk(
+                    contract,
+                    candle_interval="5minute",
+                    legacy_minutes=5,
+                    start=datetime(2026,8,1,9,0,tzinfo=IST),
+                    end=datetime(2026,8,7,23,30,tzinfo=IST),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
