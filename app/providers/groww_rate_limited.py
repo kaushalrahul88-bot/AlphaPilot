@@ -114,13 +114,7 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
 
     @classmethod
     def _normalize_mini_candle(cls, row):
-        """Return one Mini candle with a canonical offset-aware IST timestamp.
-
-        Groww's legacy MCX history can emit epoch seconds while the modern route
-        emits ISO timestamps. The Market Brain must never receive a mixed time
-        representation, so normalization happens before dedupe and before data
-        leaves the provider.
-        """
+        """Return one Mini candle with a canonical offset-aware IST timestamp."""
         if not isinstance(row, (list, tuple)) or len(row) < 5:
             return None
         timestamp = cls._raw_timestamp_key(row[0])
@@ -136,6 +130,49 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         payload = body.get("payload", body) if isinstance(body, dict) else {}
         return payload.get("candles", []) if isinstance(payload, dict) else []
 
+    @staticmethod
+    def _floor_to_interval(value: datetime, interval_minutes: int) -> datetime:
+        """Align an IST timestamp to a deterministic candle-start boundary."""
+        observed = value.astimezone(IST)
+        if interval_minutes >= 1440:
+            return observed.replace(hour=0, minute=0, second=0, microsecond=0)
+        minute_of_day = observed.hour * 60 + observed.minute
+        floored = (minute_of_day // interval_minutes) * interval_minutes
+        return observed.replace(
+            hour=floored // 60,
+            minute=floored % 60,
+            second=0,
+            microsecond=0,
+        )
+
+    @classmethod
+    def _mini_history_bounds(
+        cls,
+        *,
+        observed_at: datetime,
+        lookback_days: int,
+        interval_minutes: int,
+    ) -> tuple[datetime, datetime]:
+        """Return stable Mini history bounds ending at the latest completed bar.
+
+        The old rolling-window implementation preserved the current clock minute
+        and seconds in the 180-day start. Seven-day chunks therefore cut through
+        sessions at different timestamps on every request. A historical endpoint
+        that floors or rounds boundaries can then return a different tape for the
+        same completed dates. Start is now midnight on a fixed calendar date and
+        end is the latest fully completed candle start.
+        """
+        aligned_now = cls._floor_to_interval(observed_at, interval_minutes)
+        step = timedelta(minutes=interval_minutes)
+        completed_end = aligned_now - step
+        start = (completed_end - timedelta(days=lookback_days)).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        return start, completed_end
+
     async def _mini_fetch_chunk(
         self,
         contract,
@@ -146,18 +183,16 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         end,
         tolerate_legacy_miss=False,
     ):
-        """Fetch one exact Mini-contract chunk without allowing partial modern data to hide legacy rows.
+        """Fetch one exact Mini-contract chunk with fail-closed futures semantics.
 
         Groww's modern MCX route can return a non-empty but incomplete chunk. For
-        CRUDEOILM futures we therefore query both the modern and legacy endpoints
-        for the same exact contract and merge them by canonical IST timestamp.
-        Modern rows win on overlaps. This recovers missing bars without stitching
-        another expiry or substituting regular CRUDEOIL.
+        CRUDEOILM futures both modern and legacy endpoints are therefore required
+        to succeed before their rows are merged. This is deliberate: accepting a
+        successful partial source when the companion route is rate-limited would
+        create a different historical tape across repeated research runs.
 
         Exact Mini options retain the narrower fallback behavior because their
-        legacy route can reject pre-listing intervals: a non-empty modern option
-        response is returned directly, otherwise the legacy route is tried and an
-        explicitly tolerated legacy-only miss may resolve to an empty list.
+        legacy route can reject pre-listing intervals.
         """
         headers = await self._headers()
         instrument_type = str(contract.get("instrument_type") or "").upper().strip()
@@ -210,6 +245,13 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                 legacy.raise_for_status()
             return []
 
+        # Futures require both sources. Never return a partial merged history when
+        # one companion route failed (especially HTTP 429 under concurrent audits).
+        if modern.status_code != 200:
+            modern.raise_for_status()
+        if legacy.status_code != 200:
+            legacy.raise_for_status()
+
         merged = {}
         for row in legacy_candles or []:
             normalized = self._normalize_mini_candle(row)
@@ -221,14 +263,7 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
             if normalized is not None:
                 timestamp, normalized_row = normalized
                 merged[timestamp] = normalized_row
-        if merged:
-            return [merged[key] for key in sorted(merged)]
-
-        if modern.status_code != 200:
-            modern.raise_for_status()
-        if legacy.status_code != 200:
-            legacy.raise_for_status()
-        return []
+        return [merged[key] for key in sorted(merged)]
 
     async def _mini_candles(self, symbol, timeframe="15m"):
         contract = await self._mini_contract(symbol)
@@ -245,13 +280,17 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
         is_option = instrument_type in {"CE", "PE"}
         lookback_days = 63 if is_option else future_lookback_days
         now = datetime.now(IST)
-        start = now - timedelta(days=lookback_days)
+        start, completed_end = self._mini_history_bounds(
+            observed_at=now,
+            lookback_days=lookback_days,
+            interval_minutes=interval_minutes,
+        )
         cursor = start
         step = timedelta(minutes=interval_minutes)
         deduplicated = {}
 
-        while cursor <= now:
-            chunk_end = min(now, cursor + timedelta(days=chunk_days) - step)
+        while cursor <= completed_end:
+            chunk_end = min(completed_end, cursor + timedelta(days=chunk_days) - step)
             candles = await self._mini_fetch_chunk(
                 contract,
                 candle_interval=candle_interval,
@@ -266,7 +305,7 @@ class RateLimitedGrowwProvider(AutoAuthAmountAwareGrowwProvider):
                     continue
                 timestamp, normalized_row = normalized
                 deduplicated[timestamp] = normalized_row
-            if chunk_end >= now:
+            if chunk_end >= completed_end:
                 break
             cursor = chunk_end + step
 
