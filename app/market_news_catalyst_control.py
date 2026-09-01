@@ -197,7 +197,6 @@ def assess_catalyst_control(
         controls = False
         reason = "PRICE_RETAINS_REACTION_SIDE_OF_ORIGIN_BUT_NOT_ACCEPTED_LEVEL"
     else:
-        # Defensive fallback; this condition should already be captured by override.
         state = "CONTROL_OVERRIDDEN"
         controls = False
         reason = "CURRENT_PRICE_OPPOSITE_CATALYST_ORIGIN"
@@ -233,7 +232,7 @@ def catalyst_control_context(
     max_horizon_hours: float = 8.0,
 ) -> dict:
     """Aggregate per-reaction control states without creating a trading signal."""
-    controls = [
+    assessments = [
         assess_catalyst_control(
             record,
             candles,
@@ -245,7 +244,7 @@ def catalyst_control_context(
     ]
     eligible = [
         row
-        for row in controls
+        for row in assessments
         if row.get("state")
         in {"CONTROL_ACTIVE", "CONTROL_ASSIMILATING", "CONTROL_CONTESTED", "CONTROL_OVERRIDDEN"}
     ]
@@ -258,7 +257,7 @@ def catalyst_control_context(
             "direction": "UNKNOWN",
             "controls_direction": False,
             "primary": None,
-            "controls": controls,
+            "controls": [],
             "aggregation_rule": "LATEST_COMPLETED_QUALIFIED_CATALYST_WITHIN_FROZEN_HORIZON",
         }
 
