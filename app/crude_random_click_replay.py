@@ -17,6 +17,7 @@ CLICK_END = time(22, 0)
 CLICK_SEED_NAMESPACE = "ALPHAPILOT_CRUDE_NO_NEWS_RANDOM_CLICK_V1"
 HORIZON_BARS = 12
 ROUND_TRIP_COST_BPS = 4.0
+MIN_WARMUP_INDEX = 50
 
 
 def _seed_for_day(day):
@@ -29,13 +30,19 @@ def _available_at(row):
 
 
 def _session_clicks(rows, day, count=CLICKS_PER_SESSION):
+    # Eligibility uses timestamps/index coverage only. OHLC values and forward
+    # outcomes never influence which clicks are selected.
     eligible = []
-    for row in rows:
+    for index, row in enumerate(rows):
         local = _available_at(row).astimezone(IST)
-        if local.date() != day:
+        if local.date() != day or not (CLICK_START <= local.time() <= CLICK_END):
             continue
-        if CLICK_START <= local.time() <= CLICK_END:
-            eligible.append(local)
+        if index < MIN_WARMUP_INDEX or index + HORIZON_BARS >= len(rows):
+            continue
+        horizon_day = rows[index + HORIZON_BARS][0].astimezone(IST).date()
+        if horizon_day != day:
+            continue
+        eligible.append(local)
     eligible = sorted(set(eligible))
     if len(eligible) < count:
         return []
@@ -68,6 +75,8 @@ def _index_for_click(rows, click_at):
 
 def _forward_60m(rows, index):
     if index is None or index + HORIZON_BARS >= len(rows):
+        return None
+    if rows[index + HORIZON_BARS][0].astimezone(IST).date() != rows[index][0].astimezone(IST).date():
         return None
     entry = rows[index][4]
     exit_price = rows[index + HORIZON_BARS][4]
@@ -108,7 +117,7 @@ def run_crude_random_click_replay(candles, *, trading_symbol, clicks_per_session
     for scheduled in schedule:
         click_at = datetime.fromisoformat(scheduled["click_at"])
         index = _index_for_click(rows, click_at)
-        if index is None or index < 50:
+        if index is None or index < MIN_WARMUP_INDEX:
             continue
         forward = _forward_60m(rows, index)
         if forward is None:
@@ -155,6 +164,7 @@ def run_crude_random_click_replay(candles, *, trading_symbol, clicks_per_session
         "news_enabled": False,
         "candidate_frozen_before_click_schedule": True,
         "click_schedule_outcome_blind": True,
+        "schedule_eligibility": "TIMESTAMP_ONLY_PLUS_WARMUP_AND_SAME_SESSION_60M_COVERAGE",
         "click_seed_namespace": CLICK_SEED_NAMESPACE,
         "click_window_ist": {"start": "10:00", "end": "22:00"},
         "clicks_per_session": int(clicks_per_session),
