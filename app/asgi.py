@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from .candidate_validator import run_candidate_validator
 from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
+from .commodity_candle_collector import PostgresCandleStore
+from .crude_oil_mini_research_framework import framework_summary, run_crude_oil_mini_research_framework
 from .current_mind_copper_forward import run_forward_phase1_from_provider
 from .main import app, settings, _safe_upstream_error, _collector_store
 from .market_regime_research import run_market_regime_research
@@ -201,3 +203,82 @@ async def copper_current_mind_forward_phase1_result(
             detail="Forward Phase 1 score is sealed until the preregistered Sep 2-11 window is complete",
         )
     return result
+
+
+# Crude Oil Mini research orchestration intentionally mirrors Copper's background
+# job pattern. Long exact-contract history acquisition happens inside the deployed
+# service and persists to Postgres; GitHub Actions only starts/polls the job instead
+# of holding one HTTP request open while Groww serves dozens of history chunks.
+_crude_oil_mini_research_job = {"status": "IDLE", "result": None, "error": None}
+_crude_oil_mini_research_task = None
+
+
+async def _run_crude_oil_mini_research_job():
+    global _crude_oil_mini_research_job
+    try:
+        store = PostgresCandleStore(settings.database_url)
+        result = await run_crude_oil_mini_research_framework(
+            get_provider(settings),
+            store,
+        )
+        _crude_oil_mini_research_job = {
+            "status": "COMPLETED",
+            "result": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _crude_oil_mini_research_job = {
+            "status": "FAILED",
+            "result": None,
+            "error": f"{exc.__class__.__name__}: {str(exc)[:1200]}",
+            "traceback": traceback.format_exc()[-6000:],
+        }
+
+
+def _crude_oil_mini_research_operational_view(job: dict) -> dict:
+    status = str(job.get("status") or "UNKNOWN")
+    if status != "COMPLETED":
+        return {
+            "status": status,
+            "error": job.get("error") if status == "FAILED" else None,
+            "research_only": True,
+            "live_execution_enabled": False,
+        }
+    result = job.get("result") or {}
+    return {
+        "status": "COMPLETED",
+        "research_only": True,
+        "live_execution_enabled": False,
+        "summary": framework_summary(result),
+    }
+
+
+@app.post("/v1/internal/crude-oil-mini/research-framework/start")
+async def crude_oil_mini_research_framework_start(
+    x_collector_token: str | None = Header(default=None),
+):
+    global _crude_oil_mini_research_job, _crude_oil_mini_research_task
+    _collector_store(x_collector_token)
+    if _crude_oil_mini_research_job.get("status") == "RUNNING":
+        return _crude_oil_mini_research_operational_view(_crude_oil_mini_research_job)
+    _crude_oil_mini_research_job = {"status": "RUNNING", "result": None, "error": None}
+    _crude_oil_mini_research_task = asyncio.create_task(_run_crude_oil_mini_research_job())
+    return _crude_oil_mini_research_operational_view(_crude_oil_mini_research_job)
+
+
+@app.get("/v1/internal/crude-oil-mini/research-framework/status")
+async def crude_oil_mini_research_framework_status(
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    return _crude_oil_mini_research_operational_view(_crude_oil_mini_research_job)
+
+
+@app.get("/v1/internal/crude-oil-mini/research-framework/result")
+async def crude_oil_mini_research_framework_result(
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    if _crude_oil_mini_research_job.get("status") != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Crude Oil Mini research framework job has not completed")
+    return _crude_oil_mini_research_job.get("result") or {}

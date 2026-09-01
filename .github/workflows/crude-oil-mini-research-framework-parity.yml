@@ -1,0 +1,180 @@
+name: Crude Oil Mini Research Framework Parity
+
+on:
+  pull_request:
+    paths:
+      - "app/asgi.py"
+      - "app/crude_oil_mini_market_perception.py"
+      - "app/crude_oil_mini_experience_memory.py"
+      - "app/crude_oil_mini_current_mind.py"
+      - "app/current_mind_crude_oil_mini_replay.py"
+      - "app/crude_oil_mini_point_in_time_context.py"
+      - "app/crude_oil_mini_memory_evidence_audit.py"
+      - "app/crude_oil_mini_abstention_audit.py"
+      - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_playbook_pattern_shadow.py"
+      - "app/crude_oil_mini_research_tape.py"
+      - "app/crude_oil_mini_research_framework.py"
+      - "tests/test_crude_oil_mini_current_mind_architecture.py"
+      - "tests/test_crude_oil_mini_research_framework.py"
+      - "tests/test_crude_oil_mini_research_tape.py"
+      - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/asgi.py"
+      - "app/crude_oil_mini_market_perception.py"
+      - "app/crude_oil_mini_experience_memory.py"
+      - "app/crude_oil_mini_current_mind.py"
+      - "app/current_mind_crude_oil_mini_replay.py"
+      - "app/crude_oil_mini_point_in_time_context.py"
+      - "app/crude_oil_mini_memory_evidence_audit.py"
+      - "app/crude_oil_mini_abstention_audit.py"
+      - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_playbook_pattern_shadow.py"
+      - "app/crude_oil_mini_research_tape.py"
+      - "app/crude_oil_mini_research_framework.py"
+      - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Verify Crude Current Mind and Research Brain architecture
+        run: |
+          python -m unittest \
+            tests.test_crude_oil_mini_current_mind_architecture \
+            tests.test_crude_oil_mini_research_framework \
+            tests.test_crude_oil_mini_research_tape -v
+
+  frozen-research-audit:
+    if: github.event_name != 'pull_request'
+    needs: unit-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for deployed research endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..90}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ] && \
+                 curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && \
+                 python -c 'import json,sys;d=json.load(open("openapi.json"));sys.exit(0 if "/v1/internal/crude-oil-mini/research-framework/start" in d.get("paths",{}) else 1)'; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render to deploy $GITHUB_SHA"
+          exit 1
+      - name: Build certified tape and run frozen framework audit
+        run: |
+          set -euo pipefail
+          STARTED=0
+          for attempt in {1..8}; do
+            if curl -fsS --max-time 30 -X POST \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/crude-oil-mini/research-framework/start" \
+              -o start.json; then
+              STARTED=1
+              break
+            fi
+            echo "Transient Crude framework start failure on attempt $attempt"
+            sleep 20
+          done
+          test "$STARTED" -eq 1
+
+          for i in {1..120}; do
+            if ! curl -fsS --max-time 30 \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/crude-oil-mini/research-framework/status" \
+              -o status.json; then
+              echo "Transient Crude framework status failure on poll $i"
+              sleep 15
+              continue
+            fi
+            STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+            echo "Crude research state: $STATE"
+            if [ "$STATE" = "COMPLETED" ]; then
+              break
+            fi
+            if [ "$STATE" = "FAILED" ]; then
+              cat status.json
+              exit 1
+            fi
+            sleep 15
+          done
+
+          python - <<'PY'
+          import json
+          d=json.load(open('status.json'))
+          assert d.get('status') == 'COMPLETED', d
+          s=d.get('summary') or {}
+          assert s.get('reference_contract') == 'CRUDEOILM21SEP26FUT', s
+          assert s.get('tape_status') == 'CERTIFIED', s
+          assert int(s.get('complete_sessions') or 0) > 0, s
+          assert int(s.get('scheduled_clicks') or 0) == int(s.get('complete_sessions') or 0) * 20, s
+          assert s.get('evaluated_clicks') == s.get('scheduled_clicks'), s
+          assert s.get('click_coverage_exact') is True, s
+          assert s.get('tape_sha256'), s
+          assert s.get('click_schedule_sha256'), s
+          assert s.get('no_news_brain_freeze_status') == 'HUMAN_REVIEW_REQUIRED', s
+          print(json.dumps(s,indent=2,sort_keys=True))
+          PY
+
+          curl -fsS --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/crude-oil-mini/research-framework/result" \
+            -o crude-oil-mini-research-framework-v1.json
+          python - <<'PY'
+          import json
+          d=json.load(open('crude-oil-mini-research-framework-v1.json'))
+          assert d['mode'] == 'CRUDE_OIL_MINI_COPPER_FRAMEWORK_RESEARCH_V1'
+          assert d['integrity']['architecture_replicated_not_market_values'] is True
+          assert d['integrity']['crude_specific_market_values_only'] is True
+          assert d['integrity']['current_contract_only'] is True
+          assert d['integrity']['regular_crude_used'] is False
+          assert d['integrity']['copper_market_data_used'] is False
+          assert d['integrity']['copper_fitted_thresholds_used'] is False
+          assert d['integrity']['shared_playbook_pattern_architecture_used'] is True
+          assert d['integrity']['playbook_pattern_shadow_can_mutate_decisions'] is False
+          assert d['integrity']['news_used_in_decisions'] is False
+          assert d['integrity']['option_market_data_used'] is False
+          assert d['integrity']['outcome_audits_can_mutate_decisions'] is False
+          assert d['integrity']['performance_is_ci_gate'] is False
+          assert d['integrity']['live_execution_enabled'] is False
+          shadow=d['playbook_pattern_shadow']
+          assert shadow['strategy_rules_changed'] is False
+          assert shadow['pattern_definition_predates_crude_outcome_review'] is True
+          assert shadow['candidate_gate_predates_crude_outcome_review'] is True
+          assert shadow['outcomes_used_to_select_pattern_thresholds'] is False
+          # No outcome/performance statistic is asserted as an acceptance gate.
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crude-oil-mini-research-framework-v1
+          path: |
+            status.json
+            crude-oil-mini-research-framework-v1.json
+          if-no-files-found: warn
+          retention-days: 30
