@@ -31,7 +31,7 @@ jobs:
             tests.test_crude_oil_mini_research_framework -v
 
   frozen-research-audit:
-    if: github.event_name == 'workflow_dispatch'
+    needs: unit-parity
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
