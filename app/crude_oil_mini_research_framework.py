@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime
@@ -83,7 +84,10 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
         "lot_size": 10,
     })
 
-    replay = evaluate_crude_oil_mini_current_mind_no_news(candles, contract)
+    # Replay/memory audits are CPU-heavy on thousands of 5m bars. Run them off the
+    # ASGI event loop so the status endpoint remains responsive while the background
+    # research job is working.
+    replay = await asyncio.to_thread(evaluate_crude_oil_mini_current_mind_no_news, candles, contract)
     if replay.get("reference_contract") != FROZEN_CURRENT_CONTRACT:
         raise RuntimeError("No-news replay changed the frozen Crude reference contract")
     if replay.get("scheduled_clicks") != replay.get("evaluated_clicks"):
@@ -115,9 +119,9 @@ async def run_crude_oil_mini_research_framework(provider, store, *, now: datetim
     click_schedule_sha256 = _sha256_json(click_schedule)
     no_news_decision_sha256 = _sha256_json(decision_fingerprints)
 
-    memory = evaluate_memory_evidence(candles, sample_every_bars=3)
-    abstention = evaluate_abstention_audit(replay)
-    error = evaluate_error_attribution(replay)
+    memory = await asyncio.to_thread(evaluate_memory_evidence, candles, 3)
+    abstention = await asyncio.to_thread(evaluate_abstention_audit, replay)
+    error = await asyncio.to_thread(evaluate_error_attribution, replay)
 
     primary_records = _primary_context_from_replay(replay)
     click_timestamps = [row["click_timestamp"] for row in replay.get("decisions") or []]
