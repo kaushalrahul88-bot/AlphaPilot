@@ -5,6 +5,7 @@ from .trader_evidence_synthesis import synthesize_evidence,evidence_quality
 from .trader_experience_memory import retrieve_similar
 from .trader_scenario_board import build_scenario_board
 from .trader_decision_journal import journal_decision
+from .setup_playbook_selector import playbook_selection_semantics
 
 def current_mind_click(*,click_timestamp,context_records,market_features,evidence_items,memory_cases=None,decision_builder=None,option_expression=None):
     board=information_board(context_records,click_timestamp)
@@ -17,9 +18,14 @@ def current_mind_click(*,click_timestamp,context_records,market_features,evidenc
         decision=build_current_mind_decision(board,regime,evidence,scenario,memory,market_features)
     else:
         decision=decision_builder(board,regime,evidence,scenario,memory)
-    return journal_decision(click_timestamp=click_timestamp,information_board=board,regime=regime,
+    journal=journal_decision(click_timestamp=click_timestamp,information_board=board,regime=regime,
       evidence=evidence,scenario=scenario,thesis=decision.get("thesis"),decision=decision,
       option_expression=option_expression)
+    # Audit annotation is intentionally attached after decision freeze/fingerprinting.
+    # It clarifies semantics but cannot alter the frozen decision or replay memory.
+    journal["playbook_semantics"]=playbook_selection_semantics(
+      decision.get("playbook"),default_selector=decision_builder is None)
+    return journal
 
 def _default_decision(board,regime,evidence,scenario,memory):
     return {"action":"NO_TRADE","reason":"NO_DECISION_BUILDER_CONNECTED",
