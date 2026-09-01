@@ -225,21 +225,25 @@ def precompute_perception(candles) -> tuple[list[list], list[dict]]:
 
 
 def causal_profiles(rows: list[list], features: list[dict], lookback_sessions: int = 15) -> dict[str, dict]:
-    """Estimate Crude-specific regime reference levels from prior sessions only."""
+    """Estimate Crude-specific regime reference levels from complete prior sessions only."""
     by_day: dict[str, list[int]] = defaultdict(list)
     for i, row in enumerate(rows):
         by_day[_ts(row[0]).date().isoformat()].append(i)
     days = sorted(by_day)
+    complete_days = [
+        day for day in days
+        if len(by_day[day]) >= 140 and _ts(rows[by_day[day][-1]][0]).hour >= 21
+    ]
     profiles: dict[str, dict] = {}
-    for pos, day in enumerate(days):
-        prior_days = days[max(0, pos - lookback_sessions):pos]
+    for day in days:
+        prior_days = [candidate for candidate in complete_days if candidate < day][-lookback_sessions:]
         prior = [features[i] for d in prior_days for i in by_day[d] if features[i].get("visible_session_bars", 0) >= 12]
         atr = [f.get("atr_pct") for f in prior]
         gap = [abs(f.get("session_vwap_gap_pct")) for f in prior if f.get("session_vwap_gap_pct") is not None]
         position = [f.get("session_range_position") for f in prior]
         participation = [f.get("time_adjusted_relative_volume") for f in prior if f.get("time_adjusted_relative_volume") is not None]
         profiles[day] = {
-            "mode": "CRUDEOILM_EXPANDING_PRIOR_SESSION_PROFILE_V1",
+            "mode": "CRUDEOILM_EXPANDING_PRIOR_COMPLETE_SESSION_PROFILE_V1",
             "prior_sessions": len(prior_days),
             "prior_observations": len(prior),
             "atr_low_pct": _quantile(atr, 0.25),
@@ -251,6 +255,7 @@ def causal_profiles(rows: list[list], features: list[dict], lookback_sessions: i
             "participation_fading": _quantile(participation, 0.25),
             "participation_confirming": _quantile(participation, 0.60),
             "point_in_time": True,
+            "complete_sessions_only": True,
         }
     return profiles
 
@@ -296,48 +301,29 @@ def market_regime_features(snapshot: dict, profile: dict) -> dict:
 
 
 def price_evidence(snapshot: dict, profile: dict) -> list[dict]:
-    """Translate Mini perception into independent evidence lanes, not a weighted score."""
-    structure = snapshot.get("structure")
-    ret60 = _f(snapshot.get("return_60m_pct"), 0.0)
-    if structure == "UPTREND" and ret60 > 0:
-        structure_stance = "BULLISH"
-    elif structure == "DOWNTREND" and ret60 < 0:
-        structure_stance = "BEARISH"
-    else:
-        structure_stance = "UNKNOWN"
+    """Mirror Copper Current Mind evidence semantics with Crude-derived values.
 
-    r15 = _f(snapshot.get("return_15m_pct"), 0.0)
-    r30 = _f(snapshot.get("return_30m_pct"), 0.0)
-    momentum = "BULLISH" if r15 > 0 and r30 > 0 else "BEARISH" if r15 < 0 and r30 < 0 else "UNKNOWN"
-
-    gap = snapshot.get("session_vwap_gap_pct")
-    pos = snapshot.get("session_range_position")
-    mid = profile.get("range_position_mid")
-    if None in {gap, pos, mid}:
-        value = "UNKNOWN"
-    elif gap > 0 and pos > mid:
-        value = "BULLISH"
-    elif gap < 0 and pos < mid:
-        value = "BEARISH"
-    else:
-        value = "UNKNOWN"
+    Structure and short-term momentum deliberately share one STRUCTURE lane, so
+    correlated price observations cannot masquerade as independent confirmations.
+    VWAP/location/opening behavior remain regime/playbook context, not direction votes.
+    """
+    structure = str(snapshot.get("structure") or "UNKNOWN")
+    structure_stance = "BULLISH" if structure == "UPTREND" else "BEARISH" if structure == "DOWNTREND" else "UNKNOWN"
+    ret15 = _f(snapshot.get("return_15m_pct"), 0.0)
+    momentum = "BULLISH" if ret15 > 0 else "BEARISH" if ret15 < 0 else "UNKNOWN"
 
     rel = snapshot.get("time_adjusted_relative_volume")
     confirming = profile.get("participation_confirming")
-    if rel is not None and confirming is not None and rel >= confirming:
-        participation = "BULLISH" if r15 > 0 else "BEARISH" if r15 < 0 else "UNKNOWN"
+    if rel is not None and confirming is not None and rel >= confirming and ret15 != 0:
+        participation = "BULLISH" if ret15 > 0 else "BEARISH"
     else:
         participation = "UNKNOWN"
 
-    opening = snapshot.get("opening_range_break")
-    breakout = "BULLISH" if opening == "ABOVE" else "BEARISH" if opening == "BELOW" else "UNKNOWN"
-
     return [
-        {"lane": "STRUCTURE", "stance": structure_stance, "source": "crude_oil_mini_structure", "detail": {"structure": structure, "return_60m_pct": ret60}},
-        {"lane": "MOMENTUM", "stance": momentum, "source": "crude_oil_mini_momentum", "detail": {"return_15m_pct": r15, "return_30m_pct": r30}},
-        {"lane": "VALUE_LOCATION", "stance": value, "source": "crude_oil_mini_vwap_location", "detail": {"vwap_gap_pct": gap, "session_range_position": pos, "prior_mid": mid}},
+        {"lane": "STRUCTURE", "stance": structure_stance, "source": "crude_oil_mini_market_structure", "detail": {"structure": structure}},
+        {"lane": "STRUCTURE", "stance": momentum, "source": "crude_oil_mini_short_term_momentum", "detail": {"return_15m_pct": ret15}},
         {"lane": "PARTICIPATION", "stance": participation, "source": "crude_oil_mini_time_adjusted_volume", "detail": {"relative_volume": rel, "prior_confirming_level": confirming}},
-        {"lane": "OPENING_STRUCTURE", "stance": breakout, "source": "crude_oil_mini_opening_range", "detail": {"opening_range_break": opening}},
+        {"lane": "MACRO", "stance": "UNKNOWN", "source": "crude_macro_not_validated_in_no_news_phase", "detail": {"status": "UNAVAILABLE"}},
     ]
 
 
@@ -350,7 +336,8 @@ def architecture_contract() -> dict:
         "option_market_data_used": False,
         "copper_data_used": False,
         "bar_visibility": "BAR_START_PLUS_5_MINUTES",
-        "profile_rule": "Regime reference levels are empirical quantiles of prior CRUDEOILM sessions only.",
+        "profile_rule": "Regime reference levels are empirical quantiles of prior complete CRUDEOILM sessions only.",
+        "evidence_semantics": "Structure and momentum share STRUCTURE; participation is independent; value/location/opening remain regime context; unavailable macro is UNKNOWN.",
         "features": [
             "multi_horizon_returns", "ema20_ema50_location", "atr", "market_structure",
             "session_range_location", "session_vwap", "opening_range", "raw_and_time_adjusted_volume",
