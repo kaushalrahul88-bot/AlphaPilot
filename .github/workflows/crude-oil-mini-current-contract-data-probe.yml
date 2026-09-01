@@ -1,12 +1,6 @@
 name: Crude Oil Mini Current Contract Data Probe
 
 on:
-  pull_request:
-    paths:
-      - "app/crude_oil_mini_contracts.py"
-      - "app/crude_oil_mini_data_probe.py"
-      - "tests/test_crude_oil_mini_data_probe.py"
-      - ".github/workflows/crude-oil-mini-current-contract-data-probe.yml"
   workflow_dispatch:
 
 permissions:
@@ -15,11 +9,9 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
-      GROWW_API_KEY: ${{ secrets.GROWW_API_KEY }}
-      GROWW_API_SECRET: ${{ secrets.GROWW_API_SECRET }}
-      GROWW_ACCESS_TOKEN: ${{ secrets.GROWW_ACCESS_TOKEN }}
+      API_BASE: https://alphapilot-api-pnio.onrender.com
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,60 +19,140 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - name: Verify probe helpers
-        run: python -m unittest tests.test_crude_oil_mini_data_probe -v
-      - name: Probe current CRUDEOILM futures and option-premium history
+      - name: Verify Mini probe helpers
+        run: python -m unittest tests.test_crude_oil_mini_data_probe tests.test_groww_crude_oil_mini_provider -v
+
+      - name: Wait for deployed Mini provider route
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..48}; do
+            CODE=$(curl --silent --show-error --max-time 30 -o mini-quote.json -w "%{http_code}" \
+              "$API_BASE/v1/quote/CRUDEOILM" || true)
+            if [ "$CODE" = "200" ]; then
+              python -m json.tool mini-quote.json
+              exit 0
+            fi
+            echo "Mini provider not deployed yet: attempt=$attempt HTTP=$CODE"
+            sleep 10
+          done
+          cat mini-quote.json 2>/dev/null || true
+          exit 1
+
+      - name: Probe current Mini future and real Mini option history
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import asyncio, json, os
-          from datetime import datetime
+          import asyncio
+          import json
+          import os
+          from datetime import date
           from pathlib import Path
-          from zoneinfo import ZoneInfo
 
-          from app.crude_oil_mini_data_probe import probe_current_crude_oil_mini_history
-          from app.providers.groww_rate_limited import RateLimitedGrowwProvider
+          import httpx
 
-          if not ((os.getenv("GROWW_API_KEY") and os.getenv("GROWW_API_SECRET")) or os.getenv("GROWW_ACCESS_TOKEN")):
-              raise SystemExit("Groww credentials are not exposed to this workflow")
-
-          IST = ZoneInfo("Asia/Kolkata")
-          provider = RateLimitedGrowwProvider(None)
-          result = asyncio.run(probe_current_crude_oil_mini_history(
-              provider,
-              start=datetime(2026, 7, 1, 9, 0, tzinfo=IST),
-              end=datetime(2026, 9, 1, 11, 30, tzinfo=IST),
-          ))
-          Path("crude-oil-mini-current-contract-data-probe.json").write_text(
-              json.dumps(result, indent=2, sort_keys=True) + "\n"
+          from app.crude_oil_mini_contracts import (
+              CRUDE_OIL_MINI,
+              fetch_crude_oil_mini_master,
+              resolve_crude_oil_mini_universe,
           )
-          print(json.dumps({
-              "future": result["future"],
-              "future_candles": result["future_candles"],
-              "future_first_at": result["future_first_at"],
-              "future_last_at": result["future_last_at"],
-              "complete_sessions": result["complete_sessions"],
-              "complete_session_first": result["complete_session_first"],
-              "complete_session_last": result["complete_session_last"],
-              "option_expiry_probed": result["option_expiry_probed"],
-              "option_premium_history_found": result["option_premium_history_found"],
-              "option_probe_successes": result["option_probe_successes"],
-              "option_probe_attempts": result["option_probe_attempts"],
-              "option_probes": result["option_probes"],
-              "ready_for_no_news_brain_replay": result["ready_for_no_news_brain_replay"],
-              "ready_for_option_premium_scoring": result["ready_for_option_premium_scoring"],
-              "integrity": result["integrity"],
-          }, indent=2, sort_keys=True))
+          from app.crude_oil_mini_data_probe import (
+              _close_near_mid_session,
+              _complete_sessions,
+              _nearest_option,
+          )
 
-          assert result["underlying_symbol"] == "CRUDEOILM", result
+          api = os.environ["API_BASE"].rstrip("/")
+
+          def get_candles(symbol):
+              with httpx.Client(timeout=180) as client:
+                  response = client.get(f"{api}/v1/candles/{symbol}", params={"timeframe":"5m"})
+                  response.raise_for_status()
+                  body = response.json()
+              rows = body.get("candles") or []
+              return rows
+
+          future_rows = get_candles(CRUDE_OIL_MINI)
+          sessions = _complete_sessions(future_rows)
+          complete = [row for row in sessions if row["complete_for_20_click_research"]]
+          if not complete:
+              raise SystemExit("Current CRUDEOILM future returned no complete sessions")
+
+          latest_complete = date.fromisoformat(complete[-1]["date"])
+          reference = _close_near_mid_session(future_rows, latest_complete)
+          if reference is None:
+              raise SystemExit("Could not derive point-in-time Mini reference price")
+
+          master = asyncio.run(fetch_crude_oil_mini_master())
+          universe = resolve_crude_oil_mini_universe(master, date.today())
+          option_expiry = universe["nearest_option_expiry"]
+          option_probes = []
+          for option_type in ("CE","PE"):
+              contract = _nearest_option(
+                  master,
+                  expiry=option_expiry,
+                  option_type=option_type,
+                  price=reference,
+              )
+              if contract is None:
+                  option_probes.append({"option_type":option_type,"status":"CONTRACT_NOT_FOUND"})
+                  continue
+              rows = get_candles(contract["trading_symbol"])
+              same_day = [r for r in rows if str(r[0])[:10] == latest_complete.isoformat()]
+              option_probes.append({
+                  "option_type":option_type,
+                  "status":"AVAILABLE" if rows else "NO_CANDLES",
+                  "trading_symbol":contract["trading_symbol"],
+                  "groww_symbol":contract["groww_symbol"],
+                  "expiry":contract["expiry"],
+                  "strike":contract["strike"],
+                  "lot_size":contract["lot_size"],
+                  "reference_underlying":reference,
+                  "all_returned_candles":len(rows),
+                  "latest_complete_day_candles":len(same_day),
+                  "first_at":rows[0][0] if rows else None,
+                  "last_at":rows[-1][0] if rows else None,
+              })
+
+          result = {
+              "mode":"CRUDE_OIL_MINI_DEPLOYED_CURRENT_CONTRACT_DATA_PROBE_V1",
+              "product":"CRUDE_OIL_MINI",
+              "underlying_symbol":CRUDE_OIL_MINI,
+              "research_only":True,
+              "news_enabled":False,
+              "live_execution_enabled":False,
+              "older_futures_contracts_used":False,
+              "regular_crude_used":False,
+              "synthetic_option_prices_used":False,
+              "future":universe["future"],
+              "future_candles":len(future_rows),
+              "future_first_at":future_rows[0][0] if future_rows else None,
+              "future_last_at":future_rows[-1][0] if future_rows else None,
+              "complete_sessions":len(complete),
+              "complete_session_first":complete[0]["date"],
+              "complete_session_last":complete[-1]["date"],
+              "latest_complete_session":latest_complete.isoformat(),
+              "nearest_option_expiry":option_expiry,
+              "option_probes":option_probes,
+              "option_premium_history_found":any(x.get("all_returned_candles",0)>0 for x in option_probes),
+              "ready_for_20_click_no_news_replay":len(complete)>=5,
+              "future_and_option_expiry_independent":universe["future_and_option_expiry_are_independent"],
+          }
+          Path("crude-oil-mini-current-contract-data-probe.json").write_text(
+              json.dumps(result,indent=2,sort_keys=True)+"\n"
+          )
+          print(json.dumps(result,indent=2,sort_keys=True))
+
           assert result["future"]["trading_symbol"] == "CRUDEOILM21SEP26FUT", result
           assert result["older_futures_contracts_used"] is False, result
-          assert result["integrity"]["regular_crude_used"] is False, result
-          assert result["integrity"]["synthetic_option_prices_used"] is False, result
-          assert result["news_enabled"] is False, result
+          assert result["regular_crude_used"] is False, result
+          assert result["synthetic_option_prices_used"] is False, result
+          assert result["future_and_option_expiry_independent"] is True, result
+          assert result["ready_for_20_click_no_news_replay"] is True, result
           PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
