@@ -1,6 +1,9 @@
 name: Crude Oil Mini Current Contract Data Probe
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/crude-oil-mini-current-contract-data-probe.yml"
   workflow_dispatch:
 
 permissions:
@@ -71,8 +74,7 @@ jobs:
                   response = client.get(f"{api}/v1/candles/{symbol}", params={"timeframe":"5m"})
                   response.raise_for_status()
                   body = response.json()
-              rows = body.get("candles") or []
-              return rows
+              return body.get("candles") or []
 
           future_rows = get_candles(CRUDE_OIL_MINI)
           sessions = _complete_sessions(future_rows)
@@ -100,7 +102,6 @@ jobs:
                   option_probes.append({"option_type":option_type,"status":"CONTRACT_NOT_FOUND"})
                   continue
               rows = get_candles(contract["trading_symbol"])
-              same_day = [r for r in rows if str(r[0])[:10] == latest_complete.isoformat()]
               option_probes.append({
                   "option_type":option_type,
                   "status":"AVAILABLE" if rows else "NO_CANDLES",
@@ -111,7 +112,6 @@ jobs:
                   "lot_size":contract["lot_size"],
                   "reference_underlying":reference,
                   "all_returned_candles":len(rows),
-                  "latest_complete_day_candles":len(same_day),
                   "first_at":rows[0][0] if rows else None,
                   "last_at":rows[-1][0] if rows else None,
               })
