@@ -41,8 +41,10 @@ jobs:
           import json, os
           from pathlib import Path
           import httpx
+          from app.commodity_time import parse_ist_timestamp
           from app.current_mind_crude_oil_mini_replay import evaluate_crude_oil_mini_current_mind_no_news
 
+          FROZEN_END='2026-08-31'
           api=os.environ['API_BASE'].rstrip('/')
           with httpx.Client(timeout=420) as client:
               quote_response=client.get(f'{api}/v1/quote/CRUDEOILM')
@@ -50,12 +52,16 @@ jobs:
               quote=quote_response.json()
               candle_response=client.get(f'{api}/v1/candles/CRUDEOILM',params={'timeframe':'5m'})
               candle_response.raise_for_status()
-              candles=(candle_response.json().get('candles') or [])
+              raw_candles=(candle_response.json().get('candles') or [])
 
+          candles=[row for row in raw_candles if parse_ist_timestamp(row[0]).date().isoformat() <= FROZEN_END]
           contract=quote.get('contract') or {}
           result=evaluate_crude_oil_mini_current_mind_no_news(candles,contract)
           Path('crude-oil-mini-current-mind-no-news-v1.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
           print(json.dumps({
+              'frozen_research_end':FROZEN_END,
+              'raw_candles':len(raw_candles),
+              'frozen_candles':len(candles),
               'mode':result['mode'],
               'reference_contract':result['reference_contract'],
               'candles':result['candles'],
@@ -72,11 +78,10 @@ jobs:
           assert contract.get('trading_symbol')=='CRUDEOILM21SEP26FUT',contract
           assert contract.get('lot_size')==10,contract
           assert result['reference_contract']=='CRUDEOILM21SEP26FUT',result['reference_contract']
-          # Frozen Sep-1 research snapshot after late-August recovery: 54 complete sessions through Aug 31.
           assert result['complete_sessions']==54,result
           assert result['scheduled_clicks']==1080,result
           assert result['evaluated_clicks']==1080,result
-          assert sessions and sessions[-1]=='2026-08-31',sessions[-3:]
+          assert sessions and sessions[-1]==FROZEN_END,sessions[-3:]
           assert result['click_coverage_exact'] is True,result
           assert result['news_enabled'] is False,result
           assert result['option_market_data_used'] is False,result
