@@ -84,6 +84,25 @@ class GrowwCrudeOilMiniProviderTests(unittest.TestCase):
         iso = RateLimitedGrowwProvider._raw_timestamp_key("2026-08-31T04:00:00+00:00")
         self.assertEqual(iso, "2026-08-31T09:30:00+05:30")
 
+    def test_legacy_epoch_candle_is_emitted_with_canonical_ist_timestamp(self):
+        normalized = RateLimitedGrowwProvider._normalize_mini_candle(
+            [1780285500, 8200, 8210, 8190, 8205, 100]
+        )
+        self.assertIsNotNone(normalized)
+        timestamp, row = normalized
+        self.assertEqual(timestamp, "2026-06-01T09:15:00+05:30")
+        self.assertEqual(row[0], timestamp)
+        self.assertEqual(row[1:], [8200, 8210, 8190, 8205, 100])
+
+    def test_iso_candle_is_emitted_with_same_canonical_ist_timestamp(self):
+        normalized = RateLimitedGrowwProvider._normalize_mini_candle(
+            ["2026-09-01T04:30:00+00:00", 8230, 8240, 8220, 8233, 150]
+        )
+        self.assertIsNotNone(normalized)
+        timestamp, row = normalized
+        self.assertEqual(timestamp, "2026-09-01T10:00:00+05:30")
+        self.assertEqual(row[0], timestamp)
+
 
 if __name__ == "__main__":
     unittest.main()
