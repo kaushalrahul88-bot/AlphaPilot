@@ -23,7 +23,11 @@ def _reaction(direction="UP", *, anchor="2026-08-10T09:00:00+05:30", assimilatio
         "window": {
             "event_timestamp": anchor,
             "reaction_anchor_timestamp": anchor,
-            "assimilation": {"timestamp": assimilation},
+            "pre_event": {"timestamp": "2026-08-10T08:55:00+05:30", "price": 100.0},
+            "assimilation": {
+                "timestamp": assimilation,
+                "price": 102.0 if direction == "UP" else 98.0,
+            },
         },
         "materiality_qualified_path": {
             "observation_status": "OBSERVED",
@@ -33,10 +37,11 @@ def _reaction(direction="UP", *, anchor="2026-08-10T09:00:00+05:30", assimilatio
     }
 
 
-def _journal(click, action, result="STOP", realized_r=-1.0):
+def _journal(click, action, result="STOP", realized_r=-1.0, structure="RANGE"):
     return {
         "click_timestamp": click,
         "decision": {"action": action},
+        "regime": {"observations": {"trend_structure": structure}},
         "outcome": {"result": result, "realized_r": realized_r},
     }
 
@@ -89,6 +94,33 @@ class CurrentMindNewsReactionComparisonTests(unittest.TestCase):
         self.assertEqual(first["changed_clicks"], 1)
         self.assertEqual(second["changed_clicks"], 1)
         self.assertTrue(first["outcome_integrity"]["outcomes_read_for_overlay_decision"] is False)
+
+    def test_catalyst_control_shadow_is_outcome_blind_and_does_not_change_v1_action(self):
+        baseline = {
+            "decisions": [
+                _journal("2026-08-10T10:30:00+05:30", "BUY_PE", "STOP", -1.0, "UPTREND"),
+            ]
+        }
+        reaction_audit = {"records": [_reaction("UP")]}
+        candles = [
+            {"timestamp": "2026-08-10T10:00:00+05:30", "close": 102.0},
+            {"timestamp": "2026-08-10T10:30:00+05:30", "close": 102.5},
+            {"timestamp": "2026-08-10T11:00:00+05:30", "close": 99.0},
+        ]
+        first = compare_no_news_vs_reaction_guard(baseline, reaction_audit, candles=candles)
+        row = first["rows"][0]
+        self.assertEqual(row["reaction_guard_action"], "WAIT")
+        self.assertEqual(row["catalyst_control_shadow"]["state"], "CONTROL_ACTIVE")
+        self.assertTrue(first["catalyst_control_shadow_policy"]["changes_v1_guard_action"] is False)
+
+        mutated = copy.deepcopy(baseline)
+        mutated["decisions"][0]["outcome"] = {"result": "TARGET", "realized_r": 1.5}
+        second = compare_no_news_vs_reaction_guard(mutated, reaction_audit, candles=candles)
+        self.assertEqual(
+            first["rows"][0]["catalyst_control_shadow"],
+            second["rows"][0]["catalyst_control_shadow"],
+        )
+        self.assertEqual(first["rows"][0]["reaction_guard_action"], second["rows"][0]["reaction_guard_action"])
 
 
 if __name__ == "__main__":

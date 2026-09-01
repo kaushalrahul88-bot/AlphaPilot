@@ -16,6 +16,7 @@ on:
       - "app/market_news_assimilation.py"
       - "app/market_news_path_materiality.py"
       - "app/market_news_materiality_qualified_path.py"
+      - "app/market_news_catalyst_control.py"
       - "scripts/audit_market_news_reactions.py"
       - "scripts/compare_current_mind_news_reaction.py"
 
@@ -84,8 +85,15 @@ jobs:
           assert policy["can_create_trade"] is False,policy
           assert policy["can_reverse_direction"] is False,policy
           assert policy["can_upgrade_no_trade"] is False,policy
+          shadow=report["catalyst_control_shadow_policy"]
+          assert shadow["shadow_only"] is True,shadow
+          assert shadow["changes_v1_guard_action"] is False,shadow
+          assert shadow["outcomes_used_for_state"] is False,shadow
+          assert shadow["headline_stance_used_for_direction"] is False,shadow
+          assert shadow["thresholds_fitted_to_august_outcomes"] is False,shadow
           integrity=report["outcome_integrity"]
           assert integrity["outcomes_read_for_overlay_decision"] is False,integrity
+          assert integrity["outcomes_read_for_catalyst_control_shadow"] is False,integrity
           assert integrity["outcomes_read_after_overlay_freeze_for_evaluation"] is True,integrity
           assert integrity["headline_stance_used_as_reaction_direction"] is False,integrity
           source=report["sources"]
@@ -98,9 +106,15 @@ jobs:
           assert source["reaction_audit"]["events"]==8,source
           assert source["reaction_audit"]["classified"]==7,source
           assert report["clicks"]==360,report
+          assert len(report["rows"])==360,report
+          assert sum(report["catalyst_control_shadow_counts"].values())==360,report
           assert report["reaction_guard"]["trades"]<=report["baseline"]["trades"],report
           assert report["changed_clicks"]==report["baseline"]["trades"]-report["reaction_guard"]["trades"],report
           assert sum(report["suppressed_baseline_outcomes"].values())==report["changed_clicks"],report
+          for row in report["rows"]:
+              control=row["catalyst_control_shadow"]
+              assert control["shadow_only"] is True,control
+              assert control["outcome_blind"] is True,control
           for row in report["changed_rows"]:
               assert row["baseline_action"] in {"BUY_CE","BUY_PE"},row
               assert row["reaction_guard_action"]=="WAIT",row
@@ -116,17 +130,23 @@ jobs:
               "suppressed_no_entry":report["suppressed_no_entry"],
               "suppressed_session_end":report["suppressed_session_end"],
               "reaction_context_counts":report["reaction_context_counts"],
+              "catalyst_control_shadow_counts":report["catalyst_control_shadow_counts"],
+              "catalyst_control_alignment_counts":report["catalyst_control_alignment_counts"],
           }
           print("NEWS_REACTION_VS_NO_NEWS_SUMMARY")
           print(json.dumps(summary,indent=2,sort_keys=True))
           print("CHANGED_ROWS")
           for row in report["changed_rows"]:
+              control=row.get("catalyst_control_shadow") or {}
               print(json.dumps({
                   "click_timestamp":row["click_timestamp"],
                   "baseline_action":row["baseline_action"],
                   "reaction_guard_action":row["reaction_guard_action"],
                   "reaction_direction":row["reaction_direction"],
                   "baseline_result":(row.get("baseline_outcome") or {}).get("result"),
+                  "catalyst_control_state":control.get("state"),
+                  "catalyst_controls_direction":control.get("controls_direction"),
+                  "catalyst_control_primary":control.get("primary"),
                   "active_reactions":(row.get("reaction_context") or {}).get("active_reactions"),
               },sort_keys=True))
           PY
@@ -143,9 +163,11 @@ jobs:
               "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
               "network_refetch":False,
               "outcome_blind_overlay_decision":True,
+              "outcome_blind_catalyst_control_shadow":True,
+              "catalyst_control_shadow_changes_actions":False,
               "outcomes_used_only_for_post_freeze_evaluation":True,
               "validation_status":report["validation_status"],
-              "rule":"Compare frozen no-news Current Mind with a conservative News Brain guard that can only delay an existing CE/PE action when completed materiality-qualified market assimilation points the other way. It cannot create or reverse a trade.",
+              "rule":"Compare frozen no-news Current Mind with the unchanged conservative News Brain V1 guard while separately observing whether each qualified catalyst remains active, assimilating, contested, or overridden. The catalyst-control model is shadow-only and cannot create, reverse, suppress, or otherwise change a trade.",
           }
           Path("copper-news-reaction-vs-no-news-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           PY
