@@ -1,0 +1,175 @@
+name: Copper News Thesis Interaction Shadow
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copper-news-thesis-interaction-shadow.yml"
+      - "app/market_news_thesis_interaction.py"
+      - "app/market_news_catalyst_control.py"
+      - "app/current_mind_copper_replay.py"
+      - "app/current_mind_thesis_builder.py"
+      - "app/setup_playbook_selector.py"
+      - "scripts/audit_market_news_reactions.py"
+      - "scripts/audit_market_news_thesis_interaction.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: copper-news-thesis-interaction-shadow
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPANDED_NEWS_RUN_ID: "33357324842"
+      EXPANDED_NEWS_ARTIFACT: "copper-current-mind-expanded-68-news-replay"
+      FROZEN_CANDLES_RUN_ID: "33405492674"
+      FROZEN_CANDLES_ARTIFACT: "copper-frozen-reaction-candles"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download frozen audit inputs
+        run: |
+          set -euo pipefail
+          mkdir -p news-source frozen-candles
+          gh run download "$EXPANDED_NEWS_RUN_ID" --name "$EXPANDED_NEWS_ARTIFACT" --dir news-source
+          gh run download "$FROZEN_CANDLES_RUN_ID" --name "$FROZEN_CANDLES_ARTIFACT" --dir frozen-candles
+          test -f news-source/expanded-news-payload.json
+          test -f frozen-candles/copper-frozen-reaction-candles.json
+
+      - name: Run outcome-blind thesis interaction shadow
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python scripts/audit_market_news_thesis_interaction.py \
+            --news news-source/expanded-news-payload.json \
+            --candles frozen-candles/copper-frozen-reaction-candles.json \
+            --output copper-news-thesis-interaction-shadow.json
+
+      - name: Verify invariants and summarize
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
+          assert report["mode"]=="COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_V1",report
+          assert report["research_only"] is True,report
+          assert report["descriptive_only"] is True,report
+          assert report["production_rules_changed"] is False,report
+          assert report["strategy_rules_changed"] is False,report
+          assert report["validation_status"]=="DIAGNOSTIC_REPLAY_NOT_UNTOUCHED_HOLDOUT",report
+          shadow=report["shadow_policy"]
+          assert shadow["outcome_blind"] is True,shadow
+          assert shadow["shadow_only"] is True,shadow
+          assert shadow["changes_decision"] is False,shadow
+          assert shadow["headline_stance_used_for_direction"] is False,shadow
+          assert shadow["pattern_specific_confirmation_required_for_semantic_verification"] is True,shadow
+          assert shadow["generic_regime_eligibility_is_not_pattern_confirmation"] is True,shadow
+          assert shadow["generic_recent_high_low_trigger_is_not_pattern_confirmation"] is True,shadow
+          assert shadow["thresholds_fitted_to_august_outcomes"] is False,shadow
+          integrity=report["outcome_integrity"]
+          assert integrity["outcomes_read_for_shadow_state"] is False,integrity
+          assert integrity["outcomes_read_after_shadow_freeze_for_descriptive_evaluation"] is True,integrity
+          source=report["sources"]
+          assert source["frozen_candles"]["trading_symbol"]=="COPPER31AUG26FUT",source
+          assert source["frozen_candles"]["network_refetch"] is False,source
+          assert source["frozen_candles"]["point_in_time"] is True,source
+          assert source["baseline_replay"]["scheduled_clicks"]==360,source
+          assert source["baseline_replay"]["evaluated_clicks"]==360,source
+          assert source["baseline_replay"]["click_coverage_exact"] is True,source
+          assert source["reaction_audit"]["events"]==8,source
+          assert source["reaction_audit"]["classified"]==7,source
+          assert report["clicks"]==360,report
+          assert len(report["rows"])==360,report
+          assert sum(report["catalyst_control_counts"].values())==360,report
+          assert sum(report["thesis_interaction_counts"].values())==360,report
+          assert sum(report["declared_playbook_counts"].values())==360,report
+          assert sum(report["playbook_semantic_status_counts"].values())==360,report
+          assert sum(report["active_opposing_catalyst_playbook_counts"].values())==len(report["active_opposing_rows"]),report
+          for row in report["rows"]:
+              shadow_row=row["news_thesis_interaction_shadow"]
+              assert shadow_row["outcome_blind"] is True,shadow_row
+              assert shadow_row["shadow_only"] is True,shadow_row
+              assert shadow_row["changes_decision"] is False,shadow_row
+          for row in report["active_opposing_rows"]:
+              assert row["catalyst_control_shadow"]["state"]=="CONTROL_ACTIVE",row
+              assert row["news_thesis_interaction_shadow"]["alignment"]=="OPPOSED",row
+
+          summary={
+              "catalyst_control_counts":report["catalyst_control_counts"],
+              "thesis_interaction_counts":report["thesis_interaction_counts"],
+              "declared_playbook_counts":report["declared_playbook_counts"],
+              "playbook_semantic_status_counts":report["playbook_semantic_status_counts"],
+              "opposing_catalyst_playbook_counts":report["opposing_catalyst_playbook_counts"],
+              "active_opposing_catalyst_playbook_counts":report["active_opposing_catalyst_playbook_counts"],
+              "active_opposing_catalyst_outcomes_post_freeze":report["active_opposing_catalyst_outcomes_post_freeze"],
+          }
+          print("NEWS_THESIS_INTERACTION_SHADOW_SUMMARY")
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          print("ACTIVE_OPPOSING_ROWS")
+          for row in report["active_opposing_rows"]:
+              interaction=row["news_thesis_interaction_shadow"]
+              audit=interaction["playbook_audit"]
+              control=row["catalyst_control_shadow"]
+              print(json.dumps({
+                  "click_timestamp":row["click_timestamp"],
+                  "baseline_action":row["baseline_action"],
+                  "declared_playbook":row["declared_playbook"],
+                  "playbook_family":row["playbook_family"],
+                  "interaction":interaction["interaction"],
+                  "playbook_semantic_status":audit["status"],
+                  "range_edge_location_proxy":audit.get("range_edge_location_proxy"),
+                  "regime_labels":row["regime_labels"],
+                  "regime_observations":row["regime_observations"],
+                  "catalyst_direction":control.get("direction"),
+                  "catalyst_control_state":control.get("state"),
+                  "baseline_result_post_freeze":(row.get("baseline_outcome") or {}).get("result"),
+              },sort_keys=True))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path("copper-news-thesis-interaction-shadow.json").read_text())
+          manifest={
+              "mode":"COPPER_NEWS_CATALYST_THESIS_INTERACTION_SHADOW_MANIFEST_V1",
+              "expanded_news":{"run_id":os.environ["EXPANDED_NEWS_RUN_ID"],"artifact":os.environ["EXPANDED_NEWS_ARTIFACT"]},
+              "frozen_candles":{"run_id":os.environ["FROZEN_CANDLES_RUN_ID"],"artifact":os.environ["FROZEN_CANDLES_ARTIFACT"]},
+              "network_refetch":False,
+              "outcome_blind_shadow_state":True,
+              "outcomes_used_only_after_shadow_freeze":True,
+              "production_rules_changed":False,
+              "strategy_rules_changed":False,
+              "validation_status":report["validation_status"],
+              "rule":"Audit how frozen catalyst-control state relates to the already-frozen Current Mind playbook and direction. Regime eligibility and generic trade geometry are not treated as proof of a named chart pattern. The audit is shadow-only and cannot change an action.",
+          }
+          Path("copper-news-thesis-interaction-shadow-manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copper-news-thesis-interaction-shadow
+          path: |
+            copper-news-thesis-interaction-shadow.json
+            copper-news-thesis-interaction-shadow-manifest.json
+          if-no-files-found: error
+          retention-days: 30
