@@ -104,6 +104,21 @@ _REUTERS_EVENTS = (
         },
         "audit": {"source_timestamp_utc": "2026-08-18T15:18:24Z"},
     },
+    {
+        "event_id": "REUTERS_ESCALATION_20260830_221207Z",
+        "underlying_event_id": "US_IRAN_RENEWED_ATTACKS_20260831",
+        "commodity": "CRUDEOIL",
+        "event_type": "WAR_ESCALATION",
+        "available_at": "2026-08-31T03:42:07+05:30",
+        "source": "Reuters",
+        "source_url": "https://www.reuters.com/business/energy/oil-jumps-more-than-2-after-us-attack-irans-larak-island-2026-08-30/",
+        "source_tier": "C_PROFESSIONAL",
+        "scheduled": False,
+        "value": {
+            "headline": "U.S. and Iran resume military attacks, increasing Gulf supply-route risk",
+        },
+        "audit": {"source_timestamp_utc": "2026-08-30T22:12:07Z"},
+    },
 )
 
 
