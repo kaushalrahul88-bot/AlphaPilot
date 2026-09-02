@@ -64,26 +64,28 @@ jobs:
           )
 
           manifest=result['manifest']
-          summary=result['summary']
           print(json.dumps({
               'reference_contract': result['reference_contract'],
               'manifest_sha256': manifest['manifest_sha256'],
+              'frozen_window': manifest['frozen_window'],
               'complete_sessions': manifest['complete_sessions'],
               'previous_click_count': manifest['previous_click_count'],
               'eligible_unused_pool': manifest['eligible_unused_pool'],
               'selected_click_count': manifest['selected_click_count'],
               'overlap_with_previous_clicks': manifest['overlap_with_previous_clicks'],
               'clicks': manifest['clicks'],
-              'summary': summary,
+              'summary': result['summary'],
               'decisions': result['decisions'],
               'integrity': result['integrity'],
           }, indent=2, sort_keys=True))
 
           assert result['reference_contract']=='CRUDEOILM21SEP26FUT', result
+          assert manifest['complete_sessions']==54, manifest
+          assert manifest['previous_click_count']==1080, manifest
           assert manifest['selected_click_count']==20, manifest
           assert manifest['overlap_with_previous_clicks']==0, manifest
-          assert manifest['previous_click_count']==manifest['complete_sessions']*20, manifest
           assert result['brain_rules_changed_for_test'] is False, result
+          assert result['integrity']['frozen_june_august_window_only'] is True, result
           assert result['integrity']['selection_outcome_blind'] is True, result
           assert result['integrity']['full_remaining_session_path_used'] is True, result
           assert result['integrity']['regular_crude_used'] is False, result
