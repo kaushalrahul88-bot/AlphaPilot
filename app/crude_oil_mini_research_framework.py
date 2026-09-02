@@ -70,6 +70,7 @@ def framework_summary(report: dict) -> dict:
         "click_schedule_sha256": report.get("click_schedule_sha256"),
         "no_news_performance": replay.get("performance"),
         "domain_knowledge_version": knowledge.get("version"),
+        "domain_knowledge_sha256": report.get("domain_knowledge_sha256"),
         "domain_knowledge_items": len(knowledge.get("items") or []),
         "domain_knowledge_production_rules_changed": knowledge.get("production_rules_changed"),
         "domain_knowledge_decision_vote": False,
@@ -155,6 +156,7 @@ async def run_crude_oil_mini_research_framework(
     click_schedule_sha256 = _sha256_json(click_schedule)
     no_news_decision_sha256 = _sha256_json(decision_fingerprints)
     knowledge_manifest = crude_oil_domain_knowledge_v1()
+    knowledge_manifest_sha256 = _sha256_json(knowledge_manifest)
     if knowledge_manifest.get("production_rules_changed") is not False:
         raise RuntimeError("Crude domain knowledge unexpectedly claims a production rule change")
     if (knowledge_manifest.get("guardrails") or {}).get("knowledge_cannot_create_orders") is not True:
@@ -211,6 +213,7 @@ async def run_crude_oil_mini_research_framework(
         "click_schedule_sha256": click_schedule_sha256,
         "no_news_decision_sha256": no_news_decision_sha256,
         "domain_knowledge_manifest": knowledge_manifest,
+        "domain_knowledge_sha256": knowledge_manifest_sha256,
         "no_news_replay": replay,
         "memory_evidence_audit": memory,
         "abstention_audit": abstention,
@@ -227,7 +230,7 @@ async def run_crude_oil_mini_research_framework(
             "Treat correct-direction STOPs only as timing/geometry research cases, never as proof that the frozen stop "
             "was wrong. Static Crude domain knowledge is now attached as non-voting interpretation context and cannot "
             "substitute for missing point-in-time WTI, inventory, OPEC, news or option observations. Do not fit a new "
-            "entry, invalidation or R multiple to this already-inspected June-August sample. Any geometry or knowledge-" 
+            "entry, invalidation or R multiple to this already-inspected June-August sample. Any geometry or knowledge-"
             "conditioned candidate must be specified before chronological holdout or prospective validation. The "
             "discovery-grade Yahoo context remains non-promotable, and news remains a later same-click experiment only "
             "after the no-news Brain is frozen."
