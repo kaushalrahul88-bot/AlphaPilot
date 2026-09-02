@@ -1,11 +1,11 @@
 name: Crude News Reaction Backtest
 
+# Legacy regular-CRUDEOIL research only. The active commodity program uses
+# CRUDEOILM and has its own sealed Current Mind framework. Keep this workflow
+# manually runnable for archival diagnostics, but never auto-trigger it from
+# Crude Oil Mini architecture changes because it performs provider-heavy
+# historical backfills for the wrong underlying family.
 on:
-  pull_request:
-    paths:
-      - "app/crude_*.py"
-      - "tests/test_crude_news_intelligence.py"
-      - ".github/workflows/crude-news-reaction-backtest.yml"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,6 @@ concurrency:
 
 jobs:
   reaction-audit:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
