@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .commodity_time import parse_ist_timestamp
 from .crude_oil_mini_information_board import information_board
+from .crude_oil_mini_knowledge_board import knowledge_board
 from .current_mind_thesis_builder import build_current_mind_decision
 from .market_regime_observer import observe_regime
 from .setup_playbook_selector import playbook_selection_semantics
@@ -50,7 +51,13 @@ def crude_oil_mini_current_mind_click(
     evidence_items: list[dict],
     memory_cases: list[dict] | None = None,
 ) -> dict:
-    """Run the same Trader-Mind layers as Copper with Crude-specific perception inputs."""
+    """Run the shared Trader-Mind layers with Crude-specific perception inputs.
+
+    Static Crude domain knowledge is attached to the decision journal only after the
+    frozen decision is built. It therefore cannot become an evidence vote merely by
+    existing; a separate validated point-in-time evidence adapter would be required
+    before any knowledge-conditioned observation could affect Current Mind.
+    """
     board = information_board(context_records, click_timestamp)
     regime = observe_regime(market_features)
     evidence = synthesize_evidence(evidence_items)
@@ -69,6 +76,7 @@ def crude_oil_mini_current_mind_click(
         decision=decision,
         option_expression=None,
     )
+    journal["domain_knowledge"] = knowledge_board(context_records, click_timestamp)
     journal["memory_visibility"] = {
         "mode": "CRUDE_OIL_MINI_POINT_IN_TIME_DECISION_MEMORY_V1",
         "provided_cases": len(provided_memory),
@@ -92,6 +100,9 @@ def crude_oil_mini_current_mind_click(
             "CRUDE_OIL_MINI_CURRENT_MIND_INFORMATION_BOARD_V1",
             "CRUDE_OIL_MINI_MARKET_PERCEPTION_V1",
             "CRUDE_OIL_MINI_EXPERIENCE_MEMORY_V1",
+            "CRUDE_OIL_DOMAIN_KNOWLEDGE_V1",
+            "CRUDE_OIL_MINI_KNOWLEDGE_BOARD_V1",
         ],
+        "domain_knowledge_decision_vote": False,
     }
     return journal
