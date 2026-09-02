@@ -1,0 +1,51 @@
+{
+  "version": "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_SHADOW_PREREG_V1",
+  "frozen_on": "2026-09-02",
+  "development_sample_end": "2026-08-31",
+  "prospective_validation_not_before": "2026-09-03",
+  "scope": "CRUDEOILM underlying direction only",
+  "primary_horizon_minutes": 60,
+  "secondary_horizons_minutes": [15, 30, 120],
+  "independent_direction_families": [
+    "LOCAL_STRUCTURE",
+    "PARTICIPATION",
+    "GLOBAL_CRUDE",
+    "EVENT_REACTION",
+    "DIRECTION_MEMORY"
+  ],
+  "correlation_rules": {
+    "WTI_and_Brent": "one GLOBAL_CRUDE family, never two independent votes",
+    "USDINR": "translation modifier only; cannot independently create or reverse direction",
+    "event_news": "directional only with explicit point-in-time stance plus price/reaction confirmation",
+    "memory": "future underlying returns only; no entry, stop, target, R multiple or option PnL"
+  },
+  "direction_rule": "At least two independent directional families must align and no independent family may oppose them.",
+  "confidence_rule": {
+    "MODERATE": "exactly two aligned independent directional families",
+    "STRONG": "at least three aligned independent directional families",
+    "CONFLICTED": "at least one bullish and one bearish independent directional family",
+    "WEAK": "fewer than two aligned independent directional families"
+  },
+  "direction_memory_rule": {
+    "minimum_directional_analogues": 20,
+    "primary_horizon_minutes": 60,
+    "significance_method": "95% Wilson interval for positive-return frequency",
+    "bullish": "lower interval bound > 0.50",
+    "bearish": "upper interval bound < 0.50",
+    "analogue_selection": "market-state similarity only; outcome sign inspected only after neighbour selection"
+  },
+  "evaluation_policy": {
+    "june_august_performance_search_allowed": false,
+    "geometry_tuning_allowed": false,
+    "option_pnl_tuning_allowed": false,
+    "current_mind_mutation_allowed": false,
+    "promotion_from_june_august_allowed": false,
+    "shadow_only": true
+  },
+  "primary_question": "Does the frozen V2 shadow thesis improve 60-minute CRUDEOILM directional discrimination on untouched data?",
+  "secondary_questions": [
+    "Does V2 improve persistence discrimination across 15/30/60/120 minutes?",
+    "Which independent evidence families add stable out-of-sample information without becoming correlated duplicate votes?",
+    "After direction is validated, can a separately preregistered Entry Brain improve timing without changing the Direction Brain?"
+  ]
+}
