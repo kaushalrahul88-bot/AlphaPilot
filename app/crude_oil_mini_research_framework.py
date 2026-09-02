@@ -9,6 +9,7 @@ from .crude_oil_mini_abstention_audit import evaluate_abstention_audit
 from .crude_oil_mini_context_ablation import evaluate_crude_context_ablation
 from .crude_oil_mini_context_tape import PostgresCrudeContextTapeStore, build_or_read_frozen_context_tape
 from .crude_oil_mini_current_mind_error_attribution import evaluate_error_attribution
+from .crude_oil_mini_direction_geometry_audit import evaluate_direction_geometry_audit
 from .crude_oil_mini_memory_evidence_audit import evaluate_memory_evidence
 from .crude_oil_mini_playbook_pattern_shadow import evaluate_crude_playbook_pattern_shadow
 from .crude_oil_mini_point_in_time_context import acquisition_manifest, audit_context_coverage
@@ -45,6 +46,8 @@ def framework_summary(report: dict) -> dict:
     memory = report.get("memory_evidence_audit") or {}
     abstention = report.get("abstention_audit") or {}
     error = report.get("error_attribution") or {}
+    direction_geometry = report.get("direction_geometry_audit") or {}
+    geometry_realization = direction_geometry.get("geometry_realization") or {}
     pattern = report.get("playbook_pattern_shadow") or {}
     tape = report.get("research_tape") or {}
     context_tape = ((report.get("discovery_context_tape") or {}).get("certification") or {})
@@ -56,6 +59,8 @@ def framework_summary(report: dict) -> dict:
         "reference_contract": report.get("reference_contract"),
         "tape_status": tape.get("status"),
         "tape_sha256": tape.get("tape_sha256"),
+        "tape_refresh_mode": (tape.get("refresh") or {}).get("mode"),
+        "tape_provider_called": (tape.get("refresh") or {}).get("provider_called"),
         "complete_sessions": replay.get("complete_sessions"),
         "scheduled_clicks": replay.get("scheduled_clicks"),
         "evaluated_clicks": replay.get("evaluated_clicks"),
@@ -69,6 +74,10 @@ def framework_summary(report: dict) -> dict:
         "error_trade_observations": error.get("trade_observations"),
         "stable_good_states": len(error.get("stable_above_50_pct_states") or []),
         "stable_bad_states": len(error.get("stable_below_50_pct_states") or []),
+        "direction_geometry_trade_observations": direction_geometry.get("trade_observations"),
+        "direction_correct_stops": geometry_realization.get("direction_correct_stops"),
+        "direction_correct_stops_pct_of_all_stops": geometry_realization.get("direction_correct_stops_pct_of_all_stops"),
+        "direction_wrong_targets": geometry_realization.get("direction_wrong_targets"),
         "literal_pattern_confirmed_trades": (pattern.get("pattern_gate") or {}).get("trades"),
         "literal_pattern_changed_clicks": pattern.get("changed_clicks"),
         "literal_pattern_candidate_expectancy_r": (pattern.get("pattern_gate") or {}).get("expectancy_r_resolved"),
@@ -95,8 +104,8 @@ async def run_crude_oil_mini_research_framework(
 
     The local CRUDEOILM tape and click schedule are frozen before outcome-aware
     audits are inspected. Optional global context is also frozen independently
-    before its exploratory ablation reads outcomes. Context ablation is shadow-only
-    and cannot mutate the Current Mind decisions produced by this run.
+    before its exploratory ablation reads outcomes. Every outcome-aware audit is
+    descriptive-only and cannot mutate the Current Mind decisions produced here.
     """
     tape = await refresh_frozen_research_tape(provider, store, now=now)
     if tape.get("status") != "CERTIFIED":
@@ -164,6 +173,13 @@ async def run_crude_oil_mini_research_framework(
     memory = await asyncio.to_thread(evaluate_memory_evidence, candles, 3)
     abstention = await asyncio.to_thread(evaluate_abstention_audit, replay)
     error = await asyncio.to_thread(evaluate_error_attribution, replay)
+    direction_geometry = await asyncio.to_thread(evaluate_direction_geometry_audit, replay)
+    if direction_geometry.get("decision_path_changed") is not False:
+        raise RuntimeError("Direction-vs-geometry audit attempted to mutate the Crude decision path")
+    if direction_geometry.get("geometry_changed") is not False:
+        raise RuntimeError("Direction-vs-geometry audit attempted to mutate frozen trade geometry")
+    if direction_geometry.get("promotion_allowed") is not False:
+        raise RuntimeError("Outcome-aware direction-vs-geometry audit was incorrectly marked promotable")
     pattern = await asyncio.to_thread(evaluate_crude_playbook_pattern_shadow, candles, replay)
 
     primary_records = _primary_context_from_replay(replay)
@@ -185,6 +201,7 @@ async def run_crude_oil_mini_research_framework(
         "memory_evidence_audit": memory,
         "abstention_audit": abstention,
         "error_attribution": error,
+        "direction_geometry_audit": direction_geometry,
         "playbook_pattern_shadow": pattern,
         "context_coverage_primary_only": context_coverage,
         "context_acquisition_manifest": acquisition_manifest(),
@@ -192,11 +209,12 @@ async def run_crude_oil_mini_research_framework(
         "discovery_context_ablation": discovery_context_ablation,
         "no_news_brain_freeze_status": "HUMAN_REVIEW_REQUIRED",
         "next_step": (
-            "Review Crude-only Memory/WAIT/error attribution together with the discovery-grade global-context ablation. "
-            "Do not promote Yahoo-derived WTI/Brent/USDINR/DXY into the Current Mind from this already-inspected "
-            "June-August sample. If the context effect is coherent, reproduce it on an authorized/independent data "
-            "source and then validate it chronologically or prospectively before freezing the no-news Brain. News "
-            "remains a later same-click experiment after that freeze."
+            "Review the Crude direction-vs-geometry diagnosis together with Memory, WAIT and error attribution. "
+            "Treat correct-direction STOPs only as timing/geometry research cases, never as proof that the frozen stop "
+            "was wrong. Do not fit a new entry, invalidation or R multiple to this already-inspected June-August sample. "
+            "Any geometry candidate must be specified before chronological holdout or prospective validation. The "
+            "discovery-grade Yahoo context remains non-promotable, and news remains a later same-click experiment only "
+            "after the no-news Brain is frozen."
         ),
         "integrity": {
             "architecture_reference": "COPPER_CURRENT_MIND",
@@ -212,6 +230,8 @@ async def run_crude_oil_mini_research_framework(
             "option_market_data_used": False,
             "synthetic_option_premium_used": False,
             "outcome_audits_can_mutate_decisions": False,
+            "direction_geometry_audit_can_mutate_decisions": False,
+            "direction_geometry_audit_can_change_geometry": False,
             "discovery_context_can_mutate_decisions": False,
             "discovery_context_promotion_allowed": False,
             "discovery_context_requires_independent_validation": True,
