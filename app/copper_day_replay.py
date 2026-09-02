@@ -142,6 +142,9 @@ def _context_from_analysis(analysis):
         "ema9": analysis.get("ema9"),
         "ema20": analysis.get("ema20"),
         "ema50": analysis.get("ema50"),
+        "atr14": analysis.get("atr14"),
+        "recent_support": analysis.get("recent_support"),
+        "recent_resistance": analysis.get("recent_resistance"),
         "bias_components": analysis.get("bias_components"),
     }
 
@@ -229,6 +232,15 @@ def replay_contract_rows(rows, contract_metadata=None):
                 "stop": plan["stop"],
                 "target1": plan["target1"],
                 "target2": plan["target2"],
+                "instrument": "MCX COPPER FUTURE",
+                "setup_side": signal,
+                "option_contract": None,
+                "option_side": None,
+                "option_entry": None,
+                "option_stop_loss": None,
+                "option_target": None,
+                "option_data_available": False,
+                "option_note": "This replay contains Copper futures OHLC only; no historical MCX option premium/chain was used.",
                 "planned_risk_rupees": RISK_PER_TRADE_RUPEES,
                 **outcome,
                 "net_pnl_rupees": pnl,
@@ -368,6 +380,15 @@ def replay_contract_rows(rows, contract_metadata=None):
             "win_rate_pct": round(total_wins / total_trades * 100.0, 2) if total_trades else 0.0,
             "best_day_pnl_rupees": max((day["net_pnl_rupees"] for day in daily_results), default=0.0),
             "worst_day_pnl_rupees": min((day["net_pnl_rupees"] for day in daily_results), default=0.0),
+        },
+        "audit_scope": {
+            "trade_setup_fields_included": [
+                "clicked_at", "instrument", "setup_side", "entry", "stop",
+                "target1", "target2", "outcome", "exit_at", "exit_price",
+                "r_multiple", "net_pnl_rupees", "context"
+            ],
+            "option_replay_status": "NOT_AVAILABLE_IN_THIS_DATASET",
+            "option_replay_reason": "Stored replay rows are Copper futures candles. No historical option contract/premium series is present in this replay.",
         },
         "monthly_summary": monthly,
         "daily_results": daily_results,
