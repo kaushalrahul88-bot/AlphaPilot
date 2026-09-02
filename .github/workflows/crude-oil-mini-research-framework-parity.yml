@@ -5,6 +5,8 @@ on:
     paths:
       - "app/__init__.py"
       - "app/asgi.py"
+      - "app/crude_oil_domain_knowledge.py"
+      - "app/crude_oil_mini_knowledge_board.py"
       - "app/crude_oil_mini_market_perception.py"
       - "app/crude_oil_mini_experience_memory.py"
       - "app/crude_oil_mini_current_mind.py"
@@ -25,12 +27,15 @@ on:
       - "tests/test_crude_oil_mini_research_tape.py"
       - "tests/test_crude_oil_mini_context_tape_ablation.py"
       - "tests/test_crude_oil_mini_direction_geometry_audit.py"
+      - "tests/test_crude_oil_mini_knowledge_board.py"
       - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
   push:
     branches: [main]
     paths:
       - "app/__init__.py"
       - "app/asgi.py"
+      - "app/crude_oil_domain_knowledge.py"
+      - "app/crude_oil_mini_knowledge_board.py"
       - "app/crude_oil_mini_market_perception.py"
       - "app/crude_oil_mini_experience_memory.py"
       - "app/crude_oil_mini_current_mind.py"
@@ -70,7 +75,8 @@ jobs:
             tests.test_crude_oil_mini_research_framework \
             tests.test_crude_oil_mini_research_tape \
             tests.test_crude_oil_mini_context_tape_ablation \
-            tests.test_crude_oil_mini_direction_geometry_audit -v
+            tests.test_crude_oil_mini_direction_geometry_audit \
+            tests.test_crude_oil_mini_knowledge_board -v
 
   frozen-research-audit:
     if: github.event_name != 'pull_request'
