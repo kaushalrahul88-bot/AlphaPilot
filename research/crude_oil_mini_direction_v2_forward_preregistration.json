@@ -1,0 +1,86 @@
+{
+  "version": "CRUDE_OIL_MINI_DIRECTION_V2_PHASE_1_PREREG_V1",
+  "product": "CRUDE_OIL_MINI",
+  "underlying_symbol": "CRUDEOILM",
+  "research_only": true,
+  "shadow_only": true,
+  "frozen_before_first_validation_session": true,
+  "development_data": {
+    "inspected_through": "2026-08-31",
+    "may_seed_prior_direction_memory": true,
+    "may_tune_phase_1_rules": false,
+    "may_tune_phase_1_thresholds": false,
+    "may_promote_direction_brain": false
+  },
+  "phase_1": {
+    "start_date": "2026-09-03",
+    "expected_open_sessions": [
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16"
+    ],
+    "clicks_per_session": 20,
+    "scheduled_clicks": 200,
+    "selection": "deterministic clock-only SHA-256-seeded sampling without replacement",
+    "seed": "CRUDEOILM_DIRECTION_V2_PROSPECTIVE_PHASE_1",
+    "warmup_5m_bars": 24,
+    "tail_5m_bars": 24,
+    "tail_reason": "Keep the preregistered +120m secondary horizon inside the scheduled MCX session.",
+    "ganesh_chaturthi_2026_09_14": "MCX evening-only session; still included because expected_open=true and at least 20 eligible guarded clock slots exist."
+  },
+  "outcomes": {
+    "primary": {
+      "underlying": "CRUDEOILM",
+      "horizon_minutes": 60,
+      "metric": "directional accuracy of frozen BULLISH/BEARISH shadow calls",
+      "null_reference": "50% directional accuracy",
+      "interval": "two-sided 95% Wilson interval"
+    },
+    "secondary_horizons_minutes": [15, 30, 120],
+    "abstentions_scored_as_directional_errors": false,
+    "abstention_and_coverage_reported_separately": true,
+    "target_stop_outcomes_used": false,
+    "geometry_used": false,
+    "option_pnl_used": false
+  },
+  "capture_integrity": {
+    "source_bar_must_be_complete_at_click": true,
+    "future_bar_visible_at_capture": false,
+    "shadow_thesis_fingerprinted_before_outcome": true,
+    "outcomes_attached_separately": true,
+    "exact_completed_5m_bar_required_at_each_horizon": true,
+    "same_timestamp_direction_memory_case_allowed": false
+  },
+  "online_direction_memory": {
+    "algorithm_frozen": true,
+    "thresholds_frozen": true,
+    "may_expand_during_phase": true,
+    "visibility_rule": "A memory case is eligible only when its full stored horizon set was resolved and available strictly before the current click.",
+    "trade_geometry_labels_used": false,
+    "option_pnl_used": false
+  },
+  "data_sufficiency_for_review": {
+    "minimum_capture_coverage_pct": 95.0,
+    "all_10_sessions_require_20_captures": true,
+    "minimum_matured_directional_60m_calls": 50,
+    "ready_for_review_is_promotion": false
+  },
+  "frozen_rules": {
+    "direction_brain_v2_family_definitions_may_change_during_phase": false,
+    "confidence_definition_may_change_during_phase": false,
+    "click_seed_or_schedule_may_change_during_phase": false,
+    "threshold_search_allowed_during_phase": false,
+    "geometry_tuning_allowed": false,
+    "option_pnl_tuning_allowed": false,
+    "current_mind_mutation_allowed": false,
+    "production_promotion_allowed_automatically": false
+  },
+  "interpretation": "A lower 95% directional-accuracy bound above 50% is descriptive prospective evidence only. It cannot self-promote Direction Brain V2. Any production use requires a separate explicit review and independent replication."
+}
