@@ -47,7 +47,7 @@ def make_direction_case(
     """Create one geometry-independent underlying-direction memory case.
 
     The case stores only market state and future underlying returns. It deliberately
-    contains no BUY_CE/BUY_PE action, entry, stop, target, R multiple or target-first /
+    contains no option-side trade action, entry, stop, target, R multiple or target-first /
     stop-first label. `available_at` must represent the first timestamp at which every
     stored forward return was actually knowable.
     """
