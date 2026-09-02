@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import datetime
 
+from .crude_oil_domain_knowledge import crude_oil_domain_knowledge_v1
 from .crude_oil_mini_abstention_audit import evaluate_abstention_audit
 from .crude_oil_mini_context_ablation import evaluate_crude_context_ablation
 from .crude_oil_mini_context_tape import PostgresCrudeContextTapeStore, build_or_read_frozen_context_tape
@@ -50,6 +51,7 @@ def framework_summary(report: dict) -> dict:
     geometry_realization = direction_geometry.get("geometry_realization") or {}
     pattern = report.get("playbook_pattern_shadow") or {}
     tape = report.get("research_tape") or {}
+    knowledge = report.get("domain_knowledge_manifest") or {}
     context_tape = ((report.get("discovery_context_tape") or {}).get("certification") or {})
     context_ablation = report.get("discovery_context_ablation") or {}
     variants = context_ablation.get("variants") or {}
@@ -67,6 +69,11 @@ def framework_summary(report: dict) -> dict:
         "click_coverage_exact": replay.get("click_coverage_exact"),
         "click_schedule_sha256": report.get("click_schedule_sha256"),
         "no_news_performance": replay.get("performance"),
+        "domain_knowledge_version": knowledge.get("version"),
+        "domain_knowledge_sha256": report.get("domain_knowledge_sha256"),
+        "domain_knowledge_items": len(knowledge.get("items") or []),
+        "domain_knowledge_production_rules_changed": knowledge.get("production_rules_changed"),
+        "domain_knowledge_decision_vote": False,
         "memory_selected_setups": memory.get("selected_setups"),
         "memory_target_first_pct_resolved": memory.get("target_first_pct_resolved"),
         "waits": (abstention.get("overall") or {}).get("waits"),
@@ -106,6 +113,8 @@ async def run_crude_oil_mini_research_framework(
     audits are inspected. Optional global context is also frozen independently
     before its exploratory ablation reads outcomes. Every outcome-aware audit is
     descriptive-only and cannot mutate the Current Mind decisions produced here.
+    Static Crude domain knowledge is recorded as a non-voting interpretation
+    manifest; it never substitutes for missing point-in-time observations.
     """
     tape = await refresh_frozen_research_tape(provider, store, now=now)
     if tape.get("status") != "CERTIFIED":
@@ -146,6 +155,12 @@ async def run_crude_oil_mini_research_framework(
     ]
     click_schedule_sha256 = _sha256_json(click_schedule)
     no_news_decision_sha256 = _sha256_json(decision_fingerprints)
+    knowledge_manifest = crude_oil_domain_knowledge_v1()
+    knowledge_manifest_sha256 = _sha256_json(knowledge_manifest)
+    if knowledge_manifest.get("production_rules_changed") is not False:
+        raise RuntimeError("Crude domain knowledge unexpectedly claims a production rule change")
+    if (knowledge_manifest.get("guardrails") or {}).get("knowledge_cannot_create_orders") is not True:
+        raise RuntimeError("Crude domain knowledge order-creation guardrail is missing")
 
     # Freeze discovery-grade external context before any context/outcome interaction
     # is evaluated. A persistent snapshot is immutable once inserted.
@@ -197,6 +212,8 @@ async def run_crude_oil_mini_research_framework(
         "click_schedule": click_schedule,
         "click_schedule_sha256": click_schedule_sha256,
         "no_news_decision_sha256": no_news_decision_sha256,
+        "domain_knowledge_manifest": knowledge_manifest,
+        "domain_knowledge_sha256": knowledge_manifest_sha256,
         "no_news_replay": replay,
         "memory_evidence_audit": memory,
         "abstention_audit": abstention,
@@ -211,8 +228,10 @@ async def run_crude_oil_mini_research_framework(
         "next_step": (
             "Review the Crude direction-vs-geometry diagnosis together with Memory, WAIT and error attribution. "
             "Treat correct-direction STOPs only as timing/geometry research cases, never as proof that the frozen stop "
-            "was wrong. Do not fit a new entry, invalidation or R multiple to this already-inspected June-August sample. "
-            "Any geometry candidate must be specified before chronological holdout or prospective validation. The "
+            "was wrong. Static Crude domain knowledge is now attached as non-voting interpretation context and cannot "
+            "substitute for missing point-in-time WTI, inventory, OPEC, news or option observations. Do not fit a new "
+            "entry, invalidation or R multiple to this already-inspected June-August sample. Any geometry or knowledge-"
+            "conditioned candidate must be specified before chronological holdout or prospective validation. The "
             "discovery-grade Yahoo context remains non-promotable, and news remains a later same-click experiment only "
             "after the no-news Brain is frozen."
         ),
@@ -224,6 +243,10 @@ async def run_crude_oil_mini_research_framework(
             "regular_crude_used": False,
             "copper_market_data_used": False,
             "copper_fitted_thresholds_used": False,
+            "crude_domain_knowledge_attached": True,
+            "domain_knowledge_can_create_orders": False,
+            "domain_knowledge_is_directional_vote": False,
+            "missing_pit_context_can_activate_domain_prior": False,
             "shared_playbook_pattern_architecture_used": True,
             "playbook_pattern_shadow_can_mutate_decisions": False,
             "news_used_in_decisions": False,
