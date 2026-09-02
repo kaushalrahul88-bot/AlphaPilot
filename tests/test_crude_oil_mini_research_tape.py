@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from app import crude_oil_mini_research_framework as framework
@@ -107,6 +108,35 @@ class CrudeOilMiniResearchTapeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report["integrity"]["exact_current_contract_only"])
         self.assertFalse(report["integrity"]["regular_crude_used"])
         self.assertFalse(report["integrity"]["copper_data_used"])
+
+    async def test_canonical_frozen_tape_is_reused_before_any_groww_call(self):
+        canonical = {
+            "status": "CERTIFIED",
+            "reference_contract": tape.FROZEN_CURRENT_CONTRACT,
+            "tape_sha256": tape.FROZEN_TAPE_SHA256,
+            "candles": tape.FROZEN_TAPE_CANDLES,
+            "first_at": tape.FROZEN_TAPE_FIRST_AT,
+            "last_at": tape.FROZEN_TAPE_LAST_AT,
+            "complete_sessions": tape.FROZEN_COMPLETE_SESSIONS,
+            "complete_session_first": tape.FROZEN_COMPLETE_SESSION_FIRST,
+            "complete_session_last": tape.FROZEN_COMPLETE_SESSION_LAST,
+        }
+        provider = FakeProvider()
+        store = FakeStore([])
+        with patch.object(
+            tape,
+            "certify_frozen_research_tape",
+            new=AsyncMock(return_value=canonical),
+        ), patch.object(
+            tape,
+            "_frozen_contract",
+            new=AsyncMock(side_effect=AssertionError("Groww/master should not be touched for canonical tape")),
+        ):
+            report = await tape.refresh_frozen_research_tape(provider, store)
+        self.assertEqual(report["refresh"]["mode"], "REUSED_CANONICAL_FROZEN_TAPE")
+        self.assertFalse(report["refresh"]["provider_called"])
+        self.assertEqual(report["refresh"]["canonical_sha256"], tape.FROZEN_TAPE_SHA256)
+        self.assertEqual(provider.calls, [])
 
     async def test_read_fails_closed_if_exact_contract_is_absent(self):
         store = FakeStore([])

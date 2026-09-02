@@ -18,6 +18,16 @@ FROZEN_RESEARCH_START = datetime(2026, 6, 1, 0, 0, tzinfo=IST)
 FROZEN_RESEARCH_END = datetime(2026, 8, 31, 23, 30, tzinfo=IST)
 CHUNK_DAYS = 7
 
+# Canonical snapshot sealed by the successful 1,080-click framework audit.
+# These values are data-integrity identifiers, not strategy thresholds.
+FROZEN_TAPE_SHA256 = "a7379844a91771af2b386a452868713bdee73c70311a3f2fd76a29f4db6064bb"
+FROZEN_TAPE_CANDLES = 10125
+FROZEN_TAPE_FIRST_AT = "2026-06-01T09:15:00+05:30"
+FROZEN_TAPE_LAST_AT = "2026-08-31T23:25:00+05:30"
+FROZEN_COMPLETE_SESSIONS = 54
+FROZEN_COMPLETE_SESSION_FIRST = "2026-06-16"
+FROZEN_COMPLETE_SESSION_LAST = "2026-08-31"
+
 
 def _storage_contract(contract: dict) -> dict:
     out = dict(contract or {})
@@ -92,27 +102,70 @@ async def _fetch_exact_range(provider, contract: dict, start: datetime, end: dat
     return [dedup[key] for key in sorted(dedup)]
 
 
-async def refresh_frozen_research_tape(provider, store, *, now: datetime | None = None) -> dict:
-    """Build or idempotently refresh the frozen current-contract research tape.
+def _matches_canonical_frozen_tape(report: dict) -> bool:
+    """Require an exact match to the already-sealed June-August Crude tape."""
+    return bool(report) and all((
+        report.get("status") == "CERTIFIED",
+        report.get("reference_contract") == FROZEN_CURRENT_CONTRACT,
+        report.get("tape_sha256") == FROZEN_TAPE_SHA256,
+        int(report.get("candles") or 0) == FROZEN_TAPE_CANDLES,
+        report.get("first_at") == FROZEN_TAPE_FIRST_AT,
+        report.get("last_at") == FROZEN_TAPE_LAST_AT,
+        int(report.get("complete_sessions") or 0) == FROZEN_COMPLETE_SESSIONS,
+        report.get("complete_session_first") == FROZEN_COMPLETE_SESSION_FIRST,
+        report.get("complete_session_last") == FROZEN_COMPLETE_SESSION_LAST,
+    ))
 
-    This is deliberately bounded to the already-declared June 1-Aug 31 research
-    interval. It does not ask the provider to reconstruct a rolling 180-day tape on
-    every replay. Data is persisted once in the same durable candle store used by
-    the Copper research framework and then reused by all Crude audits.
+
+async def _reuse_canonical_frozen_tape(store) -> dict | None:
+    """Return the sealed snapshot without touching Groww when it already exists."""
+    try:
+        report = await certify_frozen_research_tape(store, refreshed_rows=0)
+    except (RuntimeError, ValueError):
+        return None
+    if not _matches_canonical_frozen_tape(report):
+        return None
+    report["refresh"] = {
+        "mode": "REUSED_CANONICAL_FROZEN_TAPE",
+        "provider_called": False,
+        "canonical_sha256": FROZEN_TAPE_SHA256,
+        "reason": "Stored tape exactly matches the sealed 1,080-click research snapshot.",
+    }
+    return report
+
+
+async def refresh_frozen_research_tape(provider, store, *, now: datetime | None = None) -> dict:
+    """Return the sealed research tape, recovering from Groww only when necessary.
+
+    The June 1-Aug 31 dataset is already frozen and fingerprinted. Replays must
+    therefore read and certify the stored snapshot first. Groww is contacted only
+    when that exact snapshot is absent or fails the canonical fingerprint, avoiding
+    both accidental tape drift and unnecessary provider/token-rate-limit exposure.
     """
+    await store.initialize()
+    reused = await _reuse_canonical_frozen_tape(store)
+    if reused is not None:
+        return reused
+
     observed = parse_ist_timestamp(now or datetime.now(IST)).astimezone(IST)
     contract = await _frozen_contract()
-    await store.initialize()
     latest = await store.latest_candle_at(FROZEN_CURRENT_CONTRACT, TIMEFRAME_MINUTES)
     start = FROZEN_RESEARCH_START
     if latest is not None:
         latest_at = parse_ist_timestamp(latest).astimezone(IST)
-        # Re-read two completed bars to make refresh idempotent and allow upstream
-        # revisions at the tail without refetching the full research interval.
+        # Re-read two completed bars to make recovery idempotent and allow an
+        # incomplete/corrupt tail to be repaired without refetching the full window.
         start = max(FROZEN_RESEARCH_START, latest_at - timedelta(minutes=10))
     end = min(FROZEN_RESEARCH_END, _completed_end(observed))
     if end < start:
-        return await certify_frozen_research_tape(store, contract=contract, refreshed_rows=0)
+        report = await certify_frozen_research_tape(store, contract=contract, refreshed_rows=0)
+        report["refresh"] = {
+            "mode": "RECOVERY_NOT_REQUIRED_BY_TIME",
+            "provider_called": False,
+            "requested_start": start.isoformat(),
+            "requested_end": end.isoformat(),
+        }
+        return report
 
     fetched = await _fetch_exact_range(provider, contract, start, end)
     collected_at = observed
@@ -120,12 +173,15 @@ async def refresh_frozen_research_tape(provider, store, *, now: datetime | None 
     upserted = await store.upsert(records)
     report = await certify_frozen_research_tape(store, contract=contract, refreshed_rows=upserted)
     report["refresh"] = {
+        "mode": "PROVIDER_RECOVERY",
+        "provider_called": True,
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
         "fetched": len(fetched),
         "upserted": upserted,
         "initial_build": latest is None,
         "source_policy": "EXACT_CRUDEOILM_MODERN_PLUS_LEGACY_FAIL_CLOSED",
+        "canonical_match_after_recovery": _matches_canonical_frozen_tape(report),
     }
     return report
 
