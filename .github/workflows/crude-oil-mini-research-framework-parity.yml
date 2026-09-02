@@ -13,6 +13,7 @@ on:
       - "app/crude_oil_mini_memory_evidence_audit.py"
       - "app/crude_oil_mini_abstention_audit.py"
       - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_direction_geometry_audit.py"
       - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
       - "app/crude_oil_mini_context_tape.py"
@@ -23,6 +24,7 @@ on:
       - "tests/test_crude_oil_mini_research_framework.py"
       - "tests/test_crude_oil_mini_research_tape.py"
       - "tests/test_crude_oil_mini_context_tape_ablation.py"
+      - "tests/test_crude_oil_mini_direction_geometry_audit.py"
       - ".github/workflows/crude-oil-mini-research-framework-parity.yml"
   push:
     branches: [main]
@@ -37,6 +39,7 @@ on:
       - "app/crude_oil_mini_memory_evidence_audit.py"
       - "app/crude_oil_mini_abstention_audit.py"
       - "app/crude_oil_mini_current_mind_error_attribution.py"
+      - "app/crude_oil_mini_direction_geometry_audit.py"
       - "app/crude_oil_mini_playbook_pattern_shadow.py"
       - "app/crude_oil_mini_research_tape.py"
       - "app/crude_oil_mini_context_tape.py"
@@ -66,7 +69,8 @@ jobs:
             tests.test_crude_oil_mini_current_mind_architecture \
             tests.test_crude_oil_mini_research_framework \
             tests.test_crude_oil_mini_research_tape \
-            tests.test_crude_oil_mini_context_tape_ablation -v
+            tests.test_crude_oil_mini_context_tape_ablation \
+            tests.test_crude_oil_mini_direction_geometry_audit -v
 
   frozen-research-audit:
     if: github.event_name != 'pull_request'
@@ -147,6 +151,7 @@ jobs:
           assert s.get('click_coverage_exact') is True, s
           assert s.get('tape_sha256'), s
           assert s.get('click_schedule_sha256'), s
+          assert s.get('direction_geometry_trade_observations') == (s.get('no_news_performance') or {}).get('trades'), s
           assert s.get('context_tape_status') == 'CERTIFIED_DISCOVERY', s
           assert s.get('context_tape_sha256'), s
           assert s.get('context_source_grade') == 'E_DISCOVERY', s
@@ -174,11 +179,21 @@ jobs:
           assert d['integrity']['news_used_in_decisions'] is False
           assert d['integrity']['option_market_data_used'] is False
           assert d['integrity']['outcome_audits_can_mutate_decisions'] is False
+          assert d['integrity']['direction_geometry_audit_can_mutate_decisions'] is False
+          assert d['integrity']['direction_geometry_audit_can_change_geometry'] is False
           assert d['integrity']['discovery_context_can_mutate_decisions'] is False
           assert d['integrity']['discovery_context_promotion_allowed'] is False
           assert d['integrity']['discovery_context_requires_independent_validation'] is True
           assert d['integrity']['performance_is_ci_gate'] is False
           assert d['integrity']['live_execution_enabled'] is False
+          geometry=d['direction_geometry_audit']
+          assert geometry['descriptive_only'] is True
+          assert geometry['strategy_rules_changed'] is False
+          assert geometry['decision_path_changed'] is False
+          assert geometry['geometry_changed'] is False
+          assert geometry['threshold_search_performed'] is False
+          assert geometry['promotion_allowed'] is False
+          assert geometry['trade_observations'] == d['no_news_replay']['performance']['trades']
           shadow=d['playbook_pattern_shadow']
           assert shadow['strategy_rules_changed'] is False
           assert shadow['pattern_definition_predates_crude_outcome_review'] is True
