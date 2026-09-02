@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from collections import Counter, defaultdict
+from collections import defaultdict
 from statistics import mean
 
 from .commodity_time import parse_ist_timestamp
@@ -19,6 +19,7 @@ from .crude_oil_mini_market_perception import (
     precompute_perception,
     price_evidence,
 )
+from .crude_oil_mini_research_tape import FROZEN_RESEARCH_END, FROZEN_RESEARCH_START
 from .current_mind_click_sampler import deterministic_clicks
 from .current_mind_crude_oil_mini_replay import (
     CLICK_SEED as PREVIOUS_CLICK_SEED,
@@ -36,6 +37,8 @@ from .current_mind_crude_oil_mini_replay import (
 MODE = "CRUDE_OIL_MINI_UNUSED_20_CLICK_DIAGNOSTIC_V1"
 NEW_CLICK_SEED = "CRUDEOILM_UNUSED_20_DIAGNOSTIC_V1"
 NEW_CLICK_COUNT = 20
+EXPECTED_FROZEN_COMPLETE_SESSIONS = 54
+EXPECTED_PREVIOUS_CLICKS = 1080
 WARMUP_BARS = 24
 TAIL_BARS = 12
 MIN_GLOBAL_INDEX = 50
@@ -44,6 +47,15 @@ MIN_GLOBAL_INDEX = 50
 def _fingerprint(value) -> str:
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
+
+def _frozen_rows(candles) -> list[list]:
+    start = parse_ist_timestamp(FROZEN_RESEARCH_START)
+    end = parse_ist_timestamp(FROZEN_RESEARCH_END)
+    return [
+        row for row in clean_ohlcv(candles)
+        if start <= parse_ist_timestamp(row[0]) <= end
+    ]
 
 
 def _eligible_click_pool(complete_rows: list[list]) -> list[dict]:
@@ -58,20 +70,13 @@ def _eligible_click_pool(complete_rows: list[list]) -> list[dict]:
         items.sort(key=lambda item: parse_ist_timestamp(item[0]))
         eligible = items[WARMUP_BARS : len(items) - TAIL_BARS]
         eligible = [item for item in eligible if item[1] >= MIN_GLOBAL_INDEX]
-        pool.extend(
-            {"session": day, "click_timestamp": stamp}
-            for stamp, _ in eligible
-        )
+        pool.extend({"session": day, "click_timestamp": stamp} for stamp, _ in eligible)
     return pool
 
 
 def build_unused_click_manifest(candles) -> dict:
-    """Freeze 20 timestamp-only clicks after excluding the prior 1,080-click schedule.
-
-    Selection sees timestamps/session completeness only. Price direction, trade outcomes,
-    target/stop paths and future returns are not consulted.
-    """
-    rows = clean_ohlcv(candles)
+    """Freeze 20 timestamp-only clicks after excluding the exact prior 1,080 schedule."""
+    rows = _frozen_rows(candles)
     sessions = _complete_sessions(rows)
     complete_days = {row["date"] for row in sessions if row.get("complete_for_20_click_research")}
     complete_rows = [row for row in rows if parse_ist_timestamp(row[0]).date().isoformat() in complete_days]
@@ -84,6 +89,10 @@ def build_unused_click_manifest(candles) -> dict:
         tail_bars=TAIL_BARS,
         min_global_index=MIN_GLOBAL_INDEX,
     )
+    if len(complete_days) != EXPECTED_FROZEN_COMPLETE_SESSIONS or len(previous) != EXPECTED_PREVIOUS_CLICKS:
+        raise RuntimeError(
+            f"Frozen replay identity mismatch: sessions={len(complete_days)}, previous_clicks={len(previous)}"
+        )
     previous_set = {parse_ist_timestamp(row["click_timestamp"]).isoformat() for row in previous}
 
     unused = [
@@ -98,19 +107,20 @@ def build_unused_click_manifest(candles) -> dict:
         random.Random(seed).sample(unused, NEW_CLICK_COUNT),
         key=lambda row: parse_ist_timestamp(row["click_timestamp"]),
     )
-    selected = [
-        {
-            "session": row["session"],
-            "click_timestamp": parse_ist_timestamp(row["click_timestamp"]).isoformat(),
-            "sampling": "DETERMINISTIC_RANDOM_FROM_UNUSED_ELIGIBLE_POOL",
-        }
-        for row in selected
-    ]
+    selected = [{
+        "session": row["session"],
+        "click_timestamp": parse_ist_timestamp(row["click_timestamp"]).isoformat(),
+        "sampling": "DETERMINISTIC_RANDOM_FROM_UNUSED_FROZEN_JUNE_AUG_POOL",
+    } for row in selected]
     overlap = sorted({row["click_timestamp"] for row in selected} & previous_set)
     manifest = {
         "mode": "CRUDE_OIL_MINI_UNUSED_CLICK_MANIFEST_V1",
         "research_only": True,
         "outcome_blind_selection": True,
+        "frozen_window": {
+            "start": parse_ist_timestamp(FROZEN_RESEARCH_START).isoformat(),
+            "end": parse_ist_timestamp(FROZEN_RESEARCH_END).isoformat(),
+        },
         "new_seed": NEW_CLICK_SEED,
         "previous_seed": PREVIOUS_CLICK_SEED,
         "complete_sessions": len(complete_days),
@@ -146,7 +156,8 @@ def evaluate_unused_20_clicks(candles, contract: dict | None = None) -> dict:
     if manifest["overlap_with_previous_clicks"] != 0 or manifest["selected_click_count"] != NEW_CLICK_COUNT:
         raise RuntimeError("Unused-click manifest integrity failed")
 
-    rows, features = precompute_perception(candles)
+    frozen = _frozen_rows(candles)
+    rows, features = precompute_perception(frozen)
     sessions = _complete_sessions(rows)
     complete_days = {row["date"] for row in sessions if row.get("complete_for_20_click_research")}
     profiles = causal_profiles(rows, features)
@@ -170,10 +181,7 @@ def evaluate_unused_20_clicks(candles, contract: dict | None = None) -> dict:
         evidence_items = price_evidence(snapshot, profile)
         evidence_items.append(memory_evidence(experiences, snapshot, click.isoformat()))
         direction = _dominant_direction(evidence_items)
-        visible_session_rows = [
-            row for row in by_day[click.date().isoformat()]
-            if bar_visible_at(row) <= click
-        ]
+        visible_session_rows = [row for row in by_day[click.date().isoformat()] if bar_visible_at(row) <= click]
         market = market_regime_features(snapshot, profile)
         market.update(_geometry(visible_session_rows, direction) if direction else {})
 
@@ -208,8 +216,7 @@ def evaluate_unused_20_clicks(candles, contract: dict | None = None) -> dict:
         future_returns = {
             str(minutes): _horizon_return(
                 by_day[click.date().isoformat()], click, float(snapshot["price"]), minutes
-            )
-            for minutes in (15, 30, 60, 120)
+            ) for minutes in (15, 30, 60, 120)
         }
         decision = {
             "session": click_meta["session"],
@@ -255,6 +262,8 @@ def evaluate_unused_20_clicks(candles, contract: dict | None = None) -> dict:
         "decisions": decisions,
         "integrity": {
             "new_clicks": NEW_CLICK_COUNT,
+            "frozen_june_august_window_only": True,
+            "previous_click_count": manifest["previous_click_count"],
             "overlap_with_previous_clicks": manifest["overlap_with_previous_clicks"],
             "selection_outcome_blind": True,
             "same_current_mind_decision_mechanics": True,
