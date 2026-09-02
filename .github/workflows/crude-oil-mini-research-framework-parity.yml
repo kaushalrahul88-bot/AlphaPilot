@@ -157,6 +157,10 @@ jobs:
           assert s.get('click_coverage_exact') is True, s
           assert s.get('tape_sha256'), s
           assert s.get('click_schedule_sha256'), s
+          assert s.get('domain_knowledge_version') == 'CRUDE_OIL_DOMAIN_KNOWLEDGE_V1', s
+          assert int(s.get('domain_knowledge_items') or 0) > 0, s
+          assert s.get('domain_knowledge_production_rules_changed') is False, s
+          assert s.get('domain_knowledge_decision_vote') is False, s
           assert s.get('direction_geometry_trade_observations') == (s.get('no_news_performance') or {}).get('trades'), s
           assert s.get('context_tape_status') == 'CERTIFIED_DISCOVERY', s
           assert s.get('context_tape_sha256'), s
@@ -174,12 +178,19 @@ jobs:
           import json
           d=json.load(open('crude-oil-mini-research-framework-v1.json'))
           assert d['mode'] == 'CRUDE_OIL_MINI_COPPER_FRAMEWORK_RESEARCH_V1'
+          assert d['domain_knowledge_manifest']['version'] == 'CRUDE_OIL_DOMAIN_KNOWLEDGE_V1'
+          assert d['domain_knowledge_manifest']['production_rules_changed'] is False
+          assert d['domain_knowledge_manifest']['guardrails']['knowledge_cannot_create_orders'] is True
           assert d['integrity']['architecture_replicated_not_market_values'] is True
           assert d['integrity']['crude_specific_market_values_only'] is True
           assert d['integrity']['current_contract_only'] is True
           assert d['integrity']['regular_crude_used'] is False
           assert d['integrity']['copper_market_data_used'] is False
           assert d['integrity']['copper_fitted_thresholds_used'] is False
+          assert d['integrity']['crude_domain_knowledge_attached'] is True
+          assert d['integrity']['domain_knowledge_can_create_orders'] is False
+          assert d['integrity']['domain_knowledge_is_directional_vote'] is False
+          assert d['integrity']['missing_pit_context_can_activate_domain_prior'] is False
           assert d['integrity']['shared_playbook_pattern_architecture_used'] is True
           assert d['integrity']['playbook_pattern_shadow_can_mutate_decisions'] is False
           assert d['integrity']['news_used_in_decisions'] is False
