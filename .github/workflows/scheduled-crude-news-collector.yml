@@ -1,0 +1,44 @@
+name: Scheduled Crude News Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekday MCX window, IST. First-detected timestamps are persisted by the API.
+    - cron: "30,35,40,45,50,55 3 * * 1-5"
+    - cron: "*/5 4-17 * * 1-5"
+    - cron: "0 18 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-crude-news-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Persist first-detected crude news
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            code=$(curl -sS -o response.json -w "%{http_code}" \
+              --max-time 90 \
+              -X POST \
+              -H "X-Collector-Token: ${COLLECTOR_TOKEN}" \
+              "${API_BASE}/v1/internal/crude-oil-mini/news-collect" || true)
+            if [[ "$code" == "200" ]]; then
+              cat response.json
+              exit 0
+            fi
+            echo "news collect attempt ${attempt} returned HTTP ${code}"
+            cat response.json 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
+          exit 1
