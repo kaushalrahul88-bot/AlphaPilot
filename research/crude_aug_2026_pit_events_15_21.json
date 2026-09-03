@@ -1,0 +1,89 @@
+{
+  "archive_id": "CRUDE_AUG_2026_PIT_EVENT_ARCHIVE_V2",
+  "records": [
+    {
+      "available_at_ist": "2026-08-18T11:30:39+05:30",
+      "event_id": "2026-08-18_reuters_hormuz_prolonged_crisis",
+      "event_type": "MARKET_STRUCTURE_CONTEXT",
+      "facts": "Reuters analysis described the market as increasingly treating Middle East supply disruption as persistent rather than temporary.",
+      "headline": "Oil market starts pricing in a prolonged Hormuz crisis",
+      "mechanism_tags": ["HORMUZ", "SUPPLY_RISK", "MARKET_CONTEXT"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-18T06:00:39Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/oil-market-starts-pricing-prolonged-hormuz-crisis-2026-08-18/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-18T13:34:00+05:30",
+      "event_id": "2026-08-18_reuters_saudi_loadings_resume",
+      "event_type": "SUPPLY_FLOW_RESTORATION",
+      "facts": "Saudi Aramco resumed loadings inside Hormuz and offered heavy crude via ship-to-ship transfers after weeks of halted sales.",
+      "headline": "Saudi Arabia resumes oil loadings, sales from inside Strait of Hormuz",
+      "mechanism_tags": ["HORMUZ", "SUPPLY_FLOW", "SAUDI_ARABIA"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-18T08:04:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via AlphaBrief/Business Recorder",
+      "source_url": "https://www.reuters.com/business/energy/saudi-arabia-resumes-oil-loadings-sales-inside-strait-hormuz-2026-08-18/",
+      "timestamp_quality": "EXACT_MINUTE_REUTERS_REPUBLISHER"
+    },
+    {
+      "available_at_ist": "2026-08-19T20:00:00+05:30",
+      "event_id": "2026-08-19_eia_wpsr_crude",
+      "event_payload": {
+        "actual": {"commercial_crude_change_mmbbl": 4.405, "distillate_change_mmbbl": -1.53, "gasoline_change_mmbbl": 0.688, "refinery_utilization_pct": 97.2},
+        "composite_mechanism_stance": "UNKNOWN",
+        "composite_reason": "Only crude pre-release expectation was recovered with acceptable timestamp; product expectations remain missing.",
+        "consensus_disagreement": false,
+        "expectations": [
+          {"available_at_utc": "2026-08-19T14:30:00Z", "crude_change_mmbbl": 0.2, "note": "Product expectations not verified from a sufficiently strong source.", "pre_release_usable": false, "quality": "SECONDARY_AT_RELEASE", "source": "PrimeXBT summary"}
+        ],
+        "pre_release_consensus_available": false,
+        "pre_release_expectation_count": 0,
+        "release_timestamp_source": "EIA scheduled WPSR release after 10:30 a.m. ET",
+        "week_ending": "2026-08-14"
+      },
+      "event_type": "EIA_WPSR",
+      "facts": "U.S. commercial crude stocks rose from 424.410 million to 428.815 million barrels, a +4.405 million barrel weekly change.",
+      "headline": "EIA Weekly Petroleum Status Report",
+      "mechanism_tags": ["INVENTORY", "US_SUPPLY"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-19T14:30:00Z",
+      "series": "EIA_CRUDE_INVENTORY",
+      "source": "U.S. EIA",
+      "source_url": "https://www.eia.gov/petroleum/supply/weekly/",
+      "timestamp_quality": "SCHEDULED_OFFICIAL"
+    },
+    {
+      "available_at_ist": "2026-08-20T08:33:00+05:30",
+      "event_id": "2026-08-20_reuters_hormuz_shipping",
+      "event_type": "SHIPPING_FLOW",
+      "facts": "Kpler showed nine visible commodity-vessel transits, unchanged from the prior day, with U.S.-Iran talks deadlocked.",
+      "headline": "Hormuz shipping unchanged amid US-Iran stalemate, data shows",
+      "mechanism_tags": ["HORMUZ", "SHIPPING", "SUPPLY_FLOW"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-20T03:03:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via Economic Times",
+      "source_url": "https://economictimes.indiatimes.com/news/international/world-news/hormuz-shipping-unchanged-amid-us-iran-stalemate-data-shows/articleshow/133362763.cms",
+      "timestamp_quality": "EXACT_REUTERS_REPUBLISHER_IST"
+    },
+    {
+      "available_at_ist": "2026-08-21T08:45:00+05:30",
+      "event_id": "2026-08-21_reuters_hormuz_ship_count",
+      "event_type": "SHIPPING_FLOW",
+      "facts": "Seven commodity ships transited Hormuz on the prior day, about half the previous day's tally, with no VLCC or LNG tanker in the visible count.",
+      "headline": "Ships passing through Hormuz hover in single digits, data shows",
+      "mechanism_tags": ["HORMUZ", "SHIPPING", "SUPPLY_FLOW"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-21T03:15:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via Yahoo",
+      "source_url": "https://currently.att.yahoo.com/att/hormuz-ship-crossings-hover-single-024305270.html",
+      "timestamp_quality": "EXACT_MINUTE_REUTERS_REPUBLISHER"
+    }
+  ],
+  "window": ["2026-08-15", "2026-08-21"]
+}
