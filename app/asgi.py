@@ -8,6 +8,7 @@ from .candidate_validator import run_candidate_validator
 from .candidate_h_option_validator import run_candidate_h_option_validator
 from .candlestick_research import run_candlestick_research
 from .commodity_candle_collector import PostgresCandleStore
+from .crude_oil_mini_live_inputs import collect_live_crude_news, read_live_crude_inputs
 from .crude_oil_mini_research_framework import framework_summary, run_crude_oil_mini_research_framework
 from .current_mind_copper_forward import run_forward_phase1_from_provider
 from .main import app, settings, _safe_upstream_error, _collector_store
@@ -205,10 +206,6 @@ async def copper_current_mind_forward_phase1_result(
     return result
 
 
-# Crude Oil Mini research orchestration intentionally mirrors Copper's background
-# job pattern. Long exact-contract history acquisition happens inside the deployed
-# service and persists to Postgres; GitHub Actions only starts/polls the job instead
-# of holding one HTTP request open while Groww serves dozens of history chunks.
 _crude_oil_mini_research_job = {"status": "IDLE", "result": None, "error": None}
 _crude_oil_mini_research_task = None
 
@@ -282,3 +279,28 @@ async def crude_oil_mini_research_framework_result(
     if _crude_oil_mini_research_job.get("status") != "COMPLETED":
         raise HTTPException(status_code=409, detail="Crude Oil Mini research framework job has not completed")
     return _crude_oil_mini_research_job.get("result") or {}
+
+
+@app.post("/v1/internal/crude-oil-mini/news-collect")
+async def crude_oil_mini_news_collect(
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        return await collect_live_crude_news(settings.database_url)
+    except Exception as exc:
+        _safe_upstream_error("Crude Oil Mini live news collection", exc)
+
+
+@app.get("/v1/internal/crude-oil-mini/live-inputs")
+async def crude_oil_mini_live_inputs(
+    as_of: str,
+    x_collector_token: str | None = Header(default=None),
+):
+    _collector_store(x_collector_token)
+    try:
+        return await read_live_crude_inputs(settings.database_url, click_at=as_of)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _safe_upstream_error("Crude Oil Mini PIT live inputs", exc)

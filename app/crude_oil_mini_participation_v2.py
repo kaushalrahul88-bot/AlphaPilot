@@ -42,13 +42,15 @@ def build_participation_observation(
     click_timestamp: str,
     snapshot: dict,
     profile: dict,
+    option_positioning: dict | None = None,
     lookback_bars: int = DEFAULT_LOOKBACK_BARS,
 ) -> dict:
     """Describe commitment/acceptance from completed CRUDEOILM bars only.
 
-    Price plus volume is deliberately not independent directional evidence. A vote is
-    permitted only when fresh positioning evidence (OI) and auction acceptance align.
-    This module is shadow/research-only and is not consumed by Current Mind.
+    AlphaPilot is options-only. Persisted point-in-time option-chain OI is therefore
+    the primary positioning context when available; futures OI is optional supporting
+    context. Neither raw option OI nor price+volume is converted into an independent
+    directional vote without a separately preregistered causal rule.
     """
     if lookback_bars < 4:
         raise ValueError("lookback_bars must be at least 4")
@@ -80,8 +82,6 @@ def build_participation_observation(
     start_oi = _f(sample[0][6]) if len(sample[0]) > 6 else None
     oi_delta = (latest_oi - start_oi) if latest_oi is not None and start_oi is not None else None
 
-    # The reference range must predate the two confirming closes. Including those
-    # closes in the reference makes two-close acceptance impossible by construction.
     reference = sample[:-2]
     confirming_bars = sample[-2:]
     prior_high = max(float(row[2]) for row in reference)
@@ -103,6 +103,8 @@ def build_participation_observation(
     range_expanded = avg_range > 0 and ranges[-1] > avg_range
     local_volume_expanded = avg_volume > 0 and volumes[-1] > avg_volume
 
+    option_context = dict(option_positioning or {})
+    option_available = option_context.get("status") == "AVAILABLE"
     detail = {
         "click_timestamp": parse_ist_timestamp(click_timestamp).isoformat(),
         "lookback_bars": lookback_bars,
@@ -110,9 +112,13 @@ def build_participation_observation(
         "time_adjusted_relative_volume": time_adjusted,
         "prior_confirming_level": confirming,
         "activity_expanded": activity_expanded,
-        "latest_oi": latest_oi,
-        "start_oi": start_oi,
-        "oi_delta": oi_delta,
+        "latest_futures_oi": latest_oi,
+        "start_futures_oi": start_oi,
+        "futures_oi_delta": oi_delta,
+        "futures_oi_required": False,
+        "option_positioning_primary": True,
+        "option_positioning_available": option_available,
+        "option_positioning": option_context,
         "accepted_above_prior_range": accepted_above,
         "accepted_below_prior_range": accepted_below,
         "value_agrees": value_agrees,
@@ -126,6 +132,17 @@ def build_participation_observation(
         return _empty("ACTIVE_BALANCED", detail=detail)
 
     if oi_delta is None:
+        if option_available:
+            return {
+                "family": "PARTICIPATION",
+                "causal_origin": "OPTION_POSITIONING_FLOW",
+                "independence_status": "INDEPENDENT_CONTEXT_ONLY",
+                "depends_on_origins": [],
+                "counts_for_direction": False,
+                "stance": "UNKNOWN",
+                "state": "OPTION_POSITIONING_CONTEXT_ONLY",
+                "detail": detail,
+            }
         return {
             "family": "PARTICIPATION",
             "causal_origin": "LOCAL_PRICE_VOLUME",
@@ -189,7 +206,11 @@ def participation_contract() -> dict:
         "directional_states": sorted(INITIATIVE_STATES),
         "price_volume_only_can_vote": False,
         "position_closure_states_can_vote": False,
-        "requires_fresh_positioning_for_direction": True,
+        "options_only_system": True,
+        "option_oi_primary_positioning_context": True,
+        "raw_option_oi_directional_vote_allowed": False,
+        "futures_oi_required": False,
+        "futures_oi_role": "OPTIONAL_SUPPORTING_CONTEXT_ONLY",
         "requires_acceptance_for_direction": True,
         "threshold_search_on_inspected_august_allowed": False,
         "promotion_allowed": False,
