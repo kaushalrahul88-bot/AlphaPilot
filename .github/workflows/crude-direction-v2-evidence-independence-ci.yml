@@ -1,0 +1,36 @@
+name: Crude Direction V2 Evidence Independence CI
+
+on:
+  push:
+    branches:
+      - crude-direction-v2-evidence-independence-v1
+    paths:
+      - 'app/crude_oil_mini_direction_brain_v2.py'
+      - 'app/crude_oil_mini_participation_v2.py'
+      - 'app/crude_oil_mini_evidence_dependency.py'
+      - 'app/crude_oil_mini_event_reaction_v2.py'
+      - 'app/crude_oil_mini_event_archive.py'
+      - 'tests/test_crude_oil_mini_direction_brain_v2.py'
+      - 'tests/test_crude_oil_mini_participation_v2.py'
+      - 'tests/test_crude_oil_mini_evidence_dependency.py'
+      - 'tests/test_crude_oil_mini_event_archive.py'
+      - '.github/workflows/crude-direction-v2-evidence-independence-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Run shadow V2 evidence-independence tests
+        run: |
+          python -m unittest \
+            tests.test_crude_oil_mini_direction_brain_v2 \
+            tests.test_crude_oil_mini_participation_v2 \
+            tests.test_crude_oil_mini_evidence_dependency \
+            tests.test_crude_oil_mini_event_archive
