@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from .crude_oil_mini_direction_memory import query_direction_memory
 from .crude_oil_mini_evidence_dependency import audit_directional_independence
-from .crude_oil_mini_event_reaction_v2 import build_event_reaction_family
+from .crude_oil_mini_event_reaction_v2 import (
+    build_event_reaction_family,
+    build_event_reaction_family_from_records,
+)
 from .crude_oil_mini_point_in_time_context import latest_known_as_of
 
 MODE = "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_SHADOW"
@@ -266,18 +269,26 @@ def evaluate_direction_brain_v2_shadow(
     context_records: list[dict],
     direction_memory_cases: list[dict] | None = None,
     participation_observation: dict | None = None,
+    event_records: list[dict] | None = None,
 ) -> dict:
     """Build a non-voting Crude direction thesis without touching Current Mind."""
     latest = latest_known_as_of(context_records or [], click_timestamp)
     local = _local_structure(snapshot)
     participation = _participation(participation_observation, snapshot, profile or {})
     global_crude = _global_crude(latest)
-    event = build_event_reaction_family(latest)
+    event = (
+        build_event_reaction_family_from_records(event_records, click_timestamp)
+        if event_records is not None
+        else build_event_reaction_family(latest)
+    )
     event.setdefault("independent", event.get("independence_status") == "INDEPENDENT")
     memory = _memory_family(direction_memory_cases or [], snapshot, click_timestamp)
     families = [local, participation, global_crude, event, memory]
     fx = _fx_translation(latest, global_crude)
     thesis = _thesis_from_families(families)
+    available_context = set(latest)
+    if event_records is not None and event.get("detail", {}).get("visible_event_count", 0):
+        available_context.add("PIT_EVENT_ARCHIVE")
 
     return {
         "mode": MODE,
@@ -299,7 +310,7 @@ def evaluate_direction_brain_v2_shadow(
         "modifiers": {"FX_TRANSLATION": fx},
         "persistence": (memory.get("detail") or {}).get("persistence", "UNRESOLVED"),
         "entry_readiness": "NOT_EVALUATED_DIRECTION_ONLY",
-        "available_context_series": sorted(latest),
+        "available_context_series": sorted(available_context),
         "rules": [
             "No weighted indicator score is used.",
             "Directional confidence counts independent causal origins, not merely family names.",
@@ -308,6 +319,7 @@ def evaluate_direction_brain_v2_shadow(
             "WTI and Brent are one correlated GLOBAL_CRUDE family, never two votes.",
             "USDINR is a translation modifier and cannot independently create or reverse direction.",
             "Event/news cannot infer direction from headline keywords; material mechanism plus confirmed reaction is required.",
+            "All visible PIT archive events may be preserved; same-series headlines are not required to collapse to only the latest one.",
             "A rejected event thesis removes that event vote; rejection does not automatically create the opposite vote.",
             "Direction memory uses future underlying returns only after those horizons became historically available; it never uses trade geometry.",
             "Direction does not imply entry readiness or an option trade.",
@@ -349,5 +361,6 @@ def architecture_contract() -> dict:
         "fx_is_modifier_only": True,
         "event_requires_explicit_mechanism_materiality_and_reaction": True,
         "event_headline_sentiment_allowed": False,
+        "multiple_visible_events_supported": True,
         "direction_memory_geometry_independent": True,
     }
