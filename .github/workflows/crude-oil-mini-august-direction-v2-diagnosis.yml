@@ -33,27 +33,36 @@ jobs:
 
           api = os.environ['API_BASE'].rstrip('/')
           last_error = None
-          for attempt in range(1, 9):
+          candles = []
+          for attempt in range(1, 13):
               try:
                   with httpx.Client(timeout=420) as client:
-                      h = client.get(f'{api}/health', timeout=30); h.raise_for_status()
-                      q = client.get(f'{api}/v1/quote/CRUDEOILM'); q.raise_for_status()
-                      c = client.get(f'{api}/v1/candles/CRUDEOILM', params={'timeframe':'5m'}); c.raise_for_status()
-                      quote = q.json(); candles = c.json().get('candles') or []
+                      try:
+                          client.get(f'{api}/health', timeout=30)
+                      except Exception:
+                          pass
+                      c = client.get(f'{api}/v1/candles/CRUDEOILM', params={'timeframe':'5m'})
+                      c.raise_for_status()
+                      candles = c.json().get('candles') or []
                   if candles:
                       break
+                  raise RuntimeError('empty CRUDEOILM candle response')
               except Exception as exc:
                   last_error = exc
-                  if attempt == 8: raise
-                  time.sleep(15)
-          else:
+                  if attempt == 12:
+                      raise
+                  time.sleep(20)
+          if not candles:
               raise RuntimeError(f'No CRUDEOILM candles returned: {last_error}')
 
+          # The frozen August baseline already certified this exact current-expiry contract.
+          # Avoid making the diagnostic depend on the transient quote endpoint.
+          contract = {'trading_symbol': 'CRUDEOILM21SEP26FUT'}
           context = probe_crude_oil_pit_context_sync(
               '2026-06-01T00:00:00+05:30',
               '2026-09-01T00:00:00+05:30',
           )
-          result = diagnose_direction_v2_on_frozen_august(candles, quote.get('contract') or {}, context)
+          result = diagnose_direction_v2_on_frozen_august(candles, contract, context)
           Path('crude-oil-mini-august-direction-v2-diagnosis.json').write_text(
               json.dumps(result, indent=2, sort_keys=True) + '\n'
           )
