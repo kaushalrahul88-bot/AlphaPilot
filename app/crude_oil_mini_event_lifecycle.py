@@ -161,13 +161,19 @@ def classify_event_lifecycle(record: dict, visible_records: list[dict], click_ti
     elif periodic_successor:
         state = "SUPERSEDED_BY_NEW_RELEASE"
         reason = f"newer visible periodic release {periodic_successor} supersedes this release"
-    elif reaction_confirmed and directional_mechanism and reaction_direction in DIRECTIONAL:
+    elif (
+        reaction_confirmed
+        and directional_mechanism
+        and material
+        and novel
+        and reaction_direction in DIRECTIONAL
+    ):
         if reaction_direction == mechanism:
             state = "REACTION_CONFIRMED_ACTIVE"
-            reason = "explicit point-in-time reaction confirms the directional mechanism"
+            reason = "explicit point-in-time reaction confirms the material, novel directional mechanism"
         else:
             state = "REACTION_REJECTED"
-            reason = "explicit point-in-time reaction rejects the directional mechanism"
+            reason = "explicit point-in-time reaction rejects the material, novel directional mechanism"
     elif directional_mechanism and material and novel:
         state = "AWAITING_REACTION"
         reason = "directional material novel event is visible but reaction is not confirmed"
@@ -227,7 +233,7 @@ def event_lifecycle_view(records: list[dict], click_timestamp: str) -> dict:
             "Event age alone never causes expiry.",
             "Periodic releases may supersede an older release only when the newer release is itself visible by the click.",
             "Policy/geopolitical/news events require explicit resolution, supersession, or active-status metadata; no arbitrary universal hour window is imposed.",
-            "A directional event vote still requires explicit mechanism, materiality, novelty, and confirmed point-in-time reaction.",
+            "A directional event vote requires explicit mechanism, materiality, novelty, and confirmed point-in-time reaction.",
             "A rejected event thesis removes the event vote and does not create the opposite vote.",
             "Historical archive visibility is separate from active trading relevance.",
         ],
@@ -247,5 +253,6 @@ def architecture_contract() -> dict:
         "explicit_resolution_and_supersession_supported": True,
         "reaction_backfill_from_future_price_allowed": False,
         "headline_sentiment_inference_allowed": False,
+        "direction_requires_materiality_and_novelty": True,
         "promotion_allowed": False,
     }
