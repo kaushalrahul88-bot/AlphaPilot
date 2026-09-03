@@ -44,6 +44,7 @@ jobs:
           import json
           import os
           import sys
+          import time
           from datetime import datetime, timedelta
           from pathlib import Path
           from zoneinfo import ZoneInfo
@@ -61,76 +62,129 @@ jobs:
           output = Path("crude-mini-current-mind-live-shadow.json")
           session = mcx_session_status(click)
 
+          SAFE_EXECUTION = {
+              "paper_signal_only": True,
+              "live_execution_enabled": False,
+              "broker_order_placement_enabled": False,
+              "capital_committed": 0,
+          }
+
+          def write_and_exit(payload, code=0):
+              output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              print(json.dumps(payload, indent=2, sort_keys=True))
+              raise SystemExit(code)
+
           if not session.get("is_open"):
-              skipped = {
+              write_and_exit({
                   "mode": "CRUDE_OIL_MINI_CURRENT_MIND_LIVE_SHADOW_V1",
                   "generated_at": now.isoformat(),
                   "click_at": click.isoformat(),
+                  "scheduled_slot": click.isoformat(),
                   "point_in_time": True,
                   "status": "SKIPPED_MARKET_CLOSED",
                   "market_session": session,
-                  "execution": {
-                      "paper_signal_only": True,
-                      "live_execution_enabled": False,
-                      "broker_order_placement_enabled": False,
-                      "capital_committed": 0,
-                  },
+                  "execution": SAFE_EXECUTION,
+              })
+
+          def get_json(client, path, *, params=None, timeout=90, attempts=5):
+              errors = []
+              for attempt in range(1, attempts + 1):
+                  try:
+                      response = client.get(f"{api}{path}", params=params, timeout=timeout)
+                      response.raise_for_status()
+                      return response.json(), errors
+                  except Exception as exc:
+                      errors.append(f"attempt {attempt}: {exc.__class__.__name__}: {str(exc)[:220]}")
+                      if attempt < attempts:
+                          time.sleep(min(5 * attempt, 20))
+              raise RuntimeError(" | ".join(errors))
+
+          try:
+              with httpx.Client(timeout=120, follow_redirects=True) as client:
+                  _, health_errors = get_json(client, "/health", timeout=60, attempts=3)
+                  quote, quote_errors = get_json(client, "/v1/quote/CRUDEOILM", attempts=5)
+                  candle_body, candle_errors = get_json(
+                      client,
+                      "/v1/candles/CRUDEOILM",
+                      params={"timeframe": "5m"},
+                      attempts=5,
+                  )
+                  candles = candle_body.get("candles") or []
+              if not candles:
+                  raise RuntimeError("Live CRUDEOILM candle endpoint returned no candles")
+          except Exception as exc:
+              write_and_exit({
+                  "mode": "CRUDE_OIL_MINI_CURRENT_MIND_LIVE_SHADOW_V1",
+                  "generated_at": datetime.now(IST).isoformat(),
+                  "click_at": click.isoformat(),
+                  "scheduled_slot": click.isoformat(),
+                  "point_in_time": True,
+                  "status": "DATA_ERROR",
+                  "reason": f"{exc.__class__.__name__}: {str(exc)[:1200]}",
+                  "market_session": session,
+                  "execution": SAFE_EXECUTION,
+              })
+
+          try:
+              context = probe_crude_oil_pit_context_sync(
+                  start=(click - timedelta(days=7)).isoformat(),
+                  end=(click + timedelta(minutes=5)).isoformat(),
+              )
+              result = evaluate_live_current_mind(
+                  candles,
+                  contract=(quote.get("contract") or {}),
+                  global_context_probe=context,
+                  click_at=click,
+              )
+              result["market_session"] = session
+              result["scheduled_slot"] = click.isoformat()
+              result["transport_retries"] = {
+                  "health": health_errors,
+                  "quote": quote_errors,
+                  "candles": candle_errors,
               }
-              output.write_text(json.dumps(skipped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-              print(json.dumps(skipped, indent=2, sort_keys=True))
-              sys.exit(0)
-
-          with httpx.Client(timeout=420, follow_redirects=True) as client:
-              health = client.get(f"{api}/health", timeout=60)
-              health.raise_for_status()
-              q = client.get(f"{api}/v1/quote/CRUDEOILM")
-              q.raise_for_status()
-              quote = q.json()
-              c = client.get(f"{api}/v1/candles/CRUDEOILM", params={"timeframe": "5m"})
-              c.raise_for_status()
-              candles = c.json().get("candles") or []
-
-          context = probe_crude_oil_pit_context_sync(
-              start=(click - timedelta(days=7)).isoformat(),
-              end=(click + timedelta(minutes=5)).isoformat(),
-          )
-          result = evaluate_live_current_mind(
-              candles,
-              contract=(quote.get("contract") or {}),
-              global_context_probe=context,
-              click_at=click,
-          )
-          result["market_session"] = session
-          result["scheduled_slot"] = click.isoformat()
-          output.write_text(
-              json.dumps(result, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          compact = {
-              "click_at": result["click_at"],
-              "scheduled_slot": result["scheduled_slot"],
-              "reference_contract": result["reference_contract"],
-              "latest_completed_bar_available_at": result["latest_completed_bar_available_at"],
-              "current_mind": result["current_mind"],
-              "integrated_v2_shadow": {
-                  k: result["integrated_v2_shadow"][k]
-                  for k in ("direction", "confidence", "thesis_state", "supporting_families", "opposing_families", "decision_effect")
-              },
-              "data": result["data"],
-              "execution": result["execution"],
-          }
-          print(json.dumps(compact, indent=2, sort_keys=True))
-          assert result["point_in_time"] is True
-          assert result["click_at"] == click.isoformat()
-          assert result["execution"]["paper_signal_only"] is True
-          assert result["execution"]["live_execution_enabled"] is False
-          assert result["execution"]["broker_order_placement_enabled"] is False
-          assert result["execution"]["capital_committed"] == 0
+              output.write_text(
+                  json.dumps(result, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              compact = {
+                  "click_at": result["click_at"],
+                  "scheduled_slot": result["scheduled_slot"],
+                  "reference_contract": result["reference_contract"],
+                  "latest_completed_bar_available_at": result["latest_completed_bar_available_at"],
+                  "current_mind": result["current_mind"],
+                  "integrated_v2_shadow": {
+                      k: result["integrated_v2_shadow"][k]
+                      for k in ("direction", "confidence", "thesis_state", "supporting_families", "opposing_families", "decision_effect")
+                  },
+                  "data": result["data"],
+                  "transport_retries": result["transport_retries"],
+                  "execution": result["execution"],
+              }
+              print(json.dumps(compact, indent=2, sort_keys=True))
+              assert result["point_in_time"] is True
+              assert result["click_at"] == click.isoformat()
+              assert result["execution"]["paper_signal_only"] is True
+              assert result["execution"]["live_execution_enabled"] is False
+              assert result["execution"]["broker_order_placement_enabled"] is False
+              assert result["execution"]["capital_committed"] == 0
+          except Exception as exc:
+              write_and_exit({
+                  "mode": "CRUDE_OIL_MINI_CURRENT_MIND_LIVE_SHADOW_V1",
+                  "generated_at": datetime.now(IST).isoformat(),
+                  "click_at": click.isoformat(),
+                  "scheduled_slot": click.isoformat(),
+                  "point_in_time": True,
+                  "status": "EVALUATION_ERROR",
+                  "reason": f"{exc.__class__.__name__}: {str(exc)[:1200]}",
+                  "market_session": session,
+                  "execution": SAFE_EXECUTION,
+              })
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: crude-mini-current-mind-live-shadow-${{ github.run_id }}
           path: crude-mini-current-mind-live-shadow.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
