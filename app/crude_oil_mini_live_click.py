@@ -10,6 +10,7 @@ from .crude_oil_mini_data_probe import _complete_sessions
 from .crude_oil_mini_direction_brain_v2_integrated import evaluate_integrated_direction_v2_shadow
 from .crude_oil_mini_direction_memory import HORIZONS, make_direction_case
 from .crude_oil_mini_experience_memory import build_experiences, memory_evidence
+from .crude_oil_mini_live_inputs import option_context_record
 from .crude_oil_mini_market_perception import (
     bar_visible_at,
     causal_profiles,
@@ -22,7 +23,7 @@ from .crude_oil_mini_market_perception import (
 from .current_mind_crude_oil_mini_replay import _dominant_direction, _geometry
 
 IST = ZoneInfo("Asia/Kolkata")
-MODE = "CRUDE_OIL_MINI_CURRENT_MIND_LIVE_SHADOW_V1"
+MODE = "CRUDE_OIL_MINI_CURRENT_MIND_LIVE_SHADOW_V2_OPTION_OI_NEWS"
 
 
 def _build_direction_memory(rows: list[list], features: list[dict]) -> list[dict]:
@@ -106,9 +107,16 @@ def evaluate_live_current_mind(
     *,
     contract: dict,
     global_context_probe: dict,
+    live_inputs: dict | None = None,
     click_at: datetime | str | None = None,
+    scheduled_slot_at: datetime | str | None = None,
 ) -> dict:
     click = parse_ist_timestamp(click_at or datetime.now(IST)).astimezone(IST)
+    scheduled_slot = (
+        parse_ist_timestamp(scheduled_slot_at).astimezone(IST)
+        if scheduled_slot_at is not None
+        else click
+    )
     rows, features = precompute_perception(clean_ohlcv(candles))
     if not rows:
         raise RuntimeError("No CRUDEOILM candles available")
@@ -150,6 +158,22 @@ def evaluate_live_current_mind(
         "value": {"price": snapshot.get("price")},
         "quality": "OBSERVED",
     }]
+
+    cross_market_records = _context_records_from_probe(global_context_probe, click.isoformat())
+    current_context.extend(cross_market_records)
+
+    inputs = dict(live_inputs or {})
+    option_positioning = dict(inputs.get("option_positioning") or {})
+    option_record = option_context_record(option_positioning)
+    if option_record is not None:
+        current_context.append(option_record)
+
+    news = dict(inputs.get("news") or {})
+    news_context = news.get("context_record")
+    if isinstance(news_context, dict):
+        current_context.append(news_context)
+    event_records = [row for row in (news.get("event_records") or []) if isinstance(row, dict)]
+
     journal = crude_oil_mini_current_mind_click(
         click_timestamp=click.isoformat(),
         context_records=current_context,
@@ -159,7 +183,6 @@ def evaluate_live_current_mind(
     )
 
     direction_memory = _build_direction_memory(rows, features)
-    cross_market_records = _context_records_from_probe(global_context_probe, click.isoformat())
     integrated = evaluate_integrated_direction_v2_shadow(
         click_timestamp=click.isoformat(),
         snapshot=snapshot,
@@ -167,8 +190,9 @@ def evaluate_live_current_mind(
         mini_candles=rows,
         global_context_probe=global_context_probe,
         context_records=cross_market_records,
-        event_records=[],
+        event_records=event_records,
         direction_memory_cases=direction_memory,
+        option_positioning=option_positioning,
     )
 
     decision = journal.get("decision") or {}
@@ -176,9 +200,11 @@ def evaluate_live_current_mind(
     return {
         "mode": MODE,
         "generated_at": datetime.now(IST).isoformat(),
+        "scheduled_slot_at": scheduled_slot.isoformat(),
         "click_at": click.isoformat(),
         "point_in_time": True,
         "product": "CRUDE_OIL_MINI",
+        "trade_instrument": "OPTIONS_ONLY",
         "symbol": "CRUDEOILM",
         "reference_contract": reference_contract,
         "latest_completed_bar_available_at": latest_visible.isoformat(),
@@ -213,8 +239,23 @@ def evaluate_live_current_mind(
                 name: ((global_context_probe.get("feeds") or {}).get(name) or {}).get("status", "UNAVAILABLE")
                 for name in ("WTI_CRUDE", "BRENT_CRUDE", "USDINR", "DXY")
             },
-            "events": "NOT_WIRED_IN_LIVE_SHADOW_V1",
-            "futures_oi": "USE_IF_PRESENT_OTHERWISE_NOT_RECONSTRUCTED",
+            "option_positioning": option_positioning or {
+                "status": "UNAVAILABLE",
+                "reason": "NO_PIT_OPTION_INPUT_SUPPLIED",
+                "futures_oi_required": False,
+            },
+            "news": {
+                "status": news.get("status", "UNAVAILABLE"),
+                "visible_count": news.get("visible_count", 0),
+                "transmitted_count": news.get("transmitted_count", 0),
+                "counts": news.get("counts") or {},
+                "pit_basis": news.get("pit_basis", "FIRST_DETECTED_AT"),
+                "directional_vote_policy": news.get(
+                    "directional_vote_policy",
+                    "NO_HEADLINE_ONLY_VOTE; EVENT_REACTION_CONFIRMATION_REQUIRED",
+                ),
+            },
+            "futures_oi": "OPTIONAL_SUPPORTING_CONTEXT_NOT_REQUIRED_FOR_OPTIONS_ONLY_SYSTEM",
         },
         "execution": {
             "paper_signal_only": True,
