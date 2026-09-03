@@ -2,6 +2,11 @@ name: Crude Mini First Live Click PIT Input Audit
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/crude-mini-first-live-click-input-audit.yml"
 
 permissions:
   contents: read
