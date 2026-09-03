@@ -1,0 +1,76 @@
+{
+  "archive_id": "CRUDE_AUG_2026_PIT_EVENT_ARCHIVE_V2",
+  "records": [
+    {
+      "available_at_ist": "2026-08-10T07:22:00+05:30",
+      "event_id": "2026-08-10_reuters_hormuz_conditions",
+      "event_type": "HORMUZ_DIPLOMACY",
+      "facts": "Iran said a shipping-lane deal with Oman was nearing completion but U.S. conditions still had to be met before reopening.",
+      "headline": "Oil rises on uncertainty over reopening of Hormuz",
+      "mechanism_tags": ["HORMUZ", "GEOPOLITICS", "SHIPPING"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-10T01:52:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via Economic Times",
+      "source_url": "https://economictimes.indiatimes.com/markets/commodities/news/oil-rises-on-uncertainty-over-reopening-of-hormuz/articleshow/133077384.cms",
+      "timestamp_quality": "EXACT_REUTERS_REPUBLISHER_IST"
+    },
+    {
+      "available_at_ist": "2026-08-12T13:33:05+05:30",
+      "event_id": "2026-08-12_reuters_iea_supply_forecast",
+      "event_type": "IEA_SUPPLY_DEMAND",
+      "facts": "IEA cut its 2026 supply outlook, citing Hormuz shutdown and other disruptions, and projected a deeper third-quarter deficit.",
+      "headline": "Global 2026 oil supply shortfall to deepen as Hormuz reopening remains elusive, IEA says",
+      "mechanism_tags": ["SUPPLY", "DEMAND", "HORMUZ", "IEA"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-12T08:03:05Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/energy/iea-slashes-2026-supply-forecast-hormuz-reopening-remains-elusive-2026-08-12/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-12T20:00:00+05:30",
+      "event_id": "2026-08-12_eia_wpsr_crude",
+      "event_payload": {
+        "actual": {"commercial_crude_change_mmbbl": 17.423, "distillate_change_mmbbl": -0.01, "gasoline_change_mmbbl": -0.968, "refinery_utilization_pct": 96.2},
+        "composite_mechanism_stance": "UNKNOWN",
+        "composite_reason": "Large crude build and weaker-than-expected distillate draw were loosening, while gasoline draw was slightly tighter; no weighted composite is imposed.",
+        "consensus_disagreement": true,
+        "expectations": [
+          {"available_at_utc": "2026-08-12T12:00:00Z", "crude_change_mmbbl": -1.4, "distillate_change_mmbbl": -1.3, "gasoline_change_mmbbl": -1.2, "pre_release_usable": true, "quality": "PRE_RELEASE_REUTERS_POLL_DATE_VERIFIED_TIME_APPROX", "source": "Reuters poll via EnergyNow/BOE"},
+          {"available_at_utc": "2026-08-12T14:30:00Z", "crude_change_mmbbl": -1.13, "distillate_change_mmbbl": -1.8, "gasoline_change_mmbbl": -0.851, "pre_release_usable": false, "quality": "SECONDARY_AT_RELEASE", "source": "StreetInsider"}
+        ],
+        "pre_release_consensus_available": true,
+        "pre_release_expectation_count": 1,
+        "release_timestamp_source": "EIA scheduled WPSR release after 10:30 a.m. ET",
+        "week_ending": "2026-08-07"
+      },
+      "event_type": "EIA_WPSR",
+      "facts": "U.S. commercial crude stocks rose from 406.987 million to 424.410 million barrels, a +17.423 million barrel weekly change.",
+      "headline": "EIA Weekly Petroleum Status Report",
+      "mechanism_tags": ["INVENTORY", "US_SUPPLY"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-12T14:30:00Z",
+      "series": "EIA_CRUDE_INVENTORY",
+      "source": "U.S. EIA",
+      "source_url": "https://www.eia.gov/petroleum/supply/weekly/",
+      "timestamp_quality": "SCHEDULED_OFFICIAL"
+    },
+    {
+      "available_at_ist": "2026-08-14T08:42:00+05:30",
+      "event_id": "2026-08-14_reuters_indefinite_blockade",
+      "event_type": "GEOPOLITICAL_ESCALATION",
+      "facts": "The U.S. threat to maintain a naval blockade indefinitely revived concerns about prolonged Middle East crude supply disruption.",
+      "headline": "Oil rises after US threatens indefinite blockade of Iran",
+      "mechanism_tags": ["GEOPOLITICS", "HORMUZ", "SUPPLY_RISK"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-14T03:12:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via MarketScreener",
+      "source_url": "https://www.marketscreener.com/news/oil-rises-after-us-threatens-indefinite-blockade-of-iran-ce7859deda8ff124",
+      "timestamp_quality": "EXACT_REUTERS_REPUBLISHER"
+    }
+  ],
+  "window": ["2026-08-08", "2026-08-14"]
+}
