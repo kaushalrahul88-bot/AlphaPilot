@@ -69,7 +69,6 @@ def build_participation_observation(
 
     sample = visible[-lookback_bars:]
     last = sample[-1]
-    prior = sample[:-1]
     close = float(last[4])
     start_close = float(sample[0][4])
     move = close - start_close
@@ -88,12 +87,16 @@ def build_participation_observation(
     oi_delta = (latest_oi - start_oi) if latest_oi is not None and start_oi is not None else None
     oi_direction = _direction(oi_delta)
 
-    prior_high = max(float(row[2]) for row in prior)
-    prior_low = min(float(row[3]) for row in prior)
-    last_three = sample[-3:]
-    closes = [float(row[4]) for row in last_three]
-    accepted_above = close > prior_high and sum(value > prior_high for value in closes) >= 2
-    accepted_below = close < prior_low and sum(value < prior_low for value in closes) >= 2
+    # Acceptance is measured against a reference that predates the two confirming
+    # closes. Including those confirming bars in the reference range would make
+    # two-close acceptance mathematically impossible.
+    reference = sample[:-2]
+    confirming_bars = sample[-2:]
+    prior_high = max(float(row[2]) for row in reference)
+    prior_low = min(float(row[3]) for row in reference)
+    confirming_closes = [float(row[4]) for row in confirming_bars]
+    accepted_above = all(value > prior_high for value in confirming_closes)
+    accepted_below = all(value < prior_low for value in confirming_closes)
 
     vwap_gap = _f(snapshot.get("session_vwap_gap_pct"))
     value_agrees = (
@@ -121,6 +124,8 @@ def build_participation_observation(
         "start_oi": start_oi,
         "oi_delta": oi_delta,
         "oi_direction": oi_direction,
+        "acceptance_reference_high": prior_high,
+        "acceptance_reference_low": prior_low,
         "accepted_above_prior_range": accepted_above,
         "accepted_below_prior_range": accepted_below,
         "value_agrees": value_agrees,
