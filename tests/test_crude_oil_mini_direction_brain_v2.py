@@ -13,7 +13,7 @@ def _snapshot() -> dict:
         "structure": "UPTREND",
         "return_15m_pct": 0.20,
         "return_60m_pct": 0.35,
-        "time_adjusted_relative_volume": 0.8,
+        "time_adjusted_relative_volume": 1.6,
     }
 
 
@@ -21,14 +21,34 @@ def _profile() -> dict:
     return {"participation_confirming": 1.2}
 
 
-def _record(series: str, stance: str, *, confirmed: bool = False) -> dict:
+def _record(series: str, stance: str) -> dict:
     return {
         "series": series,
         "observed_at": "2026-09-03T13:00:00+05:30",
         "available_at": "2026-09-03T13:05:00+05:30",
         "stance": stance,
-        "reaction_confirmed": confirmed,
-        "value": {"stance": stance, "reaction_confirmed": confirmed},
+        "value": {"stance": stance},
+        "source": "synthetic_test",
+    }
+
+
+def _event_record(*, mechanism: str, reaction: str, confirmed: bool, materiality: str = "MATERIAL") -> dict:
+    return {
+        "series": "CRUDE_NEWS",
+        "event_id": "synthetic_event",
+        "event_type": "SUPPLY_DISRUPTION",
+        "observed_at": "2026-09-03T13:00:00+05:30",
+        "available_at": "2026-09-03T13:05:00+05:30",
+        "value": {
+            "mechanism_stance": mechanism,
+            "materiality_status": materiality,
+            "novelty_status": "NEW",
+            "reaction": {
+                "direction": reaction,
+                "confirmed": confirmed,
+                "confirmation_sources": ["WTI_CRUDE"],
+            },
+        },
         "source": "synthetic_test",
     }
 
@@ -45,10 +65,49 @@ class CrudeOilMiniDirectionBrainV2Tests(unittest.TestCase):
         self.assertEqual(result["direction"], "BULLISH")
         self.assertEqual(result["direction_confidence"], "MODERATE")
         self.assertEqual(result["supporting_families"], ["GLOBAL_CRUDE", "LOCAL_STRUCTURE"])
+        self.assertFalse(result["families"]["PARTICIPATION"]["counts_for_direction"])
+        self.assertEqual(result["families"]["PARTICIPATION"]["state"], "LEGACY_PRICE_VOLUME_PROXY_SUPPRESSED")
         self.assertFalse(result["decision_path_changed"])
         self.assertIsNone(result["current_mind_action"])
         self.assertFalse(result["geometry_generated"])
         self.assertFalse(result["promotion_allowed"])
+
+    def test_price_volume_proxy_cannot_double_count_local_momentum(self):
+        result = brain.evaluate_direction_brain_v2_shadow(
+            click_timestamp=CLICK,
+            snapshot=_snapshot(),
+            profile=_profile(),
+            context_records=[],
+            direction_memory_cases=[],
+        )
+        participation = result["families"]["PARTICIPATION"]
+        self.assertTrue(participation["detail"]["legacy_proxy_would_have_voted"])
+        self.assertEqual(participation["independence_status"], "DEPENDENT_ON_LOCAL_PRICE")
+        self.assertFalse(participation["counts_for_direction"])
+        self.assertEqual(result["direction"], "UNKNOWN")
+
+    def test_independent_commitment_participation_can_vote(self):
+        observation = {
+            "family": "PARTICIPATION",
+            "causal_origin": "POSITIONING_FLOW",
+            "independence_status": "INDEPENDENT",
+            "depends_on": [],
+            "counts_for_direction": True,
+            "stance": "BULLISH",
+            "state": "INITIATIVE_BUYING",
+            "detail": {"oi_delta": 100.0, "accepted_above_prior_range": True},
+        }
+        result = brain.evaluate_direction_brain_v2_shadow(
+            click_timestamp=CLICK,
+            snapshot=_snapshot(),
+            profile=_profile(),
+            context_records=[],
+            direction_memory_cases=[],
+            participation_observation=observation,
+        )
+        self.assertEqual(result["direction"], "BULLISH")
+        self.assertEqual(result["supporting_families"], ["LOCAL_STRUCTURE", "PARTICIPATION"])
+        self.assertEqual(result["dependency_audit"]["counted_origins"], ["LOCAL_PRICE_STRUCTURE", "POSITIONING_FLOW"])
 
     def test_wti_and_brent_are_one_family_not_two_votes(self):
         flat_snapshot = {"structure": "RANGE", "return_15m_pct": 0.0, "return_60m_pct": 0.0}
@@ -61,7 +120,7 @@ class CrudeOilMiniDirectionBrainV2Tests(unittest.TestCase):
         )
         self.assertEqual(result["families"]["GLOBAL_CRUDE"]["state"], "WTI_BRENT_CONFIRMED")
         self.assertEqual(result["direction"], "UNKNOWN")
-        self.assertEqual(result["thesis_state"], "INSUFFICIENT_INDEPENDENT_CONFIRMATION")
+        self.assertEqual(result["dependency_audit"]["counted_origins"], ["CROSS_MARKET_CRUDE"])
 
     def test_independent_contradiction_forces_abstention(self):
         result = brain.evaluate_direction_brain_v2_shadow(
@@ -73,7 +132,7 @@ class CrudeOilMiniDirectionBrainV2Tests(unittest.TestCase):
         )
         self.assertEqual(result["direction"], "UNKNOWN")
         self.assertEqual(result["direction_confidence"], "CONFLICTED")
-        self.assertEqual(result["thesis_state"], "INDEPENDENT_FAMILY_CONTRADICTION")
+        self.assertEqual(result["thesis_state"], "INDEPENDENT_CAUSAL_ORIGIN_CONTRADICTION")
 
     def test_usdinr_is_modifier_only_and_cannot_reverse_direction(self):
         result = brain.evaluate_direction_brain_v2_shadow(
@@ -92,24 +151,40 @@ class CrudeOilMiniDirectionBrainV2Tests(unittest.TestCase):
         self.assertEqual(fx["state"], "OPPOSES_GLOBAL_CRUDE")
         self.assertFalse(fx["counts_for_direction"])
 
-    def test_event_needs_explicit_price_reaction_confirmation(self):
+    def test_event_requires_mechanism_materiality_and_confirmed_reaction(self):
+        flat = {"structure": "RANGE", "return_15m_pct": 0.0, "return_60m_pct": 0.0}
         unconfirmed = brain.evaluate_direction_brain_v2_shadow(
             click_timestamp=CLICK,
-            snapshot={"structure": "RANGE", "return_15m_pct": 0.0, "return_60m_pct": 0.0},
+            snapshot=flat,
             profile=_profile(),
-            context_records=[_record("CRUDE_NEWS", "BULLISH", confirmed=False)],
+            context_records=[_event_record(mechanism="BULLISH", reaction="BULLISH", confirmed=False)],
             direction_memory_cases=[],
         )
         confirmed = brain.evaluate_direction_brain_v2_shadow(
             click_timestamp=CLICK,
-            snapshot={"structure": "RANGE", "return_15m_pct": 0.0, "return_60m_pct": 0.0},
+            snapshot=flat,
             profile=_profile(),
-            context_records=[_record("CRUDE_NEWS", "BULLISH", confirmed=True)],
+            context_records=[_event_record(mechanism="BULLISH", reaction="BULLISH", confirmed=True)],
             direction_memory_cases=[],
         )
         self.assertFalse(unconfirmed["families"]["EVENT_REACTION"]["counts_for_direction"])
         self.assertTrue(confirmed["families"]["EVENT_REACTION"]["counts_for_direction"])
+        self.assertEqual(confirmed["families"]["EVENT_REACTION"]["state"], "CONFIRMED_BULLISH")
         self.assertEqual(confirmed["direction"], "UNKNOWN")
+
+    def test_event_rejection_does_not_create_reverse_vote(self):
+        flat = {"structure": "RANGE", "return_15m_pct": 0.0, "return_60m_pct": 0.0}
+        result = brain.evaluate_direction_brain_v2_shadow(
+            click_timestamp=CLICK,
+            snapshot=flat,
+            profile=_profile(),
+            context_records=[_event_record(mechanism="BULLISH", reaction="BEARISH", confirmed=True)],
+            direction_memory_cases=[],
+        )
+        event = result["families"]["EVENT_REACTION"]
+        self.assertEqual(event["state"], "BULLISH_EVENT_REJECTED")
+        self.assertEqual(event["stance"], "UNKNOWN")
+        self.assertFalse(event["counts_for_direction"])
 
     def test_preregistration_blocks_in_sample_promotion_and_geometry_tuning(self):
         contract = brain.preregistration_contract()
@@ -128,6 +203,8 @@ class CrudeOilMiniDirectionBrainV2Tests(unittest.TestCase):
         self.assertEqual(contract["decision_effect"], "NONE")
         self.assertEqual(contract["geometry_effect"], "NONE")
         self.assertEqual(contract["option_effect"], "NONE")
+        self.assertTrue(contract["causal_origin_deduplication"])
+        self.assertTrue(contract["legacy_participation_price_vote_suppressed"])
 
 
 if __name__ == "__main__":
