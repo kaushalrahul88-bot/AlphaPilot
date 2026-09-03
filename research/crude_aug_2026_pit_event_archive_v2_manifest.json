@@ -1,0 +1,38 @@
+{
+  "archive_id": "CRUDE_AUG_2026_PIT_EVENT_ARCHIVE_V2",
+  "window_requested": ["2026-08-01", "2026-08-30"],
+  "record_count": 26,
+  "research_only": true,
+  "development_diagnostic_only": true,
+  "direction_labels_added": false,
+  "headline_direction_inferred": false,
+  "reaction_labels_backfilled": false,
+  "market_outcomes_used_to_label_news": false,
+  "eia_product_data_added": true,
+  "eia_refinery_utilization_added": true,
+  "multiple_consensus_sources_preserved": true,
+  "parts": [
+    "research/crude_aug_2026_pit_events_01_07.json",
+    "research/crude_aug_2026_pit_events_08_14.json",
+    "research/crude_aug_2026_pit_events_15_21.json",
+    "research/crude_aug_2026_pit_events_22_30.json"
+  ],
+  "policies": [
+    "A record is visible only when its available_at_ist is not later than the simulated click.",
+    "Do not infer an earlier event timestamp from later reporting.",
+    "Date-only or timezone-ambiguous items remain excluded or deferred.",
+    "Reuters market-reaction stories are stored at publication time and are not backdated to the underlying event.",
+    "EIA WPSR is represented at its official scheduled release time; August 2026 10:30 a.m. ET corresponds to 20:00 IST.",
+    "No headline is assigned a retrospective bullish or bearish label.",
+    "An expectation is pre-release usable only when its timestamp is strictly earlier than the official release; at-release estimates are audit-only.",
+    "Multiple expectation sources are retained instead of cherry-picking a consensus after seeing the outcome."
+  ],
+  "deferred_or_excluded": [
+    {
+      "source_date": "2026-08-24",
+      "item": "U.S. Treasury Operation Economic Outcast release",
+      "reason": "Official release date was verified but an exact intraday publication time was not exposed by the retrieved official page; it must not be backdated into click-time replay."
+    }
+  ],
+  "note": "August has already been inspected. This archive can support diagnosis and input-development but cannot establish untouched out-of-sample validation."
+}
