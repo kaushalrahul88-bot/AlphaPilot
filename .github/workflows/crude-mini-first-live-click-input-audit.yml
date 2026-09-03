@@ -1,0 +1,53 @@
+name: Crude Mini First Live Click PIT Input Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Read PIT inputs as of first live click
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 60 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            --get \
+            --data-urlencode "as_of=2026-09-03T23:02:01.916091+05:30" \
+            "$API_BASE/v1/internal/crude-oil-mini/live-inputs" \
+            -o crude-mini-first-live-click-pit-inputs.json
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          d=json.load(open('crude-mini-first-live-click-pit-inputs.json'))
+          assert d.get('point_in_time') is True,d
+          click=datetime.fromisoformat(d['as_of'])
+          option=d.get('option_positioning') or {}
+          if option.get('status')=='AVAILABLE':
+              for row in option.get('contracts') or []:
+                  for k in ('sample_bucket_at','observed_at','collected_at'):
+                      assert datetime.fromisoformat(row[k]) <= click,(k,row[k],d['as_of'])
+          news=d.get('news') or {}
+          for row in news.get('records') or []:
+              assert datetime.fromisoformat(row['first_detected_at']) <= click,row
+          print(json.dumps({
+              'as_of':d.get('as_of'),
+              'option_positioning':option,
+              'news':news,
+              'futures_oi_required':d.get('futures_oi_required'),
+          },indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crude-mini-first-live-click-pit-inputs
+          path: crude-mini-first-live-click-pit-inputs.json
+          retention-days: 30
