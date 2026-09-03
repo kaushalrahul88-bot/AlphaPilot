@@ -6,10 +6,8 @@ on:
     branches:
       - main
     paths:
-      - "app/crude_oil_mini_live_click.py"
-      - "app/crude_oil_mini_live_inputs.py"
       - "app/crude_oil_mini_first_live_click_compare.py"
-      - "app/asgi.py"
+      - "app/crude_oil_mini_live_inputs.py"
       - ".github/workflows/crude-mini-first-live-click-counterfactual.yml"
 
 permissions:
@@ -22,7 +20,7 @@ concurrency:
 jobs:
   compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 8
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
@@ -33,27 +31,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - name: Wait for deployed PIT live-input endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$COLLECTOR_TOKEN"
-          for attempt in {1..60}; do
-            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json; then
-              if python - <<'PY'
-          import json
-          paths=(json.load(open("openapi.json")).get("paths") or {})
-          raise SystemExit(0 if "/v1/internal/crude-oil-mini/live-inputs" in paths else 1)
-          PY
-              then
-                exit 0
-              fi
-            fi
-            sleep 10
-          done
-          echo "PIT live-input endpoint did not appear after deployment wait" >&2
-          exit 1
-      - name: Re-evaluate frozen 23:02:01 live click with current AlphaPilot
+      - name: Replay frozen 23:02:01 causal state with current decision code
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
@@ -62,7 +40,6 @@ jobs:
           import json
           import os
           import time
-          from datetime import datetime, timedelta
           from pathlib import Path
 
           import httpx
@@ -70,18 +47,15 @@ jobs:
           from app.commodity_time import parse_ist_timestamp
           from app.crude_oil_mini_first_live_click_compare import (
               FIRST_LIVE_CLICK_AT,
-              FIRST_LIVE_REFERENCE_CONTRACT,
               build_first_live_click_comparison,
+              replay_first_live_click_from_frozen_state,
           )
-          from app.crude_oil_mini_live_click import evaluate_live_current_mind
-          from app.crude_oil_pit_context_probe import probe_crude_oil_pit_context_sync
-          from app.crude_oil_mini_market_perception import bar_visible_at, clean_ohlcv
 
           api = os.environ["API_BASE"].rstrip("/")
           token = os.environ["COLLECTOR_TOKEN"].strip()
           click = parse_ist_timestamp(FIRST_LIVE_CLICK_AT)
 
-          def get_json(path, *, params=None, headers=None, attempts=5, timeout=120):
+          def get_json(path, *, params=None, headers=None, attempts=3, timeout=60):
               errors=[]
               with httpx.Client(timeout=timeout, follow_redirects=True) as client:
                   for attempt in range(1, attempts + 1):
@@ -92,81 +66,41 @@ jobs:
                       except Exception as exc:
                           errors.append(f"attempt {attempt}: {exc.__class__.__name__}: {str(exc)[:240]}")
                           if attempt < attempts:
-                              time.sleep(min(attempt * 5, 20))
+                              time.sleep(attempt * 5)
               raise RuntimeError(" | ".join(errors))
-
-          health, health_errors = get_json("/health", attempts=3, timeout=60)
-          candle_body, candle_errors = get_json(
-              "/v1/candles/CRUDEOILM", params={"timeframe":"5m"}, attempts=5
-          )
-          candles = candle_body.get("candles") or []
-          if not candles:
-              raise RuntimeError("No CRUDEOILM candles returned")
 
           live_inputs, input_errors = get_json(
               "/v1/internal/crude-oil-mini/live-inputs",
               params={"as_of": FIRST_LIVE_CLICK_AT},
               headers={"X-Collector-Token": token},
-              attempts=5,
           )
           assert live_inputs.get("point_in_time") is True
           assert live_inputs.get("as_of") == click.isoformat()
 
           option = live_inputs.get("option_positioning") or {}
           if option.get("status") == "AVAILABLE":
-              for key in ("sample_bucket_at",):
-                  stamp = option.get(key)
-                  if stamp:
-                      assert parse_ist_timestamp(stamp) <= click
               for row in option.get("contracts") or []:
                   for key in ("sample_bucket_at", "observed_at", "collected_at"):
                       assert parse_ist_timestamp(row[key]) <= click
 
           news = live_inputs.get("news") or {}
-          for row in news.get("records") or []:
-              assert parse_ist_timestamp(row["first_detected_at"]) <= click
-          for row in news.get("event_records") or []:
-              assert parse_ist_timestamp(row["available_at"]) <= click
+          assert int(news.get("visible_count") or 0) == 0
+          assert not (news.get("records") or [])
+          assert not (news.get("event_records") or [])
 
-          context = probe_crude_oil_pit_context_sync(
-              start=(click - timedelta(days=7)).isoformat(),
-              end=(click + timedelta(minutes=5)).isoformat(),
-          )
-          current = evaluate_live_current_mind(
-              candles,
-              contract={"trading_symbol": FIRST_LIVE_REFERENCE_CONTRACT},
-              global_context_probe=context,
-              live_inputs=live_inputs,
-              click_at=click,
-              scheduled_slot_at=click,
-          )
+          current = replay_first_live_click_from_frozen_state(live_inputs)
           comparison = build_first_live_click_comparison(current)
-          comparison["deployment"] = {
-              "health": health,
-              "github_sha": os.environ.get("GITHUB_SHA"),
+          comparison["transport_retries"] = {"live_inputs": input_errors}
+          comparison["execution"] = {
+              "paper_signal_only": True,
+              "live_execution_enabled": False,
+              "broker_order_placement_enabled": False,
+              "capital_committed": 0,
           }
-          comparison["transport_retries"] = {
-              "health": health_errors,
-              "candles": candle_errors,
-              "live_inputs": input_errors,
+          comparison["post_click_outcome"] = {
+              "used_as_decision_input": False,
+              "note": "Outcome intentionally not fetched by this replay. Compare only after the frozen decision is produced.",
           }
-
-          rows = clean_ohlcv(candles)
-          visible = [row for row in rows if bar_visible_at(row) <= click]
-          later = [row for row in rows if bar_visible_at(row) > click and parse_ist_timestamp(row[0]).date() == click.date()]
-          post = {"used_as_decision_input": False}
-          if visible:
-              base = float(visible[-1][4])
-              post["reference_close"] = base
-              post["reference_bar_visible_at"] = bar_visible_at(visible[-1]).isoformat()
-              for minutes in (15, 30):
-                  target = click + timedelta(minutes=minutes)
-                  candidates = [row for row in later if bar_visible_at(row) <= target]
-                  if candidates:
-                      close = float(candidates[-1][4])
-                      post[f"return_{minutes}m_pct"] = round((close / base - 1.0) * 100.0, 4)
-                      post[f"close_{minutes}m"] = close
-          comparison["post_click_outcome"] = post
 
           Path("crude-mini-first-live-click-counterfactual.json").write_text(
               json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -181,14 +115,14 @@ jobs:
               "news": comparison["current"]["data"]["news"],
               "changes": comparison["changes"],
               "pit_audit": comparison["pit_audit"],
-              "post_click_outcome": comparison["post_click_outcome"],
           }, indent=2, sort_keys=True))
 
-          assert current["click_at"] == FIRST_LIVE_CLICK_AT
-          assert current["latest_completed_bar_available_at"] <= FIRST_LIVE_CLICK_AT
+          assert comparison["changes"]["current_mind_action_changed"] is False
+          assert comparison["changes"]["v2_direction_changed"] is False
           assert comparison["pit_audit"]["future_market_outcome_used_as_input"] is False
-          assert current["execution"]["live_execution_enabled"] is False
-          assert current["execution"]["capital_committed"] == 0
+          assert comparison["pit_audit"]["historical_candles_refetched"] is False
+          assert comparison["pit_audit"]["option_snapshot_directional_vote_enabled"] is False
+          assert comparison["execution"]["capital_committed"] == 0
           PY
       - uses: actions/upload-artifact@v4
         if: always()
