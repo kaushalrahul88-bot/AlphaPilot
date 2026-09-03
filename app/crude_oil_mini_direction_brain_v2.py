@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .crude_oil_mini_direction_memory import query_direction_memory
+from .crude_oil_mini_evidence_dependency import audit_directional_independence
+from .crude_oil_mini_event_reaction_v2 import build_event_reaction_family
 from .crude_oil_mini_point_in_time_context import latest_known_as_of
 
 MODE = "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_SHADOW"
@@ -42,18 +44,6 @@ def _record_stance(record: dict | None) -> str:
     return "UNKNOWN"
 
 
-def _record_flag(record: dict | None, *keys: str) -> bool:
-    if not isinstance(record, dict):
-        return False
-    value = record.get("value")
-    for key in keys:
-        if bool(record.get(key)):
-            return True
-        if isinstance(value, dict) and bool(value.get(key)):
-            return True
-    return False
-
-
 def _local_structure(snapshot: dict) -> dict:
     structure = str(snapshot.get("structure") or "UNKNOWN").upper()
     structure_stance = (
@@ -87,6 +77,9 @@ def _local_structure(snapshot: dict) -> dict:
     return {
         "family": "LOCAL_STRUCTURE",
         "independent": True,
+        "causal_origin": "LOCAL_PRICE_STRUCTURE",
+        "independence_status": "INDEPENDENT" if stance in DIRECTIONAL else "INDEPENDENT_CONTEXT_ONLY",
+        "depends_on": [],
         "counts_for_direction": stance in DIRECTIONAL,
         "stance": stance,
         "state": state,
@@ -100,11 +93,28 @@ def _local_structure(snapshot: dict) -> dict:
     }
 
 
-def _participation(snapshot: dict, profile: dict) -> dict:
+def _participation(participation_observation: dict | None, snapshot: dict, profile: dict) -> dict:
+    """Accept only the new commitment/acceptance observation as an independent vote.
+
+    The legacy price+relative-volume proxy is retained as visible diagnostic detail but
+    is deliberately suppressed because its direction came from the same 15-minute price
+    move already used by LOCAL_STRUCTURE.
+    """
+    if isinstance(participation_observation, dict):
+        row = dict(participation_observation)
+        row.setdefault("family", "PARTICIPATION")
+        row.setdefault("independent", row.get("independence_status") == "INDEPENDENT")
+        row.setdefault("causal_origin", "POSITIONING_FLOW")
+        row.setdefault("depends_on", [])
+        row.setdefault("counts_for_direction", False)
+        row.setdefault("stance", "UNKNOWN")
+        row.setdefault("state", "UNKNOWN")
+        return row
+
     relative = _f(snapshot.get("time_adjusted_relative_volume"))
-    confirming = _f(profile.get("participation_confirming"))
+    confirming = _f((profile or {}).get("participation_confirming"))
     momentum = _direction_from_number(snapshot.get("return_15m_pct"))
-    active = (
+    legacy_active = (
         relative is not None
         and confirming is not None
         and relative >= confirming
@@ -112,14 +122,19 @@ def _participation(snapshot: dict, profile: dict) -> dict:
     )
     return {
         "family": "PARTICIPATION",
-        "independent": True,
-        "counts_for_direction": active,
-        "stance": momentum if active else "UNKNOWN",
-        "state": "DIRECTIONALLY_CONFIRMING" if active else "NOT_DIRECTIONALLY_CONFIRMING",
+        "independent": False,
+        "causal_origin": "LOCAL_PRICE_VOLUME",
+        "independence_status": "DEPENDENT_ON_LOCAL_PRICE",
+        "depends_on": ["LOCAL_PRICE_STRUCTURE"],
+        "counts_for_direction": False,
+        "stance": "UNKNOWN",
+        "state": "LEGACY_PRICE_VOLUME_PROXY_SUPPRESSED",
         "detail": {
             "time_adjusted_relative_volume": relative,
             "prior_confirming_level": confirming,
-            "momentum_15m": momentum,
+            "legacy_momentum_15m": momentum,
+            "legacy_proxy_would_have_voted": legacy_active,
+            "reason": "15-minute price direction already belongs to LOCAL_STRUCTURE; price+volume alone is not an independent second vote.",
         },
     }
 
@@ -146,6 +161,9 @@ def _global_crude(latest: dict[str, dict]) -> dict:
     return {
         "family": "GLOBAL_CRUDE",
         "independent": True,
+        "causal_origin": "CROSS_MARKET_CRUDE",
+        "independence_status": "INDEPENDENT" if stance in DIRECTIONAL else "INDEPENDENT_CONTEXT_ONLY",
+        "depends_on": [],
         "counts_for_direction": stance in DIRECTIONAL,
         "stance": stance,
         "state": state,
@@ -155,6 +173,7 @@ def _global_crude(latest: dict[str, dict]) -> dict:
                 for series, item_stance in observations
             ],
             "breadth": len(observations),
+            "wti_brent_collapsed_into_one_vote": True,
         },
     }
 
@@ -171,6 +190,9 @@ def _fx_translation(latest: dict[str, dict], global_crude: dict) -> dict:
     return {
         "family": "FX_TRANSLATION",
         "independent": False,
+        "causal_origin": "CURRENCY_TRANSLATION",
+        "independence_status": "MODIFIER_ONLY",
+        "depends_on": ["CROSS_MARKET_CRUDE"],
         "counts_for_direction": False,
         "stance": "UNKNOWN",
         "state": state,
@@ -182,59 +204,26 @@ def _fx_translation(latest: dict[str, dict], global_crude: dict) -> dict:
     }
 
 
-def _event_reaction(latest: dict[str, dict]) -> dict:
-    directional = []
-    contextual = []
-    for series in ("EIA_CRUDE_INVENTORY", "OPEC_SUPPLY", "CRUDE_MACRO_RELEASE", "CRUDE_NEWS"):
-        record = latest.get(series)
-        if not record:
-            continue
-        stance = _record_stance(record)
-        confirmed = _record_flag(record, "price_confirmed", "reaction_confirmed")
-        row = {"series": series, "stance": stance, "price_reaction_confirmed": confirmed}
-        if stance in DIRECTIONAL and confirmed:
-            directional.append(row)
-        else:
-            contextual.append(row)
-
-    stances = {row["stance"] for row in directional}
-    if len(stances) > 1:
-        stance = "UNKNOWN"
-        state = "EVENT_REACTION_CONTRADICTED"
-    elif len(stances) == 1:
-        stance = next(iter(stances))
-        state = "PRICE_CONFIRMED_EVENT_REACTION"
-    else:
-        stance = "UNKNOWN"
-        state = "CONTEXT_ONLY_OR_UNAVAILABLE"
-    return {
-        "family": "EVENT_REACTION",
-        "independent": True,
-        "counts_for_direction": stance in DIRECTIONAL,
-        "stance": stance,
-        "state": state,
-        "detail": {"directional": directional, "context_only": contextual},
-    }
-
-
 def _memory_family(memory_cases: list[dict], snapshot: dict, click_timestamp: str) -> dict:
     result = query_direction_memory(memory_cases, snapshot, click_timestamp)
     stance = str(result.get("stance") or "UNKNOWN").upper()
+    directional = stance in DIRECTIONAL
     return {
         "family": "DIRECTION_MEMORY",
         "independent": True,
-        "counts_for_direction": stance in DIRECTIONAL,
-        "stance": stance if stance in DIRECTIONAL else "UNKNOWN",
+        "causal_origin": "HISTORICAL_ANALOGUE",
+        "independence_status": "INDEPENDENT" if directional else "INDEPENDENT_CONTEXT_ONLY",
+        "depends_on": [],
+        "counts_for_direction": directional,
+        "stance": stance if directional else "UNKNOWN",
         "state": result.get("status"),
         "detail": result,
     }
 
 
 def _thesis_from_families(families: list[dict]) -> dict:
-    counted = [
-        row for row in families
-        if row.get("independent") and row.get("counts_for_direction") and row.get("stance") in DIRECTIONAL
-    ]
+    dependency_audit = audit_directional_independence(families)
+    counted = dependency_audit["counted"]
     bullish = [row["family"] for row in counted if row["stance"] == "BULLISH"]
     bearish = [row["family"] for row in counted if row["stance"] == "BEARISH"]
 
@@ -242,9 +231,10 @@ def _thesis_from_families(families: list[dict]) -> dict:
         return {
             "direction": "UNKNOWN",
             "confidence": "CONFLICTED",
-            "state": "INDEPENDENT_FAMILY_CONTRADICTION",
+            "state": "INDEPENDENT_CAUSAL_ORIGIN_CONTRADICTION",
             "supporting_families": [],
             "opposing_families": sorted(bullish + bearish),
+            "dependency_audit": dependency_audit,
         }
 
     supporting = bullish or bearish
@@ -255,6 +245,7 @@ def _thesis_from_families(families: list[dict]) -> dict:
             "state": "INSUFFICIENT_INDEPENDENT_CONFIRMATION",
             "supporting_families": sorted(supporting),
             "opposing_families": [],
+            "dependency_audit": dependency_audit,
         }
 
     return {
@@ -263,6 +254,7 @@ def _thesis_from_families(families: list[dict]) -> dict:
         "state": "COHERENT_DIRECTION_THESIS",
         "supporting_families": sorted(supporting),
         "opposing_families": [],
+        "dependency_audit": dependency_audit,
     }
 
 
@@ -273,18 +265,15 @@ def evaluate_direction_brain_v2_shadow(
     profile: dict,
     context_records: list[dict],
     direction_memory_cases: list[dict] | None = None,
+    participation_observation: dict | None = None,
 ) -> dict:
-    """Build a non-voting Crude direction thesis without touching Current Mind.
-
-    V2 deliberately separates direction from setup geometry. It can describe direction,
-    persistence and contradictions, but it cannot produce BUY_CE/BUY_PE, entry readiness,
-    stop/target levels, option selection or position size.
-    """
+    """Build a non-voting Crude direction thesis without touching Current Mind."""
     latest = latest_known_as_of(context_records or [], click_timestamp)
     local = _local_structure(snapshot)
-    participation = _participation(snapshot, profile or {})
+    participation = _participation(participation_observation, snapshot, profile or {})
     global_crude = _global_crude(latest)
-    event = _event_reaction(latest)
+    event = build_event_reaction_family(latest)
+    event.setdefault("independent", event.get("independence_status") == "INDEPENDENT")
     memory = _memory_family(direction_memory_cases or [], snapshot, click_timestamp)
     families = [local, participation, global_crude, event, memory]
     fx = _fx_translation(latest, global_crude)
@@ -305,6 +294,7 @@ def evaluate_direction_brain_v2_shadow(
         "thesis_state": thesis["state"],
         "supporting_families": thesis["supporting_families"],
         "opposing_families": thesis["opposing_families"],
+        "dependency_audit": thesis["dependency_audit"],
         "families": {row["family"]: row for row in families},
         "modifiers": {"FX_TRANSLATION": fx},
         "persistence": (memory.get("detail") or {}).get("persistence", "UNRESOLVED"),
@@ -312,10 +302,13 @@ def evaluate_direction_brain_v2_shadow(
         "available_context_series": sorted(latest),
         "rules": [
             "No weighted indicator score is used.",
-            "At least two independent directional families must align and no independent family may oppose them.",
+            "Directional confidence counts independent causal origins, not merely family names.",
+            "The legacy price-plus-volume participation proxy cannot vote because its direction duplicates LOCAL_STRUCTURE price momentum.",
+            "Participation can vote only from a separately constructed commitment/acceptance observation with independent positioning evidence.",
             "WTI and Brent are one correlated GLOBAL_CRUDE family, never two votes.",
             "USDINR is a translation modifier and cannot independently create or reverse direction.",
-            "Event/news direction counts only when an explicit point-in-time stance has price/reaction confirmation.",
+            "Event/news cannot infer direction from headline keywords; material mechanism plus confirmed reaction is required.",
+            "A rejected event thesis removes that event vote; rejection does not automatically create the opposite vote.",
             "Direction memory uses future underlying returns only after those horizons became historically available; it never uses trade geometry.",
             "Direction does not imply entry readiness or an option trade.",
         ],
@@ -349,8 +342,12 @@ def architecture_contract() -> dict:
         "geometry_effect": "NONE",
         "option_effect": "NONE",
         "independent_direction_families": list(INDEPENDENT_FAMILIES),
+        "causal_origin_deduplication": True,
+        "legacy_participation_price_vote_suppressed": True,
+        "participation_requires_positioning_and_acceptance": True,
         "correlated_global_crude_collapsed": True,
         "fx_is_modifier_only": True,
-        "event_requires_price_reaction_confirmation": True,
+        "event_requires_explicit_mechanism_materiality_and_reaction": True,
+        "event_headline_sentiment_allowed": False,
         "direction_memory_geometry_independent": True,
     }
