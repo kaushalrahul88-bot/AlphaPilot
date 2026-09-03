@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from .crude_oil_mini_point_in_time_context import visible_at
+
 DIRECTIONAL = {"BULLISH", "BEARISH"}
 EVENT_SERIES = {"EIA_CRUDE_INVENTORY", "OPEC_SUPPLY", "CRUDE_MACRO_RELEASE", "CRUDE_NEWS"}
 
@@ -68,20 +70,7 @@ def normalize_event_record(record: dict | None) -> dict | None:
     }
 
 
-def build_event_reaction_family(latest: dict[str, dict]) -> dict:
-    """Create an event-family vote only from explicit PIT mechanism + confirmed reaction.
-
-    Headline keywords never create direction. A mechanism may be context-only until
-    materiality/novelty are known and the market reaction is explicitly confirmed.
-    Rejection of a theoretical event direction removes its vote; it does not
-    automatically create the opposite direction.
-    """
-    events = []
-    for series in EVENT_SERIES:
-        normalized = normalize_event_record((latest or {}).get(series))
-        if normalized:
-            events.append(normalized)
-
+def _family_from_events(events: list[dict]) -> dict:
     directional = []
     contextual = []
     rejected = []
@@ -89,7 +78,7 @@ def build_event_reaction_family(latest: dict[str, dict]) -> dict:
         mechanism = event["mechanism_stance"]
         reaction_direction = event["reaction_direction"]
         material = event["materiality_status"] in {"MATERIAL", "HIGH", "CONFIRMED_MATERIAL"}
-        novel = event["novelty_status"] not in {"REPEATED", "STALE", "ALREADY_KNOWN"}
+        novel = event["novelty_status"] not in {"REPEATED", "STALE", "ALREADY_KNOWN", "UNASSESSED", "UNKNOWN"}
         confirmed = event["reaction_confirmed"] and reaction_direction in DIRECTIONAL
 
         if mechanism in DIRECTIONAL and material and novel and confirmed:
@@ -142,6 +131,7 @@ def build_event_reaction_family(latest: dict[str, dict]) -> dict:
         "stance": stance,
         "state": state,
         "detail": {
+            "visible_event_count": len(events),
             "directional_events": directional,
             "rejected_events": rejected,
             "context_only_events": contextual,
@@ -150,6 +140,30 @@ def build_event_reaction_family(latest: dict[str, dict]) -> dict:
             "rejection_creates_reverse_vote": False,
         },
     }
+
+
+def build_event_reaction_family(latest: dict[str, dict]) -> dict:
+    """Compatibility path for callers that only provide one latest record per series."""
+    events = []
+    for series in EVENT_SERIES:
+        normalized = normalize_event_record((latest or {}).get(series))
+        if normalized:
+            events.append(normalized)
+    return _family_from_events(events)
+
+
+def build_event_reaction_family_from_records(records: list[dict], click_timestamp: str) -> dict:
+    """Evaluate every event genuinely visible at a click without latest-per-series loss.
+
+    This is the preferred archive path. Multiple same-series events are preserved, so
+    a new headline cannot silently erase another still-visible event from the audit.
+    """
+    events = []
+    for record in visible_at(records or [], click_timestamp):
+        normalized = normalize_event_record(record)
+        if normalized:
+            events.append(normalized)
+    return _family_from_events(events)
 
 
 def event_input_contract() -> dict:
@@ -166,6 +180,8 @@ def event_input_contract() -> dict:
         "headline_keyword_direction_allowed": False,
         "event_rejection_reverse_vote_allowed": False,
         "reaction_dependency_declared": True,
+        "multiple_visible_events_preserved": True,
+        "latest_per_series_required": False,
         "current_mind_effect": "NONE",
         "promotion_allowed": False,
     }
