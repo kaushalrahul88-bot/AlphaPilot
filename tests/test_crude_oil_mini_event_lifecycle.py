@@ -92,6 +92,22 @@ def test_direction_requires_explicit_confirmed_reaction():
     assert row["eligible_for_direction"] is True
 
 
+def test_confirmed_reaction_without_materiality_or_novelty_cannot_vote():
+    incomplete = _event(
+        "NEWS-INCOMPLETE",
+        "2026-08-15T12:00:00+05:30",
+        value={
+            "mechanism_stance": "BULLISH",
+            "reaction": {"direction": "BULLISH", "confirmed": True},
+        },
+    )
+    view = event_lifecycle_view([incomplete], "2026-08-15T14:00:00+05:30")
+    row = view["events"][0]
+    assert row["state"] == "VISIBLE_CONTEXT_UNASSESSED"
+    assert row["eligible_for_direction"] is False
+    assert view["direction_eligible_count"] == 0
+
+
 def test_rejected_reaction_removes_vote_and_never_reverses_it():
     rejected = _event(
         "NEWS-REJECTED",
@@ -116,5 +132,6 @@ def test_contract_has_no_universal_event_expiry_window():
     assert contract["age_only_expiry_allowed"] is False
     assert contract["reaction_backfill_from_future_price_allowed"] is False
     assert contract["headline_sentiment_inference_allowed"] is False
+    assert contract["direction_requires_materiality_and_novelty"] is True
     assert contract["current_mind_effect"] == "NONE"
     assert contract["promotion_allowed"] is False
