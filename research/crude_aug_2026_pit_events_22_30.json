@@ -1,0 +1,132 @@
+{
+  "archive_id": "CRUDE_AUG_2026_PIT_EVENT_ARCHIVE_V2",
+  "records": [
+    {
+      "available_at_ist": "2026-08-24T12:53:00+05:30",
+      "event_id": "2026-08-24_reuters_hormuz_blacklist_45",
+      "event_type": "HORMUZ_RESTRICTION",
+      "facts": "Iran said it blacklisted 45 tankers and threatened fines, detention or cargo confiscation for violations of its Hormuz transit rules.",
+      "headline": "Iran threatens 45 tankers with fines, confiscation in Hormuz escalation",
+      "mechanism_tags": ["HORMUZ", "SHIPPING", "GEOPOLITICS", "SUPPLY_RISK"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-24T07:23:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters via StreetInsider",
+      "source_url": "https://www.streetinsider.com/Reuters/Iran%2Bwarns%2Bvessels%2Bviolating%2BHormuz%2Btransit%2Brules%2Bof%2Bfines%2C%2Bdetention/26963420.html",
+      "timestamp_quality": "EXACT_REUTERS_REPUBLISHER"
+    },
+    {
+      "available_at_ist": "2026-08-25T06:46:00+05:30",
+      "event_id": "2026-08-25_reuters_iran_sanctions_market_reaction",
+      "event_type": "SANCTIONS_MARKET_REACTION",
+      "facts": "Oil fell as traders viewed economic pressure as less immediately disruptive to supply than military escalation, while Hormuz risk remained.",
+      "headline": "Oil settles down more than 3%; investors shrug off US sanctions on Iran",
+      "mechanism_tags": ["SANCTIONS", "GEOPOLITICS", "HORMUZ", "MARKET_REACTION"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-25T01:16:00Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/energy/oil-prices-steady-investors-weigh-impact-expanded-us-sanctions-against-iran-2026-08-25/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-26T20:00:00+05:30",
+      "event_id": "2026-08-26_eia_wpsr_crude",
+      "event_payload": {
+        "actual": {"commercial_crude_change_mmbbl": 0.095, "distillate_change_mmbbl": -2.228, "gasoline_change_mmbbl": -2.536, "refinery_utilization_pct": 97.4},
+        "composite_mechanism_stance": "UNKNOWN",
+        "composite_reason": "All recovered expectation feeds imply a tighter-than-expected petroleum balance, but archive intentionally does not convert that fact into a tradable direction without a frozen reaction rule.",
+        "consensus_disagreement": true,
+        "expectations": [
+          {"available_at_utc": "2026-08-26T12:50:00Z", "crude_change_mmbbl": 0.597, "distillate_change_mmbbl": -1.6, "gasoline_change_mmbbl": -0.7, "pre_release_usable": true, "quality": "PRE_RELEASE_REUTERS_POLL_TIME_FROM_REPUBLISHER", "source": "Reuters poll via BOE Report"},
+          {"available_at_utc": "2026-08-26T14:30:00Z", "crude_change_mmbbl": 1.4, "distillate_change_mmbbl": -1.64, "gasoline_change_mmbbl": -0.809, "pre_release_usable": false, "quality": "SECONDARY_AT_RELEASE", "source": "StreetInsider"}
+        ],
+        "pre_release_consensus_available": true,
+        "pre_release_expectation_count": 1,
+        "release_timestamp_source": "EIA scheduled WPSR release after 10:30 a.m. ET",
+        "week_ending": "2026-08-21"
+      },
+      "event_type": "EIA_WPSR",
+      "facts": "U.S. commercial crude stocks rose from 428.815 million to 428.910 million barrels, a +0.095 million barrel weekly change.",
+      "headline": "EIA Weekly Petroleum Status Report",
+      "mechanism_tags": ["INVENTORY", "US_SUPPLY"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-26T14:30:00Z",
+      "series": "EIA_CRUDE_INVENTORY",
+      "source": "U.S. EIA",
+      "source_url": "https://www.eia.gov/petroleum/supply/weekly/",
+      "timestamp_quality": "SCHEDULED_OFFICIAL"
+    },
+    {
+      "available_at_ist": "2026-08-27T09:09:13+05:30",
+      "event_id": "2026-08-27_reuters_hormuz_shipping_rises",
+      "event_type": "SHIPPING_FLOW",
+      "facts": "Visible commodity-vessel transits rose to 10 from eight but remained below the 10-day average of about 15.",
+      "headline": "Shipping traffic through Strait of Hormuz rises slightly, data shows",
+      "mechanism_tags": ["HORMUZ", "SHIPPING", "SUPPLY_FLOW"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-27T03:39:13Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/world/middle-east/shipping-traffic-through-strait-hormuz-rises-slightly-data-shows-2026-08-27/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-28T14:36:35+05:30",
+      "event_id": "2026-08-28_reuters_gulf_bypass_infrastructure",
+      "event_type": "SUPPLY_ROUTE_ADAPTATION",
+      "facts": "Gulf exporters accelerated pipeline and port investments aimed at reducing dependence on the Strait of Hormuz.",
+      "headline": "Pipelines and ports: Iran war spurs Gulf infrastructure investment",
+      "mechanism_tags": ["HORMUZ", "INFRASTRUCTURE", "SUPPLY_ROUTE"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-28T09:06:35Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/energy/pipelines-ports-iran-war-spurs-gulf-infrastructure-investment-2026-08-28/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-28T20:51:09+05:30",
+      "event_id": "2026-08-28_reuters_russia_refinery_disruption",
+      "event_type": "REFINERY_DISRUPTION",
+      "facts": "Drone attacks forced major Russian refineries offline; gasoline production fell to roughly 70% of domestic consumption late in August.",
+      "headline": "Russia's gasoline output drops to 70% of domestic demand late in August after drone attacks",
+      "mechanism_tags": ["REFINING", "RUSSIA", "PRODUCT_TIGHTNESS", "GEOPOLITICS"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-28T15:21:09Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/energy/russias-gasoline-output-drops-70-domestic-demand-late-august-after-drone-attacks-2026-08-28/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-29T02:14:56+05:30",
+      "event_id": "2026-08-28_reuters_iran_full_control_hormuz",
+      "event_type": "HORMUZ_RESTRICTION",
+      "facts": "Iran's IRGC Navy rejected U.S. claims that Hormuz was open and said restrictions would continue.",
+      "headline": "Iran's navy says it has 'full control' over Strait of Hormuz",
+      "mechanism_tags": ["HORMUZ", "GEOPOLITICS", "SHIPPING"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-28T20:44:56Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/world/middle-east/irans-navy-says-it-has-full-control-over-strait-hormuz-2026-08-28/",
+      "timestamp_quality": "EXACT_REUTERS"
+    },
+    {
+      "available_at_ist": "2026-08-31T03:42:07+05:30",
+      "event_id": "2026-08-30_reuters_us_iran_attacks",
+      "event_type": "GEOPOLITICAL_ESCALATION",
+      "facts": "Renewed U.S.-Iran military attacks raised supply-disruption concerns and pushed oil higher.",
+      "headline": "Oil settles up by more than 2.5% as US and Iran resume military attacks",
+      "mechanism_tags": ["GEOPOLITICS", "SUPPLY_RISK", "HORMUZ"],
+      "pit_usable": true,
+      "published_at_utc": "2026-08-30T22:12:07Z",
+      "series": "CRUDE_NEWS",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/energy/oil-jumps-more-than-2-after-us-attack-irans-larak-island-2026-08-30/",
+      "timestamp_quality": "EXACT_REUTERS"
+    }
+  ],
+  "window": ["2026-08-22", "2026-08-30"]
+}
