@@ -184,11 +184,13 @@ def evaluate_integrated_direction_v2_shadow(
     context_records: list[dict] | None = None,
     event_records: list[dict] | None = None,
     direction_memory_cases: list[dict] | None = None,
+    option_positioning: dict | None = None,
 ) -> dict:
     """Build the redesigned direction thesis without changing any trading decision.
 
-    This is an integration contract, not a strategy. It produces no entry, geometry,
-    option contract, position size, or Current Mind action.
+    Option OI is admitted as PIT positioning context for the options-only system,
+    but raw OI is not turned into a directional vote without a preregistered causal
+    rule. This integration remains shadow-only.
     """
     local = _local_structure(snapshot or {})
     participation = build_participation_observation(
@@ -196,6 +198,7 @@ def evaluate_integrated_direction_v2_shadow(
         click_timestamp=click_timestamp,
         snapshot=snapshot or {},
         profile=profile or {},
+        option_positioning=option_positioning or {},
     )
     global_crude = build_global_crude_perception(global_context_probe or {}, click_timestamp)
     event = build_event_reaction_family(event_records or [], click_timestamp)
@@ -227,8 +230,9 @@ def evaluate_integrated_direction_v2_shadow(
         "rules": [
             "No weighted indicator score is used.",
             "At least two independent causal origins must align and no counted independent origin may oppose them.",
+            "Option-chain OI is primary positioning context for this options-only system; futures OI is optional supporting context.",
+            "Raw option OI is descriptive until a separate causal OI-plus-premium rule is preregistered; it cannot vote by itself.",
             "Price plus volume alone cannot make Participation an independent directional vote.",
-            "Participation requires fresh positioning evidence plus acceptance before initiative buying/selling can vote.",
             "WTI and Brent remain one correlated GLOBAL_CRUDE family and both must qualify before it votes.",
             "An Event vote requires the PIT lifecycle plus mechanism, materiality, novelty, confirmed reaction, and auditable reaction dependency.",
             "An Event confirmed by a simultaneously directional Local Structure or Global Crude origin is suppressed as duplicate confirmation.",
@@ -253,6 +257,10 @@ def integration_contract() -> dict:
         "causal_origin_deduplication": True,
         "dependent_reaction_confirmation_deduplication": True,
         "legacy_price_volume_participation_vote_allowed": False,
+        "options_only_system": True,
+        "option_oi_primary_positioning_context": True,
+        "raw_option_oi_directional_vote_allowed": False,
+        "futures_oi_required": False,
         "global_crude_uses_richer_perception_v2": True,
         "event_lifecycle_required": True,
         "headline_sentiment_direction_allowed": False,
