@@ -55,6 +55,10 @@ BAR_DURATION = timedelta(minutes=BAR_MINUTES)
 FORWARD_MODE = "COPPER_CURRENT_MIND_FORWARD_PHASE1_V1"
 FORWARD_SEED = "COPPER_CURRENT_MIND_FORWARD_PHASE1_20_CLICKS"
 FORWARD_WARMUP_START = datetime(2026, 9, 1, 9, 0, tzinfo=IST)
+# Acquisition starts earlier than the registered warm-up day solely so the
+# frozen 50-bar perception window exists before the first scored click. These
+# additional bars are context only: they never add score sessions or clicks.
+FORWARD_PERCEPTION_FETCH_START = FORWARD_WARMUP_START - timedelta(days=7)
 FORWARD_SCORE_START = datetime(2026, 9, 2, 0, 0, tzinfo=IST)
 FORWARD_SCORE_END = datetime(2026, 9, 11, 23, 59, 59, tzinfo=IST)
 FORWARD_EXPECTED_SESSIONS = 8
@@ -331,7 +335,11 @@ def evaluate_forward_window(
             click = parse_ist_timestamp(scheduled["click_timestamp"])
             index = index_by_start[source_start]
             if index < MIN_GLOBAL_INDEX:
-                raise RuntimeError("Preregistered click lacks the frozen 50-bar perception minimum")
+                raise RuntimeError(
+                    "Preregistered click lacks the frozen 50-bar perception minimum; "
+                    f"available_prior_bars={index}, required={MIN_GLOBAL_INDEX}, "
+                    f"acquisition_start={FORWARD_PERCEPTION_FETCH_START.isoformat()}"
+                )
             journal = _evaluate_one_click(
                 rows=rows,
                 index=index,
@@ -388,6 +396,8 @@ def evaluate_forward_window(
         "reference_contract": reference_contract,
         "bar_timing": "CANDLE_START_PLUS_5_MINUTES",
         "preregistration": {
+            "perception_fetch_start": FORWARD_PERCEPTION_FETCH_START.isoformat(),
+            "perception_fetch_only_not_scored": True,
             "warmup_start": FORWARD_WARMUP_START.isoformat(),
             "score_start": FORWARD_SCORE_START.isoformat(),
             "score_end": FORWARD_SCORE_END.isoformat(),
@@ -419,6 +429,7 @@ def evaluate_forward_window(
         "validation_status": "PHASE1_COMPLETE_READY_FOR_REVIEW" if completed_phase else "WAITING_FOR_PREREGISTERED_FORWARD_SAMPLE",
         "guardrails": [
             "Groww 5-minute candle timestamps are treated as candle starts; OHLC becomes visible only at timestamp + 5 minutes.",
+            "Pre-score acquisition is extended only to satisfy the frozen perception history; it creates no additional scored session or click.",
             "September 1 is warm-up/shakedown only and contributes no Phase-1 score.",
             "Phase-1 click timestamps are derived only from the MCX calendar and a frozen deterministic seed.",
             "A scored session is excluded if any preregistered click bar is missing even when aggregate coverage otherwise passes.",
@@ -435,7 +446,13 @@ async def run_forward_phase1_from_provider(provider, as_of: datetime | None = No
     as_of = _ts(as_of or datetime.now(IST)).astimezone(IST)
     contract = await resolve_nearest_mcx_future("COPPER", force=True)
     fetch_end = min(as_of, FORWARD_SCORE_END + BAR_DURATION)
-    candles = await _fetch_chunked(provider, contract, BAR_MINUTES, FORWARD_WARMUP_START, fetch_end)
+    candles = await _fetch_chunked(
+        provider,
+        contract,
+        BAR_MINUTES,
+        FORWARD_PERCEPTION_FETCH_START,
+        fetch_end,
+    )
     report = evaluate_forward_window(
         candles,
         reference_contract=str(contract.get("trading_symbol") or ""),
@@ -446,5 +463,6 @@ async def run_forward_phase1_from_provider(provider, as_of: datetime | None = No
         "groww_symbol": contract.get("groww_symbol"),
         "expiry_date": contract.get("expiry_date"),
         "discovery": "DYNAMIC_NEAREST_ACTIVE_MCX_FUTURE",
+        "perception_fetch_start": FORWARD_PERCEPTION_FETCH_START.isoformat(),
     }
     return report
