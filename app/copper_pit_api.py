@@ -6,13 +6,15 @@ from zoneinfo import ZoneInfo
 from fastapi import Header
 
 from .copper_candle_observation_store import CopperCandleObservationStore
-from .copper_direction_brain_v2_shadow import evaluate_copper_direction_v2_shadow
+from .copper_direction_brain_v2_shadow_v2 import evaluate_copper_direction_v2_shadow
 from .copper_direction_v2_prospective_store import (
     CopperDirectionV2ProspectiveStore,
     build_prospective_record,
 )
+from .copper_option_participation_v1 import (
+    read_copper_information_board_with_option_participation,
+)
 from .copper_pit_candles import collect_copper_pit_candles
-from .copper_pit_information_board_v2 import read_copper_information_board
 from .providers.factory import get_provider
 
 
@@ -54,7 +56,7 @@ def register_copper_pit_routes(app, settings, collector_auth) -> None:
         x_collector_token: str | None = Header(default=None),
     ):
         collector_auth(x_collector_token)
-        return await read_copper_information_board(
+        return await read_copper_information_board_with_option_participation(
             settings.database_url,
             as_of=as_of,
         )
@@ -66,7 +68,7 @@ def register_copper_pit_routes(app, settings, collector_auth) -> None:
     ):
         """Read Direction V2 at any PIT timestamp without creating provenance."""
         collector_auth(x_collector_token)
-        board = await read_copper_information_board(
+        board = await read_copper_information_board_with_option_participation(
             settings.database_url,
             as_of=as_of,
         )
@@ -84,7 +86,7 @@ def register_copper_pit_routes(app, settings, collector_auth) -> None:
         """
         collector_auth(x_collector_token)
         evaluated_at = datetime.now(IST)
-        board = await read_copper_information_board(
+        board = await read_copper_information_board_with_option_participation(
             settings.database_url,
             as_of=evaluated_at.isoformat(),
         )
