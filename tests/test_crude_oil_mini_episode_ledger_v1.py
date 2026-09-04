@@ -169,7 +169,25 @@ class CrudeOilMiniEpisodeLedgerV1Tests(unittest.TestCase):
         self.assertEqual(outcome["geometry_outcome"], "TARGET_FIRST")
         self.assertEqual(outcome["diagnosis"], "TRADE_EPISODE")
         self.assertAlmostEqual(outcome["directional_favorable_points"], 3.2)
-        self.assertAlmostEqual(outcome["directional_adverse_points"], 0.2)
+        self.assertAlmostEqual(outcome["directional_adverse_points"], 0.0)
+
+    def test_directional_excursions_never_become_negative(self):
+        episode = _episode("BUY_CE")
+        reference = episode["reference_at"]
+        candles = [
+            _bar(reference, 5, high=102.0, low=100.5, close=101.5),
+            _bar(reference, 10, high=102.5, low=100.4, close=102.0),
+            _bar(reference, 15, high=102.8, low=100.3, close=102.5),
+        ]
+        outcome = analyze_episode_outcome(
+            episode,
+            candles,
+            [],
+            horizon_minutes=15,
+            resolved_at=reference + timedelta(minutes=16),
+        )
+        self.assertEqual(outcome["max_down_points"], 0.0)
+        self.assertEqual(outcome["directional_adverse_points"], 0.0)
 
     def test_same_bar_entry_and_exit_is_ambiguous_not_assumed_win(self):
         episode = _episode("BUY_CE")
@@ -202,6 +220,30 @@ class CrudeOilMiniEpisodeLedgerV1Tests(unittest.TestCase):
         )
         self.assertIsNone(outcome)
 
+    def test_incomplete_short_horizon_never_uses_later_same_session_bars(self):
+        episode = _episode("NO_TRADE")
+        reference = episode["reference_at"]
+        candles = [
+            _bar(reference, 5, high=101.0, low=99.5, close=100.5),
+            _bar(reference, 10, high=102.0, low=99.7, close=101.5),
+            # The exact +15m endpoint is intentionally missing.
+            _bar(reference, 20, high=120.0, low=98.0, close=118.0),
+            _bar(reference, 25, high=125.0, low=97.0, close=124.0),
+        ]
+        outcome = analyze_episode_outcome(
+            episode,
+            candles,
+            [],
+            horizon_minutes=15,
+            resolved_at=reference + timedelta(days=1),
+        )
+
+        self.assertEqual(outcome["resolution_status"], "TRUNCATED_OR_INCOMPLETE_HORIZON")
+        self.assertAlmostEqual(outcome["max_up_points"], 2.0)
+        self.assertAlmostEqual(outcome["max_down_points"], 0.5)
+        self.assertNotEqual(outcome["underlying_end_close"], 118.0)
+        self.assertNotEqual(outcome["underlying_end_close"], 124.0)
+
     def test_exact_contract_option_response_uses_only_observations_visible_by_horizon(self):
         episode = _episode("BUY_CE")
         episode["option_trading_symbol"] = "CRUDEOILM17SEP268500CE"
@@ -214,16 +256,25 @@ class CrudeOilMiniEpisodeLedgerV1Tests(unittest.TestCase):
         option_rows = [
             {
                 "sample_bucket_at": reference + timedelta(minutes=5),
+                "observed_at": reference + timedelta(minutes=5),
                 "collected_at": reference + timedelta(minutes=6),
                 "last_price": 22.0,
             },
             {
                 "sample_bucket_at": reference + timedelta(minutes=10),
+                "observed_at": reference + timedelta(minutes=10),
                 "collected_at": reference + timedelta(minutes=11),
                 "last_price": 25.0,
             },
             {
+                "sample_bucket_at": reference + timedelta(minutes=10),
+                "observed_at": reference + timedelta(minutes=16),
+                "collected_at": reference + timedelta(minutes=16),
+                "last_price": 80.0,
+            },
+            {
                 "sample_bucket_at": reference + timedelta(minutes=20),
+                "observed_at": reference + timedelta(minutes=20),
                 "collected_at": reference + timedelta(minutes=21),
                 "last_price": 99.0,
             },
