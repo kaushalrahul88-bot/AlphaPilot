@@ -36,6 +36,8 @@ jobs:
           required={
               "/v1/internal/copper/pit-candles/collect",
               "/v1/internal/copper/pit-candles/status",
+              "/v1/internal/copper/direction-v2-shadow/evaluate",
+              "/v1/internal/copper/direction-v2-shadow/prospective-status",
           }
           raise SystemExit(0 if required.issubset(paths) else 1)
           PY
@@ -44,7 +46,7 @@ jobs:
             fi
             sleep 10
           done
-          echo "Copper PIT endpoint was not ready" >&2
+          echo "Copper PIT/Direction V2 endpoints were not ready" >&2
           exit 1
 
       - name: Capture bounded prospective Copper tape
@@ -107,6 +109,85 @@ jobs:
           print(json.dumps(d, indent=2, sort_keys=True))
           PY
 
+      - name: Capture prospective Direction V2 shadow evaluation
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=$(python -c 'import json; print(json.load(open("copper-pit-result.json")).get("status",""))')
+          if [ "$STATUS" = "MARKET_CLOSED" ]; then
+            echo '{"status":"SKIPPED_MARKET_CLOSED"}' > copper-direction-v2-result.json
+            exit 0
+          fi
+          CODE=$(curl --silent --show-error --max-time 90 -w "%{http_code}" \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -H "Accept: application/json" \
+            -X POST "$API_BASE/v1/internal/copper/direction-v2-shadow/evaluate" \
+            -o copper-direction-v2-result.json || echo 000)
+          echo "HTTP=$CODE"
+          [ "$CODE" = "200" ] || {
+            cat copper-direction-v2-result.json 2>/dev/null || true
+            exit 1
+          }
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-direction-v2-result.json"))
+          p=d.get("prospective_persistence") or {}
+          assert d.get("mode")=="COPPER_DIRECTION_BRAIN_V2_SHADOW", d
+          assert d.get("research_only") is True, d
+          assert d.get("shadow_only") is True, d
+          assert d.get("direction") in {"BULLISH","BEARISH","UNKNOWN"}, d
+          assert d.get("decision_effect")=="NONE", d
+          assert d.get("sealed_current_mind_effect")=="NONE", d
+          assert d.get("production_rules_changed") is False, d
+          assert d.get("live_execution_enabled") is False, d
+          assert d.get("broker_order_placement_enabled") is False, d
+          assert d.get("capital_committed")==0, d
+          assert p.get("first_seen_immutable") is True, p
+          assert p.get("outcome_fields_stored") is False, p
+          assert p.get("historical_as_of_allowed") is False, p
+          assert p.get("evaluation_id"), p
+          assert p.get("record_hash"), p
+          assert p.get("board_as_of"), p
+          assert p.get("evaluated_at"), p
+          print(json.dumps({
+              "direction":d.get("direction"),
+              "direction_confidence":d.get("direction_confidence"),
+              "thesis_state":d.get("thesis_state"),
+              "supporting_families":d.get("supporting_families"),
+              "opposing_families":d.get("opposing_families"),
+              "prospective_persistence":p,
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify outcome-blind Direction V2 coverage
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=$(python -c 'import json; print(json.load(open("copper-pit-result.json")).get("status",""))')
+          if [ "$STATUS" = "MARKET_CLOSED" ]; then
+            echo '{"status":"SKIPPED_MARKET_CLOSED"}' > copper-direction-v2-status.json
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 30 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/direction-v2-shadow/prospective-status" \
+            -o copper-direction-v2-status.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-direction-v2-status.json"))
+          assert d.get("status")=="ACTIVE", d
+          assert d.get("first_seen_immutable") is True, d
+          assert d.get("outcome_data_read") is False, d
+          assert d.get("performance_claim") is None, d
+          assert d.get("production_rules_changed") is False, d
+          assert d.get("live_execution_enabled") is False, d
+          assert d.get("broker_order_placement_enabled") is False, d
+          assert int(d.get("evaluations") or 0)>=1, d
+          print(json.dumps(d, indent=2, sort_keys=True))
+          PY
+
       - name: Upload Copper PIT audit artifact
         uses: actions/upload-artifact@v4
         if: always()
@@ -115,5 +196,7 @@ jobs:
           path: |
             copper-pit-result.json
             copper-pit-status.json
+            copper-direction-v2-result.json
+            copper-direction-v2-status.json
           if-no-files-found: warn
           retention-days: 30
