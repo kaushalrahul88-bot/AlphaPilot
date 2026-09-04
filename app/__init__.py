@@ -17,6 +17,10 @@ import os
 if os.getenv("RENDER_GIT_COMMIT"):
     from . import asgi as _supplemental_asgi_routes  # noqa: F401,E402
     from .crude_oil_mini_manual_api import register_crude_oil_mini_manual_routes  # noqa: E402
+    from .crude_oil_mini_option_observation_store import (  # noqa: E402
+        register_crude_oil_mini_option_observation_startup,
+    )
     from .main import app as _app, settings as _settings  # noqa: E402
 
+    register_crude_oil_mini_option_observation_startup(_app, _settings)
     register_crude_oil_mini_manual_routes(_app, _settings)
