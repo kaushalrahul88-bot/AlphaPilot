@@ -11,12 +11,6 @@ on:
       - "app/crude_oil_mini_direction_brain_v2_integrated.py"
       - ".github/workflows/crude-mini-current-mind-live-shadow.yml"
   workflow_dispatch:
-  schedule:
-    # MCX regular weekday window in IST, aligned to 15-minute slots.
-    # 03:30 UTC = 09:00 IST; 18:00 UTC = 23:30 IST.
-    - cron: "30,45 3 * * 1-5"
-    - cron: "*/15 4-17 * * 1-5"
-    - cron: "0 18 * * 1-5"
 
 permissions:
   contents: read
