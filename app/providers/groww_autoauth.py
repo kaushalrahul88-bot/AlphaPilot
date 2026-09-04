@@ -11,13 +11,11 @@ from .groww_amount import AmountAwareGrowwProvider
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Prefer session-aware dynamic auth, with a manual-token-only fallback.
+    """Session-aware Groww authentication with a manual-token fast path.
 
-    When API key + secret are configured, generate one shared token per Groww
-    session. ``GROWW_ACCESS_TOKEN`` remains supported for deployments that do not
-    have the key pair, but it must not override dynamic auth: a token left in
-    Render after Groww's 06:00 IST reset would otherwise force every data request
-    to fail with HTTP 401 until the environment variable was manually replaced.
+    A configured ``GROWW_ACCESS_TOKEN`` is already a session credential. Prefer it
+    instead of generating another token from every fresh worker/process. Dynamic
+    API-key authentication remains the fallback when no manual token is present.
     """
 
     _shared_token = None
@@ -76,15 +74,13 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         return token
 
     async def _get_access_token(self):
-        # A manual token is the fallback only when a complete dynamic-auth key
-        # pair is unavailable. This prevents a stale Render environment value
-        # from shadowing credentials that can generate the current session token.
-        if not (self.api_key and self.api_secret):
-            if not self.access_token:
-                raise RuntimeError(
-                    "No Groww authentication credentials are configured"
-                )
+        # A supplied session token is process-independent and therefore prevents
+        # stateless workers from each consuming Groww's token-generation quota.
+        if self.access_token:
             return self.access_token
+
+        if not (self.api_key and self.api_secret):
+            raise RuntimeError("No Groww authentication credentials are configured")
 
         session_key = self._auth_session_key()
         cls = self.__class__
