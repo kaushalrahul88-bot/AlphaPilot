@@ -12,11 +12,11 @@ class GrowwAutoAuthTests(unittest.TestCase):
         AutoAuthAmountAwareGrowwProvider._shared_auth_session = None
         AutoAuthAmountAwareGrowwProvider._shared_auth_lock = None
 
-    def test_dynamic_credentials_override_stale_manual_token(self):
+    def test_manual_session_token_avoids_dynamic_generation_even_with_key_pair(self):
         env = {
             "GROWW_API_KEY": "api-key",
             "GROWW_API_SECRET": "api-secret",
-            "GROWW_ACCESS_TOKEN": "stale-token",
+            "GROWW_ACCESS_TOKEN": "current-session-token",
         }
         with patch.dict(os.environ, env, clear=True):
             provider = AutoAuthAmountAwareGrowwProvider(settings=None)
@@ -26,7 +26,7 @@ class GrowwAutoAuthTests(unittest.TestCase):
         async def generate():
             nonlocal calls
             calls += 1
-            return "current-session-token"
+            return "generated-token"
 
         provider._generate_access_token = generate
         first = asyncio.run(provider._get_access_token())
@@ -34,6 +34,29 @@ class GrowwAutoAuthTests(unittest.TestCase):
 
         self.assertEqual(first, "current-session-token")
         self.assertEqual(second, "current-session-token")
+        self.assertEqual(calls, 0)
+
+    def test_dynamic_credentials_generate_once_without_manual_token(self):
+        env = {
+            "GROWW_API_KEY": "api-key",
+            "GROWW_API_SECRET": "api-secret",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            provider = AutoAuthAmountAwareGrowwProvider(settings=None)
+
+        calls = 0
+
+        async def generate():
+            nonlocal calls
+            calls += 1
+            return "generated-token"
+
+        provider._generate_access_token = generate
+        first = asyncio.run(provider._get_access_token())
+        second = asyncio.run(provider._get_access_token())
+
+        self.assertEqual(first, "generated-token")
+        self.assertEqual(second, "generated-token")
         self.assertEqual(calls, 1)
 
     def test_manual_token_still_works_without_key_pair(self):
