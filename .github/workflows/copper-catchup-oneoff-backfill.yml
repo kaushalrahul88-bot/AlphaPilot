@@ -28,11 +28,25 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
-          curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json
+          ready=0
+          for attempt in {1..6}; do
+            if curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json; then
+              if python - <<'PY'
+          import json
+          body=json.load(open("health.json"))
+          raise SystemExit(0 if body.get("commodity_collector_enabled") is True else 1)
+          PY
+              then
+                ready=1
+                break
+              fi
+            fi
+            sleep $((attempt * 5))
+          done
+          [ "$ready" = "1" ] || { echo "Collector backend did not become ready" >&2; exit 1; }
           python - <<'PY'
           import json
           body=json.load(open("health.json"))
-          assert body.get("commodity_collector_enabled") is True, body
           print(json.dumps({"health":"ok","deployment_commit":body.get("deployment_commit")}, indent=2))
           PY
 
