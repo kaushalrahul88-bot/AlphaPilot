@@ -6,10 +6,18 @@ from .copper_candle_observation_store import CopperCandleObservationStore
 from .copper_direction_brain_v2_shadow import evaluate_copper_direction_v2_shadow
 from .copper_pit_candles import collect_copper_pit_candles
 from .copper_pit_information_board_v2 import read_copper_information_board
+from .copper_research_status import read_copper_research_status
 from .providers.factory import get_provider
 
 
 def register_copper_pit_routes(app, settings, collector_auth) -> None:
+    @app.get("/v1/copper/research/status")
+    async def copper_research_status(as_of: str | None = None):
+        return await read_copper_research_status(
+            settings.database_url,
+            as_of=as_of,
+        )
+
     @app.post("/v1/internal/copper/pit-candles/collect")
     async def copper_pit_candles_collect(
         x_collector_token: str | None = Header(default=None),
