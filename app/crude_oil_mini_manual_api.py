@@ -17,6 +17,7 @@ from .crude_oil_mini_pit_candles import (
 )
 from .crude_oil_mini_prospective_memory_v1 import read_prospective_experience_memory
 from .crude_oil_mini_research_protocol_v1 import baseline_manifest
+from .crude_oil_mini_research_status_v1 import read_crude_oil_mini_research_status
 from .crude_oil_pit_context_probe import probe_crude_oil_pit_context
 from .providers.factory import get_provider
 
@@ -30,6 +31,30 @@ SAFE_EXECUTION = {
 
 
 def register_crude_oil_mini_manual_routes(app, settings) -> None:
+    @app.get("/v1/crude-oil-mini/research/status")
+    async def crude_oil_mini_research_status():
+        try:
+            status = await read_crude_oil_mini_research_status(settings.database_url)
+            return {
+                **status,
+                "point_in_time_research": True,
+                "product": "CRUDE_OIL_MINI",
+                "trade_instrument": "OPTIONS_ONLY",
+                "execution": SAFE_EXECUTION,
+            }
+        except Exception as exc:
+            return {
+                "status": "UNAVAILABLE",
+                "reason": f"{exc.__class__.__name__}: {str(exc)[:500]}",
+                "point_in_time_research": True,
+                "product": "CRUDE_OIL_MINI",
+                "trade_instrument": "OPTIONS_ONLY",
+                "research_protocol": baseline_manifest(),
+                "execution": SAFE_EXECUTION,
+                "decision_effect": "NONE",
+                "promotion_eligible": False,
+            }
+
     @app.post("/v1/crude-oil-mini/current-mind/click")
     async def crude_oil_mini_manual_click():
         click = datetime.now(IST)
