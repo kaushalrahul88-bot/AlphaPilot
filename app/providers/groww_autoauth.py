@@ -10,17 +10,29 @@ import httpx
 from .groww_amount import AmountAwareGrowwProvider
 
 
+class GrowwAuthRateLimitedError(RuntimeError):
+    """Raised while dynamic Groww token generation is under a local cooldown."""
+
+
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
     """Session-aware Groww authentication with a manual-token fast path.
 
     A configured ``GROWW_ACCESS_TOKEN`` is already a session credential. Prefer it
     instead of generating another token from every fresh worker/process. Dynamic
     API-key authentication remains the fallback when no manual token is present.
+
+    Groww authentication 429s are guarded by a process-wide circuit breaker so
+    scheduled collectors and dashboard clicks do not repeatedly hammer the token
+    endpoint while it is rate-limited. A configured access token always bypasses
+    the breaker.
     """
+
+    AUTH_429_DEFAULT_COOLDOWN_SECONDS = 60 * 60
 
     _shared_token = None
     _shared_auth_session = None
     _shared_auth_lock = None
+    _auth_blocked_until_monotonic = 0.0
 
     def __init__(self, settings):
         self.api_key = "".join(os.getenv("GROWW_API_KEY", "").split())
@@ -44,6 +56,34 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
     def _auth_session_key():
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         return (now - timedelta(hours=6)).date().isoformat()
+
+    @classmethod
+    def _auth_block_remaining(cls) -> float:
+        return max(0.0, cls._auth_blocked_until_monotonic - time.monotonic())
+
+    @classmethod
+    def _raise_if_auth_blocked(cls) -> None:
+        remaining = cls._auth_block_remaining()
+        if remaining <= 0:
+            return
+        raise GrowwAuthRateLimitedError(
+            "Groww dynamic authentication is temporarily blocked after HTTP 429; "
+            f"no token-generation request will be retried for about {int(remaining) + 1}s. "
+            "Configure a current GROWW_ACCESS_TOKEN to bypass dynamic authentication."
+        )
+
+    @classmethod
+    def _register_auth_rate_limit(cls, response: httpx.Response) -> None:
+        retry_after = 0.0
+        try:
+            retry_after = max(0.0, float(response.headers.get("Retry-After", "0")))
+        except (TypeError, ValueError):
+            retry_after = 0.0
+        cooldown = max(cls.AUTH_429_DEFAULT_COOLDOWN_SECONDS, retry_after)
+        cls._auth_blocked_until_monotonic = max(
+            cls._auth_blocked_until_monotonic,
+            time.monotonic() + cooldown,
+        )
 
     async def _generate_access_token(self):
         ts = str(int(time.time()))
@@ -82,17 +122,27 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
         if not (self.api_key and self.api_secret):
             raise RuntimeError("No Groww authentication credentials are configured")
 
-        session_key = self._auth_session_key()
         cls = self.__class__
+        cls._raise_if_auth_blocked()
 
+        session_key = self._auth_session_key()
         if cls._shared_token and cls._shared_auth_session == session_key:
             return cls._shared_token
 
         async with cls._auth_lock():
+            cls._raise_if_auth_blocked()
             if cls._shared_token and cls._shared_auth_session == session_key:
                 return cls._shared_token
 
-            token = await self._generate_access_token()
+            try:
+                token = await self._generate_access_token()
+            except httpx.HTTPStatusError as exc:
+                if getattr(exc.response, "status_code", None) == 429:
+                    cls._register_auth_rate_limit(exc.response)
+                    cls._raise_if_auth_blocked()
+                raise
+
+            cls._auth_blocked_until_monotonic = 0.0
             cls._shared_token = token
             cls._shared_auth_session = session_key
             self._cached_token = token
