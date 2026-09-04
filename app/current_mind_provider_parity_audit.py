@@ -3,13 +3,27 @@ from hashlib import sha256
 import json
 from .commodity_backtest import _fetch_chunked, _ts
 from .copper_market_brain_direction_audit import PRIMARY_END, PRIMARY_START, REFERENCE_CONTRACT
-from .commodities import resolve_nearest_mcx_future
+
+REFERENCE_CONTRACT_META = {
+    "underlying": "COPPER",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "trading_symbol": REFERENCE_CONTRACT,
+    "groww_symbol": "MCX-COPPER-31Aug26-FUT",
+    "expiry_date": "2026-08-31",
+    "lot_size": None,
+    "tick_size": 0.05,
+    "instrument_type": "FUT",
+    "discovery_source": "ALPHAPILOT_STORED_LIVE_CONTRACT_IDENTITY",
+}
+
 
 def _norm(row):
     return [str(_ts(row[0]).replace(second=0,microsecond=0).isoformat()),
             float(row[1]),float(row[2]),float(row[3]),float(row[4]),
             float(row[5] or 0) if len(row)>5 else 0.0,
             None if len(row)<=6 or row[6] is None else float(row[6])]
+
 
 def _map(rows):
     out={}
@@ -20,14 +34,21 @@ def _map(rows):
         out[n[0]]=n
     return out
 
+
 def _digest(rows, fields=5):
     payload=[[r[i] for i in range(min(fields+1,len(r)))] for r in sorted(rows,key=lambda x:x[0])]
     return sha256(json.dumps(payload,separators=(",",":"),sort_keys=False).encode()).hexdigest()
 
+
 async def run_provider_parity_audit(provider, store):
-    contract=await resolve_nearest_mcx_future("COPPER",force=True)
-    if str(contract.get("trading_symbol") or "").upper()!=REFERENCE_CONTRACT:
-        raise RuntimeError(f"Expected {REFERENCE_CONTRACT}, got {contract.get('trading_symbol')}")
+    """Read-only Groww parity probe for the exact August Copper contract.
+
+    The contract identity was captured by AlphaPilot while it was live and is
+    deliberately frozen here. This audit tests whether Groww can still return
+    candles for that known expired contract without depending on Groww's MCX
+    archived-contract discovery endpoint.
+    """
+    contract=dict(REFERENCE_CONTRACT_META)
     provider_rows=await _fetch_chunked(provider,contract,5,PRIMARY_START,PRIMARY_END)
     provider_rows=[r for r in provider_rows if PRIMARY_START<=_ts(r[0])<=PRIMARY_END]
     await store.initialize()
@@ -52,8 +73,10 @@ async def run_provider_parity_audit(provider, store):
         if a[6] is not None and b[6] is not None and abs(a[6]-b[6])>1e-9:
             oi_mismatch.append({"timestamp":ts,"provider":a[6],"stored":b[6]})
     return {
-      "mode":"COPPER_CURRENT_MIND_PROVIDER_PARITY_AUDIT_V1",
+      "mode":"COPPER_CURRENT_MIND_PROVIDER_PARITY_AUDIT_V2_EXACT_EXPIRED_CONTRACT",
       "provider":"GROWW","reference_contract":REFERENCE_CONTRACT,
+      "contract_identity_source":contract["discovery_source"],
+      "groww_symbol":contract["groww_symbol"],
       "resolved_expiry":contract.get("expiry_date"),
       "window":{"start":PRIMARY_START.isoformat(),"end":PRIMARY_END.isoformat()},
       "provider_rows":len(p),"stored_rows":len(s),"shared_rows":len(shared),
@@ -65,6 +88,8 @@ async def run_provider_parity_audit(provider, store):
       "oi_mismatch_sample":oi_mismatch[:25],"max_abs_ohlc_diff":maxdiff,
       "provider_ohlc_digest":_digest(list(p.values()),4),"stored_ohlc_digest":_digest(list(s.values()),4),
       "checks":{
+        "exact_expired_contract_identity_used":True,
+        "provider_returned_rows":bool(p),
         "expiry_is_2026_08_31":str(contract.get("expiry_date") or "")[:10]=="2026-08-31",
         "timestamp_sets_equal":pkeys==skeys,
         "ohlc_equal_at_shared_timestamps":not ohlc_mismatch,
@@ -74,8 +99,9 @@ async def run_provider_parity_audit(provider, store):
       },
       "certification_scope":{
         "stored_vs_groww_historical_api":"AUDITED",
+        "expired_contract_rediscovery_required":False,
         "independent_mcx_exchange_source":"NOT_YET_CERTIFIED",
         "read_only":True,
-        "note":"This audit performs no store upsert before comparison."
+        "note":"This audit performs no store upsert before comparison and uses the exact contract identity captured while the contract was live."
       }
     }
