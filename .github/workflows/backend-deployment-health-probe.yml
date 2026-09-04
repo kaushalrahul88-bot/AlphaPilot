@@ -17,10 +17,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          current_sha="${GITHUB_SHA}"
           for attempt in {1..36}; do
             if curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json; then
-              python - <<'PY'
+              if python - <<'PY'
           import json, os
           data = json.load(open("health.json"))
           deployed = data.get("deployment_commit")
@@ -28,12 +27,9 @@ jobs:
           print(json.dumps(data, indent=2))
           print(f"workflow_sha={current}")
           print(f"deployment_commit={deployed}")
-          if deployed == current:
-              raise SystemExit(0)
-          raise SystemExit(2)
+          raise SystemExit(0 if deployed == current else 2)
           PY
-              rc=$?
-              if [ "$rc" -eq 0 ]; then
+              then
                 echo "Render is serving the workflow commit."
                 exit 0
               fi
