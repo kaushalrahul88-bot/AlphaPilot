@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Header
 
 from .copper_candle_observation_store import CopperCandleObservationStore
+from .copper_direction_brain_v2_shadow import evaluate_copper_direction_v2_shadow
 from .copper_pit_candles import collect_copper_pit_candles
 from .copper_pit_information_board_v2 import read_copper_information_board
 from .providers.factory import get_provider
@@ -47,3 +48,15 @@ def register_copper_pit_routes(app, settings, collector_auth) -> None:
             settings.database_url,
             as_of=as_of,
         )
+
+    @app.get("/v1/internal/copper/direction-v2-shadow")
+    async def copper_direction_v2_shadow(
+        as_of: str | None = None,
+        x_collector_token: str | None = Header(default=None),
+    ):
+        collector_auth(x_collector_token)
+        board = await read_copper_information_board(
+            settings.database_url,
+            as_of=as_of,
+        )
+        return evaluate_copper_direction_v2_shadow(board)
