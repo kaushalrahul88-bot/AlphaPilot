@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from .commodity_contract_continuity import retention_policy
+
 DIRECTIONAL = {"BULLISH", "BEARISH"}
 NON_CAUSAL_ROLES = {"MEMORY", "CONTEXT", "MODIFIER"}
 
@@ -33,13 +35,7 @@ def normalize_family(
     independent_vote_registered: bool = False,
     force_context_only: bool = False,
 ) -> dict:
-    """Normalize commodity-specific evidence into the shared Direction contract.
-
-    Commodity adapters remain responsible for constructing evidence. This function
-    only standardizes voting/dependency semantics. Memory/context is non-causal by
-    default and therefore cannot manufacture a second confirmation from the same
-    observable market state.
-    """
+    """Normalize commodity-specific evidence into the shared Direction contract."""
     normalized = dict(row or {})
     family = _norm(normalized.get("family"), "UNKNOWN")
     origin = _norm(normalized.get("causal_origin"), "UNKNOWN")
@@ -209,6 +205,8 @@ def architecture_contract() -> dict:
         "dependency_deduplication": True,
         "memory_context_vote_by_default": False,
         "direction_implies_trade": False,
+        "data_continuity": retention_policy(),
+        "data_continuity_counts_as_direction_evidence": False,
         "research_only": True,
         "promotion_allowed": False,
     }
