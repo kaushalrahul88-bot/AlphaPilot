@@ -20,3 +20,12 @@ def test_manual_api_reports_market_closed_instead_of_fabricating_result():
     source = Path("app/crude_oil_mini_manual_api.py").read_text(encoding="utf-8")
     assert 'SKIPPED_MARKET_CLOSED' in source
     assert 'if not session.get("is_open")' in source
+
+
+def test_manual_api_attaches_premium_memory_without_allowing_decision_effect():
+    source = Path("app/crude_oil_mini_manual_api.py").read_text(encoding="utf-8")
+    assert 'read_crude_oil_mini_premium_memory' in source
+    assert 'result["data"]["option_premium_memory"] = premium_memory' in source
+    assert '"risk_translation_effect": "NONE"' in source
+    assert '"current_mind_effect": "NONE"' in source
+    assert '"promotion_eligible": False' in source
