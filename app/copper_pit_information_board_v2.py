@@ -26,7 +26,7 @@ MODEL_ID = "COPPER_PIT_INFORMATION_BOARD_V2"
 LOOKBACK_DAYS = 7
 
 LATEST_VISIBLE_CONTRACT_SQL = f"""
-SELECT trading_symbol
+SELECT trading_symbol, candle_at, collected_at
 FROM {CANDLE_TABLE}
 WHERE timeframe_minutes = 5
   AND candle_at + (timeframe_minutes * INTERVAL '1 minute') <= %s
@@ -89,12 +89,18 @@ def _age_seconds(as_of: datetime, available_at) -> float | None:
         return None
 
 
-def _latest_visible_contract_sync(database_url: str, as_of: datetime) -> str | None:
+def _latest_visible_contract_sync(database_url: str, as_of: datetime) -> dict | None:
     with _connect(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(LATEST_VISIBLE_CONTRACT_SQL, (as_of, as_of))
             row = cursor.fetchone()
-    return str(row[0]) if row and row[0] else None
+    if not row or not row[0]:
+        return None
+    return {
+        "trading_symbol": str(row[0]),
+        "candle_at": row[1],
+        "collected_at": row[2],
+    }
 
 
 def _read_latest_option_rows_sync(database_url: str, as_of: datetime) -> list[dict]:
@@ -129,6 +135,7 @@ def summarize_market_tape(
     *,
     trading_symbol: str | None,
     as_of,
+    latest_collected_at=None,
 ) -> dict:
     observed = _stamp(as_of)
     if not rows:
@@ -145,7 +152,9 @@ def summarize_market_tape(
 
     latest = rows[-1]
     latest_start = _stamp(latest[0])
-    latest_available = latest_start + timedelta(minutes=5)
+    latest_completed = latest_start + timedelta(minutes=5)
+    collected = _stamp(latest_collected_at) if latest_collected_at is not None else latest_completed
+    latest_available = max(latest_completed, collected)
     snapshot = None
     snapshot_reason = None
     if len(rows) >= 51:
@@ -163,8 +172,10 @@ def summarize_market_tape(
         "timeframe_minutes": 5,
         "visible_candles": len(rows),
         "latest_candle_at": latest_start.isoformat(),
-        "latest_bar_completed_at": latest_available.isoformat(),
-        "age_seconds_from_completion": _age_seconds(observed, latest_available),
+        "latest_bar_completed_at": latest_completed.isoformat(),
+        "latest_collected_at": collected.isoformat(),
+        "available_at": latest_available.isoformat(),
+        "age_seconds": _age_seconds(observed, latest_available),
         "latest_close": _number(latest[4]) if len(latest) > 4 else None,
         "latest_volume": _number(latest[5]) if len(latest) > 5 else None,
         "latest_open_interest": _number(latest[6]) if len(latest) > 6 else None,
@@ -174,7 +185,7 @@ def summarize_market_tape(
         "source_table": CANDLE_TABLE,
         "first_seen_immutable": True,
         "provenance_id": CANDLE_PROVENANCE_ID,
-        "point_in_time_rule": "BAR_COMPLETED_AND_COLLECTED_AT_OR_BEFORE_CLICK",
+        "point_in_time_rule": "AVAILABLE_AT_EQUALS_LATER_OF_BAR_COMPLETION_AND_FIRST_COLLECTION",
         "historical_backfill_used": False,
         "mutable_generic_fallback_used": False,
         "current_mind_effect": "NONE",
@@ -462,7 +473,8 @@ async def read_copper_information_board(database_url: str, *, as_of=None) -> dic
     observed = _stamp(as_of or datetime.now(IST))
     candle_store = CopperCandleObservationStore(database_url)
     await candle_store.initialize()
-    trading_symbol = await asyncio.to_thread(_latest_visible_contract_sync, database_url, observed)
+    latest_meta = await asyncio.to_thread(_latest_visible_contract_sync, database_url, observed)
+    trading_symbol = latest_meta["trading_symbol"] if latest_meta else None
     rows = (
         await candle_store.read_pit(
             observed - timedelta(days=LOOKBACK_DAYS),
@@ -473,7 +485,12 @@ async def read_copper_information_board(database_url: str, *, as_of=None) -> dic
         if trading_symbol
         else []
     )
-    market = summarize_market_tape(rows, trading_symbol=trading_symbol, as_of=observed)
+    market = summarize_market_tape(
+        rows,
+        trading_symbol=trading_symbol,
+        as_of=observed,
+        latest_collected_at=latest_meta.get("collected_at") if latest_meta else None,
+    )
 
     option_rows, slow_items = await asyncio.gather(
         asyncio.to_thread(_read_latest_option_rows_sync, database_url, observed),
