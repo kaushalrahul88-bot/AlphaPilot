@@ -15,35 +15,39 @@ def test_account_safe_limits_are_below_previous_burst_ceiling():
     assert AccountSafeGrowwProvider.RATE_LIMIT_COOLDOWN_SECONDS >= 60
 
 
-@pytest.mark.asyncio
-async def test_429_registers_shared_cooldown():
-    AccountSafeGrowwProvider._blocked_until = 0.0
-    request = httpx.Request("GET", "https://api.groww.in/v1/live-data/quote")
-    response = httpx.Response(429, request=request)
+def test_429_registers_shared_cooldown():
+    async def scenario():
+        AccountSafeGrowwProvider._blocked_until = 0.0
+        request = httpx.Request("GET", "https://api.groww.in/v1/live-data/quote")
+        response = httpx.Response(429, request=request)
 
-    async def fail():
-        raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+        async def fail():
+            raise httpx.HTTPStatusError("rate limited", request=request, response=response)
 
-    before = time.monotonic()
-    with pytest.raises(httpx.HTTPStatusError):
-        await AccountSafeGrowwProvider._guarded(fail)
+        before = time.monotonic()
+        with pytest.raises(httpx.HTTPStatusError):
+            await AccountSafeGrowwProvider._guarded(fail)
 
-    assert AccountSafeGrowwProvider._blocked_until >= (
-        before + AccountSafeGrowwProvider.RATE_LIMIT_COOLDOWN_SECONDS - 1.0
-    )
-    AccountSafeGrowwProvider._blocked_until = 0.0
+        assert AccountSafeGrowwProvider._blocked_until >= (
+            before + AccountSafeGrowwProvider.RATE_LIMIT_COOLDOWN_SECONDS - 1.0
+        )
+        AccountSafeGrowwProvider._blocked_until = 0.0
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.asyncio
-async def test_non_429_does_not_register_cooldown():
-    AccountSafeGrowwProvider._blocked_until = 0.0
-    request = httpx.Request("GET", "https://api.groww.in/v1/live-data/quote")
-    response = httpx.Response(500, request=request)
+def test_non_429_does_not_register_cooldown():
+    async def scenario():
+        AccountSafeGrowwProvider._blocked_until = 0.0
+        request = httpx.Request("GET", "https://api.groww.in/v1/live-data/quote")
+        response = httpx.Response(500, request=request)
 
-    async def fail():
-        raise httpx.HTTPStatusError("server error", request=request, response=response)
+        async def fail():
+            raise httpx.HTTPStatusError("server error", request=request, response=response)
 
-    with pytest.raises(httpx.HTTPStatusError):
-        await AccountSafeGrowwProvider._guarded(fail)
+        with pytest.raises(httpx.HTTPStatusError):
+            await AccountSafeGrowwProvider._guarded(fail)
 
-    assert AccountSafeGrowwProvider._blocked_until == 0.0
+        assert AccountSafeGrowwProvider._blocked_until == 0.0
+
+    asyncio.run(scenario())
