@@ -128,11 +128,11 @@ class CopperDirectionV2CoverageDiagnosticsTests(unittest.TestCase):
         )
 
     def test_family_stance_state_conflict_and_option_readiness_are_descriptive(self):
-        option_ready_conflicted = _family(
+        option_ready_bearish = _family(
             "OPTION_PARTICIPATION",
-            stance="UNKNOWN",
-            counts=False,
-            state="OPPOSING_NEW_OI_OPTION_EVIDENCE",
+            stance="BEARISH",
+            counts=True,
+            state="CROSS_SIDE_NEW_OI_BEARISH",
             detail={"rule_version": OPTION_PARTICIPATION_RULE_VERSION},
         )
         option_not_ready = _family(
@@ -159,7 +159,7 @@ class CopperDirectionV2CoverageDiagnosticsTests(unittest.TestCase):
                     counts=True,
                     state="STRUCTURE_CONFIRMED_BY_MOMENTUM",
                 ),
-                option=option_ready_conflicted,
+                option=option_ready_bearish,
             ),
             _row(
                 contract_version="COPPER_DIRECTION_BRAIN_V2_SHADOW_V2",
@@ -194,7 +194,7 @@ class CopperDirectionV2CoverageDiagnosticsTests(unittest.TestCase):
         self.assertEqual(
             diagnostic["family_state_distribution"]["OPTION_PARTICIPATION"],
             {
-                "OPPOSING_NEW_OI_OPTION_EVIDENCE": 1,
+                "CROSS_SIDE_NEW_OI_BEARISH": 1,
                 "OPTION_PARTICIPATION_NOT_READY": 1,
             },
         )
@@ -202,8 +202,8 @@ class CopperDirectionV2CoverageDiagnosticsTests(unittest.TestCase):
         self.assertEqual(option["rule_version_observations"], 2)
         self.assertEqual(option["ready_evaluations"], 1)
         self.assertEqual(option["readiness_pct"], 50.0)
-        self.assertEqual(option["vote_evaluations"], 0)
-        self.assertEqual(option["vote_rate_pct"], 0.0)
+        self.assertEqual(option["vote_evaluations"], 1)
+        self.assertEqual(option["vote_rate_pct"], 50.0)
 
     def test_directional_support_combinations_exclude_abstentions(self):
         result = summarize_prospective_coverage_rows([
