@@ -1,0 +1,126 @@
+name: Crude Mini Prospective Research Sampler
+
+on:
+  workflow_dispatch:
+  schedule:
+    # MCX energy session sampling in IST, every 30 minutes from 09:00 to 23:00.
+    # The existing five-minute option collector runs at :02/:07/.../:57, so these
+    # :00/:30 decision samples do not start on the collector's own scheduled minute.
+    - cron: "30 3 * * 1-5"          # 09:00 IST
+    - cron: "0,30 4-17 * * 1-5"    # 09:30-23:00 IST
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crude-mini-prospective-research-sampler
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Confirm production endpoint is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..6}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json \
+              && curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json \
+              && python - <<'PY'
+          import json
+          paths = (json.load(open("openapi.json")) or {}).get("paths") or {}
+          raise SystemExit(0 if "/v1/crude-oil-mini/current-mind/click" in paths else 1)
+          PY
+            then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Crude Mini production endpoint was not ready" >&2
+          exit 1
+
+      - name: Capture one genuine prospective episode
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Deliberately do not retry this POST. If the server commits the episode
+          # but the network response is lost, retrying could create a second click
+          # with a different actual timestamp and contaminate the sampling cadence.
+          CODE=$(curl --silent --show-error --max-time 300 -w "%{http_code}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X POST "$API_BASE/v1/crude-oil-mini/current-mind/click" \
+            -d '{}' \
+            -o crude-mini-prospective-result.json || echo 000)
+          echo "HTTP=$CODE"
+          [ "$CODE" = "200" ] || {
+            cat crude-mini-prospective-result.json 2>/dev/null || true
+            exit 1
+          }
+
+          python - <<'PY'
+          import json
+
+          with open("crude-mini-prospective-result.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+
+          status = data.get("status")
+          execution = data.get("execution") or {}
+          protocol = data.get("research_protocol") or {}
+          payload = data.get("data") or {}
+          ledger = payload.get("episode_ledger") or {}
+          memory = payload.get("prospective_experience_memory") or {}
+
+          assert data.get("point_in_time") is True, data
+          assert data.get("trade_instrument") == "OPTIONS_ONLY", data
+          assert execution.get("paper_signal_only") is True, execution
+          assert execution.get("live_execution_enabled") is False, execution
+          assert execution.get("broker_order_placement_enabled") is False, execution
+          assert int(execution.get("capital_committed") or 0) == 0, execution
+          assert protocol.get("status") == "FROZEN", protocol
+
+          if status == "SKIPPED_MARKET_CLOSED":
+              print(json.dumps({
+                  "status": status,
+                  "click_at": data.get("click_at"),
+                  "market": (data.get("market_session") or {}).get("status"),
+              }, indent=2, sort_keys=True))
+              raise SystemExit(0)
+
+          assert status == "EVALUATED", data
+          assert data.get("symbol") == "CRUDEOILM", data
+          assert ledger.get("status") == "ACTIVE", ledger
+          assert ledger.get("current_episode_captured") is True, ledger
+          assert ledger.get("decision_effect") == "NONE", ledger
+          assert ledger.get("promotion_eligible") is False, ledger
+          assert memory.get("current_mind_effect") == "NONE", memory
+          assert memory.get("integrated_v2_effect") == "NONE", memory
+          assert memory.get("decision_effect") == "NONE", memory
+          assert memory.get("promotion_eligible") is False, memory
+
+          print(json.dumps({
+              "status": status,
+              "click_at": data.get("click_at"),
+              "action": (data.get("current_mind") or {}).get("action"),
+              "episode_id": ledger.get("current_episode_id"),
+              "episode_count": ledger.get("episode_count"),
+              "new_outcomes_resolved": ledger.get("new_outcomes_resolved"),
+              "memory_status": memory.get("status"),
+              "prior_resolved_primary_cases": memory.get("prior_resolved_primary_cases"),
+              "decision_effect": memory.get("decision_effect"),
+              "paper_only": execution.get("paper_signal_only"),
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload prospective research result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crude-mini-prospective-result-${{ github.run_id }}
+          path: crude-mini-prospective-result.json
+          if-no-files-found: warn
+          retention-days: 30
