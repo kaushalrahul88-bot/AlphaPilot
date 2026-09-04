@@ -1,6 +1,6 @@
 from .mock import MockProvider
 from .upstox import UpstoxProvider
-from .groww_rate_limited import RateLimitedGrowwProvider
+from .groww_account_safe import AccountSafeGrowwProvider
 
 
 def get_provider(settings):
@@ -10,6 +10,6 @@ def get_provider(settings):
         return UpstoxProvider(settings)
 
     if provider == "GROWW":
-        return RateLimitedGrowwProvider(settings)
+        return AccountSafeGrowwProvider(settings)
 
     return MockProvider()
