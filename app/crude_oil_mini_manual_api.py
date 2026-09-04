@@ -15,6 +15,7 @@ from .crude_oil_mini_pit_candles import (
     read_crude_oil_mini_pit_candles,
     resolve_current_crude_oil_mini_future,
 )
+from .crude_oil_mini_prospective_memory_v1 import read_prospective_experience_memory
 from .crude_oil_mini_research_protocol_v1 import baseline_manifest
 from .crude_oil_pit_context_probe import probe_crude_oil_pit_context
 from .providers.factory import get_provider
@@ -134,6 +135,27 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                     "promotion_eligible": False,
                 }
             result["data"]["episode_ledger"] = episode_ledger
+
+            # Prospective Experience Memory V1 is deliberately computed only after
+            # the frozen decision exists. The reader excludes this same click and
+            # admits only prior 120m outcomes whose availability predates the click.
+            try:
+                experience_memory = await read_prospective_experience_memory(
+                    settings.database_url,
+                    current_result=result,
+                    as_of=click,
+                )
+            except Exception as exc:
+                experience_memory = {
+                    "status": "UNAVAILABLE",
+                    "model_id": "CRUDE_OIL_MINI_PROSPECTIVE_EXPERIENCE_MEMORY_V1",
+                    "reason": f"{exc.__class__.__name__}: {str(exc)[:500]}",
+                    "current_mind_effect": "NONE",
+                    "integrated_v2_effect": "NONE",
+                    "decision_effect": "NONE",
+                    "promotion_eligible": False,
+                }
+            result["data"]["prospective_experience_memory"] = experience_memory
             return result
         except Exception as exc:
             return {
