@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .commodities import mcx_session_status
+from .crude_oil_mini_episode_ledger_v1 import capture_episode_and_resolve_prior
 from .crude_oil_mini_live_click import evaluate_live_current_mind
 from .crude_oil_mini_live_inputs import read_live_crude_inputs
 from .crude_oil_mini_option_expression_v1 import build_option_expression
@@ -14,6 +15,7 @@ from .crude_oil_mini_pit_candles import (
     read_crude_oil_mini_pit_candles,
     resolve_current_crude_oil_mini_future,
 )
+from .crude_oil_mini_research_protocol_v1 import baseline_manifest
 from .crude_oil_pit_context_probe import probe_crude_oil_pit_context
 from .providers.factory import get_provider
 
@@ -39,6 +41,7 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 "product": "CRUDE_OIL_MINI",
                 "trade_instrument": "OPTIONS_ONLY",
                 "market_session": session,
+                "research_protocol": baseline_manifest(),
                 "execution": SAFE_EXECUTION,
             }
         if not str(settings.database_url or "").strip():
@@ -48,6 +51,7 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 "click_at": click.isoformat(),
                 "point_in_time": True,
                 "market_session": session,
+                "research_protocol": baseline_manifest(),
                 "execution": SAFE_EXECUTION,
             }
 
@@ -110,6 +114,26 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 **SAFE_EXECUTION,
                 "option_expression": option_expression,
             }
+            result["research_protocol"] = baseline_manifest()
+
+            # Episode/outcome research is strictly downstream. Failure to journal
+            # research state must never rewrite or block the frozen trade decision.
+            try:
+                episode_ledger = await capture_episode_and_resolve_prior(
+                    settings.database_url,
+                    result=result,
+                    candles=candles,
+                    as_of=click,
+                )
+            except Exception as exc:
+                episode_ledger = {
+                    "status": "UNAVAILABLE",
+                    "reason": f"{exc.__class__.__name__}: {str(exc)[:500]}",
+                    "baseline_id": baseline_manifest()["baseline_id"],
+                    "decision_effect": "NONE",
+                    "promotion_eligible": False,
+                }
+            result["data"]["episode_ledger"] = episode_ledger
             return result
         except Exception as exc:
             return {
@@ -121,5 +145,6 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 "trade_instrument": "OPTIONS_ONLY",
                 "market_session": session,
                 "manual_dashboard_click": True,
+                "research_protocol": baseline_manifest(),
                 "execution": SAFE_EXECUTION,
             }
