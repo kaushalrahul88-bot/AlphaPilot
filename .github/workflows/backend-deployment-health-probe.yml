@@ -1,0 +1,70 @@
+name: Backend Deployment Health Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Probe deployed health and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_sha="${GITHUB_SHA}"
+          for attempt in {1..36}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/health" -o health.json; then
+              python - <<'PY'
+          import json, os
+          data = json.load(open("health.json"))
+          deployed = data.get("deployment_commit")
+          current = os.environ["GITHUB_SHA"]
+          print(json.dumps(data, indent=2))
+          print(f"workflow_sha={current}")
+          print(f"deployment_commit={deployed}")
+          if deployed == current:
+              raise SystemExit(0)
+          raise SystemExit(2)
+          PY
+              rc=$?
+              if [ "$rc" -eq 0 ]; then
+                echo "Render is serving the workflow commit."
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Render did not report the expected commit within the probe window." >&2
+          cat health.json 2>/dev/null || true
+          exit 1
+
+      - name: Verify Crude Mini manual route is deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json
+          python - <<'PY'
+          import json
+          data = json.load(open("openapi.json"))
+          paths = data.get("paths") or {}
+          route = "/v1/crude-oil-mini/current-mind/click"
+          assert route in paths, f"missing deployed route: {route}"
+          assert "post" in paths[route], f"POST not exposed for {route}"
+          print(f"deployed_route={route}")
+          PY
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-deployment-health-probe
+          path: |
+            health.json
+            openapi.json
+          if-no-files-found: warn
