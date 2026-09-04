@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from .crude_oil_mini_descriptive_validation_v1 import read_descriptive_validation
 from .crude_oil_mini_episode_ledger_v1 import (
     OUTCOME_TABLE,
     read_episode_ledger_summary,
@@ -59,7 +60,11 @@ def _validation_counts_sync(database_url: str) -> dict:
     }
 
 
-def build_research_status(ledger: dict, validation_counts: dict) -> dict:
+def build_research_status(
+    ledger: dict,
+    validation_counts: dict,
+    descriptive_validation: dict | None = None,
+) -> dict:
     resolved = int(validation_counts.get("primary_resolved_cases") or 0)
     ready = resolved >= MIN_READY_CASES
     progress = min(100.0, (resolved / MIN_READY_CASES * 100.0) if MIN_READY_CASES else 100.0)
@@ -83,6 +88,7 @@ def build_research_status(ledger: dict, validation_counts: dict) -> dict:
             "prospective_test_unlocked": False,
             "promotion_eligible": False,
         },
+        "descriptive_validation": descriptive_validation,
         "pipeline": {
             "freeze_v1": "COMPLETE",
             "capture": "ACTIVE",
@@ -113,6 +119,9 @@ async def read_crude_oil_mini_research_status(database_url: str) -> dict:
             "decision_effect": "NONE",
             "promotion_eligible": False,
         }
-    ledger = await read_episode_ledger_summary(database_url)
+    ledger, descriptive = await asyncio.gather(
+        read_episode_ledger_summary(database_url),
+        read_descriptive_validation(database_url),
+    )
     counts = await asyncio.to_thread(_validation_counts_sync, database_url)
-    return build_research_status(ledger, counts)
+    return build_research_status(ledger, counts, descriptive)
