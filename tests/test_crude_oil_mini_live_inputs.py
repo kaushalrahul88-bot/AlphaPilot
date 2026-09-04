@@ -28,7 +28,7 @@ def _option_row(bucket: str, symbol: str, option_type: str, strike: float, oi: f
     }
 
 
-def test_option_positioning_uses_latest_and_previous_pit_buckets_without_direction_guess():
+def test_option_positioning_uses_latest_and_previous_pit_buckets_with_registered_rule():
     previous = "2026-09-03T23:00:00+05:30"
     latest = "2026-09-03T23:05:00+05:30"
     rows = [
@@ -50,8 +50,12 @@ def test_option_positioning_uses_latest_and_previous_pit_buckets_without_directi
     assert result["ce_total_oi_change_from_previous_bucket"] == 300
     assert result["pe_total_oi_change_from_previous_bucket"] == 600
     assert result["put_call_oi_ratio"] == 4200 / 2500
-    assert result["direction"] == "UNKNOWN"
-    assert result["counts_for_direction"] is False
+    assert result["direction"] == "BEARISH"
+    assert result["counts_for_direction"] is True
+    assert result["directional_inference"] == "COHERENT_TWO_SIDED_CONFIRMATION"
+    assert result["oi_premium_interpretation"]["model_id"] == "CRUDE_OIL_MINI_OPTION_OI_PREMIUM_INTERPRETATION_V1"
+    assert result["model_registration"]["status"] == "REGISTERED"
+    assert result["model_registration"]["raw_oi_alone_can_vote"] is False
     assert result["futures_oi_required"] is False
 
 
