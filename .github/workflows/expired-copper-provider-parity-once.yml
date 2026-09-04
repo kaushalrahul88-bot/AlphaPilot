@@ -1,0 +1,83 @@
+name: Expired Copper Provider Parity Once
+
+on:
+  push:
+    branches:
+      - probe/expired-copper-groww-history
+    paths:
+      - ".github/workflows/expired-copper-provider-parity-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+      EXPECTED_COMMIT: d2501cc6432c274bfc55819dbbe85c60c68d37b4
+    steps:
+      - name: Confirm exact production deploy is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          ready=0
+          for attempt in {1..10}; do
+            if curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json; then
+              if python - <<'PY'
+          import json, os
+          body=json.load(open('health.json'))
+          raise SystemExit(0 if body.get('deployment_commit') == os.environ['EXPECTED_COMMIT'] else 1)
+          PY
+              then
+                ready=1
+                break
+              fi
+            fi
+            sleep $((attempt * 6))
+          done
+          [ "$ready" = "1" ] || { cat health.json 2>/dev/null || true; echo "Expected deploy not live" >&2; exit 1; }
+
+      - name: Query Groww for exact expired Copper contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 240 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/current-mind-provider-parity" \
+            -o expired-copper-provider-parity.json
+          python - <<'PY'
+          import json
+          d=json.load(open('expired-copper-provider-parity.json'))
+          summary={
+            'mode': d.get('mode'),
+            'reference_contract': d.get('reference_contract'),
+            'groww_symbol': d.get('groww_symbol'),
+            'contract_identity_source': d.get('contract_identity_source'),
+            'provider_rows': d.get('provider_rows'),
+            'stored_rows': d.get('stored_rows'),
+            'shared_rows': d.get('shared_rows'),
+            'provider_only_timestamps': d.get('provider_only_timestamps'),
+            'stored_only_timestamps': d.get('stored_only_timestamps'),
+            'ohlc_mismatch_count': d.get('ohlc_mismatch_count'),
+            'checks': d.get('checks'),
+          }
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          if not (d.get('checks') or {}).get('provider_returned_rows'):
+            raise SystemExit('Groww returned no rows for the exact expired contract')
+          PY
+
+      - name: Upload diagnostic result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: expired-copper-provider-parity-${{ github.run_id }}
+          path: |
+            health.json
+            expired-copper-provider-parity.json
+          if-no-files-found: warn
+          retention-days: 30
