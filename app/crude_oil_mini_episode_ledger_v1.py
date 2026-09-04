@@ -436,7 +436,12 @@ def _diagnosis(episode: dict, max_up: float | None, max_down: float | None) -> s
 
 def _option_outcome(episode: dict, rows: list[dict], horizon_end: datetime) -> dict:
     start = _number(episode.get("option_premium_reference"))
-    visible = [row for row in rows if row["sample_bucket_at"] <= horizon_end]
+    visible = [
+        row
+        for row in rows
+        if row["sample_bucket_at"] <= horizon_end
+        and row.get("observed_at", row["sample_bucket_at"]) <= horizon_end
+    ]
     if start is None or start <= 0 or not visible:
         return {
             "option_observations": 0 if not visible else len(visible),
@@ -456,7 +461,7 @@ def _option_outcome(episode: dict, rows: list[dict], horizon_end: datetime) -> d
         "option_max_premium": max(premiums),
         "option_min_premium": min(premiums),
         "latest_option_available_at": max(row["collected_at"] for row in visible),
-        "endpoint_basis": "LATEST_IMMUTABLE_EXACT_CONTRACT_LTP_AT_OR_BEFORE_HORIZON",
+        "endpoint_basis": "LATEST_IMMUTABLE_EXACT_CONTRACT_LTP_OBSERVED_AT_OR_BEFORE_HORIZON",
     }
 
 
@@ -481,6 +486,8 @@ def analyze_episode_outcome(
     if resolved < horizon_end:
         return None
 
+    # Every path is hard-capped at its own preregistered horizon. A later bar from
+    # the same session is never allowed to leak into a shorter incomplete horizon.
     future = [bar for bar in candles if reference_at < bar["visible_at"] <= horizon_end]
     endpoint = next((bar for bar in future if bar["visible_at"] == horizon_end), None)
     full_horizon = endpoint is not None
@@ -491,13 +498,13 @@ def analyze_episode_outcome(
         path = future
         resolution_status = "RESOLVED"
     else:
-        path = [bar for bar in candles if reference_at < bar["visible_at"] and bar["visible_at"].date() == reference_at.date()]
-        resolution_status = "TRUNCATED_BY_SESSION"
+        path = future
+        resolution_status = "TRUNCATED_OR_INCOMPLETE_HORIZON"
         endpoint = path[-1] if path else None
 
     end_close = endpoint["close"] if endpoint else None
-    max_up = max((bar["high"] - reference_price for bar in path), default=None)
-    max_down = max((reference_price - bar["low"] for bar in path), default=None)
+    max_up = max((max(0.0, bar["high"] - reference_price) for bar in path), default=None)
+    max_down = max((max(0.0, reference_price - bar["low"]) for bar in path), default=None)
     atr = _number(episode.get("atr14"))
     action = str(episode.get("action") or "").upper()
     if action == "BUY_CE":
@@ -541,7 +548,9 @@ def analyze_episode_outcome(
             "no_intrabar_order_assumption": True,
             "same_bar_entry_exit": "AMBIGUOUS",
             "same_bar_stop_target": "AMBIGUOUS",
+            "horizon_path_never_exceeds_horizon_end": True,
             "option_prices": "IMMUTABLE_EXACT_CONTRACT_LTP_SNAPSHOTS_ONLY",
+            "option_observation_time_must_not_exceed_horizon": True,
             "missed_move_threshold_atr": MISSED_MOVE_ATR_MULTIPLE,
             "missed_move_opposite_max_atr": MISSED_MOVE_OPPOSITE_MAX_ATR_MULTIPLE,
             "decision_effect": "NONE",
