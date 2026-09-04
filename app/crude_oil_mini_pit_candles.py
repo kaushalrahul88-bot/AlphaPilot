@@ -34,22 +34,22 @@ INSERT INTO commodity_candles (
 )
 ON CONFLICT (provider, trading_symbol, timeframe_minutes, candle_at)
 DO UPDATE SET
-    open = EXCLUDED.open,
-    high = EXCLUDED.high,
-    low = EXCLUDED.low,
-    close = EXCLUDED.close,
-    volume = EXCLUDED.volume,
-    open_interest = EXCLUDED.open_interest,
     collected_at = LEAST(commodity_candles.collected_at, EXCLUDED.collected_at);
 """
 
 
 class CrudeOilMiniPITStore(PostgresCandleStore):
-    """CRUDEOILM-only store preserving when AlphaPilot first saw each candle.
+    """CRUDEOILM-only store preserving first-seen candle state and availability.
 
     The generic commodity store is intentionally left untouched because it is shared
     with older Copper/CRUDEOIL/NATURALGAS research. This subclass changes only the
     CRUDEOILM live/PIT path.
+
+    Existing OHLCV/OI values are not rewritten on refresh. If Groww revises a candle
+    later, using the revised values with the original availability timestamp would
+    leak future information into a historical PIT replay. A future revision-aware
+    store can retain both versions explicitly; this first implementation stays
+    strictly first-seen.
     """
 
     def _initialize_sync(self):
@@ -205,7 +205,7 @@ async def collect_crude_oil_mini_pit_candles(
         "latest_completed_at": (
             records[-1]["candle_at"].isoformat() if records else None
         ),
-        "pit_provenance": "EARLIEST_COLLECTED_AT_PRESERVED",
+        "pit_provenance": "FIRST_SEEN_CANDLE_STATE_IMMUTABLE",
         "regular_crude_alias_allowed": False,
     }
 
