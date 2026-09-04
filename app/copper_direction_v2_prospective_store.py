@@ -13,9 +13,17 @@ IST = ZoneInfo("Asia/Kolkata")
 TABLE_NAME = "copper_direction_v2_shadow_evaluations"
 MODEL_ID = "COPPER_DIRECTION_BRAIN_V2_SHADOW_V1"
 DEFAULT_CONTRACT_VERSION = "COPPER_DIRECTION_BRAIN_V2_SHADOW_V1"
+OPTION_PARTICIPATION_RULE_VERSION = "COPPER_OPTION_PARTICIPATION_V1"
 PROVENANCE_ID = "COPPER_DIRECTION_V2_FIRST_SEEN_IMMUTABLE_EVALUATIONS_V1"
 MAX_PROSPECTIVE_CAPTURE_LAG_SECONDS = 30.0
 DIRECTIONS = {"BULLISH", "BEARISH", "UNKNOWN"}
+DIRECTIONAL = {"BULLISH", "BEARISH"}
+READY_OPTION_PARTICIPATION_STATES = {
+    "CROSS_SIDE_NEW_OI_BULLISH",
+    "CROSS_SIDE_NEW_OI_BEARISH",
+    "OPPOSING_NEW_OI_OPTION_EVIDENCE",
+    "INSUFFICIENT_CROSS_SIDE_NEW_OI_CONFIRMATION",
+}
 FORBIDDEN_BOARD_KEYS = {
     "outcome",
     "future_return",
@@ -77,6 +85,23 @@ ON CONFLICT (model_id, board_as_of) DO NOTHING
 RETURNING evaluation_id;
 """
 
+# Deliberately restricted to immutable prediction-time fields. Coverage diagnostics
+# must never join to, select, or infer trade outcomes or future returns.
+COVERAGE_ROWS_SQL = f"""
+SELECT
+    contract_version,
+    board_as_of,
+    direction,
+    thesis_state,
+    supporting_families,
+    opposing_families,
+    counted_families,
+    families
+FROM {TABLE_NAME}
+WHERE model_id = %s
+ORDER BY board_as_of ASC
+"""
+
 
 def _connect(database_url: str):
     import psycopg
@@ -116,11 +141,7 @@ def _forbidden_path(value, path: tuple[str, ...] = ()) -> str | None:
 
 
 def _immutable_evaluation_snapshot(evaluation: dict) -> dict:
-    """Whitelist only fields produced at decision time.
-
-    Extra keys supplied later (for example an outcome label) are intentionally
-    ignored so they cannot change the prospective prediction record.
-    """
+    """Whitelist only fields produced at decision time."""
     keys = (
         "mode",
         "product",
@@ -167,14 +188,7 @@ def build_prospective_record(
     *,
     evaluated_at,
 ) -> dict:
-    """Build one immutable, outcome-blind prospective Direction V2 record.
-
-    Prospective storage deliberately refuses historical ``as_of`` values. Historical
-    Direction V2 reads remain available through the read-only endpoint, but they are
-    not allowed into this provenance table. Contract version is captured explicitly
-    so prospective records from different frozen Direction V2 rules are never mixed
-    silently; existing pre-version rows retain the V1 default and are not rewritten.
-    """
+    """Build one immutable, outcome-blind prospective Direction V2 record."""
     evaluated = _stamp(evaluated_at)
     board_as_of = _stamp(board.get("as_of"))
     lag_seconds = (evaluated - board_as_of).total_seconds()
@@ -252,6 +266,167 @@ def _db_record(record: dict) -> dict:
     }
 
 
+def _json_value(value, default):
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, type(default)) else default
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default
+    return default
+
+
+def _pct(part: int, total: int) -> float:
+    return round((int(part) / int(total)) * 100.0, 3) if total else 0.0
+
+
+def _increment(mapping: dict[str, int], key) -> None:
+    normalized = str(key or "UNKNOWN")
+    mapping[normalized] = mapping.get(normalized, 0) + 1
+
+
+def _combo(values) -> str:
+    normalized = sorted({str(value) for value in (values or []) if str(value).strip()})
+    return "+".join(normalized) if normalized else "NONE"
+
+
+def _new_contract_diagnostics() -> dict:
+    return {
+        "evaluations": 0,
+        "directional_evaluations": 0,
+        "abstentions": 0,
+        "by_direction": {},
+        "by_thesis_state": {},
+        "family_counted_vote_frequency": {},
+        "family_stance_distribution": {},
+        "family_state_distribution": {},
+        "supporting_family_combinations": {},
+        "opposing_family_combinations": {},
+        "evaluations_with_at_least_two_counted_families": 0,
+        "option_participation": {
+            "rule_version": OPTION_PARTICIPATION_RULE_VERSION,
+            "rule_version_observations": 0,
+            "ready_evaluations": 0,
+            "vote_evaluations": 0,
+            "by_stance": {},
+            "by_state": {},
+        },
+    }
+
+
+def summarize_prospective_coverage_rows(rows: list[dict]) -> dict:
+    """Describe immutable prospective predictions without reading any outcome data."""
+    contracts: dict[str, dict] = {}
+    first_board_as_of = None
+    last_board_as_of = None
+
+    for row in rows:
+        contract_version = str(row.get("contract_version") or DEFAULT_CONTRACT_VERSION)
+        diagnostic = contracts.setdefault(contract_version, _new_contract_diagnostics())
+        diagnostic["evaluations"] += 1
+
+        board_as_of = row.get("board_as_of")
+        if board_as_of is not None:
+            first_board_as_of = first_board_as_of or board_as_of
+            last_board_as_of = board_as_of
+
+        direction = str(row.get("direction") or "UNKNOWN").upper()
+        if direction not in DIRECTIONS:
+            direction = "UNKNOWN"
+        thesis_state = str(row.get("thesis_state") or "UNKNOWN")
+        _increment(diagnostic["by_direction"], direction)
+        _increment(diagnostic["by_thesis_state"], thesis_state)
+        if direction in DIRECTIONAL:
+            diagnostic["directional_evaluations"] += 1
+        else:
+            diagnostic["abstentions"] += 1
+
+        counted = _json_value(row.get("counted_families"), [])
+        counted_unique = {str(value) for value in counted if str(value).strip()}
+        if len(counted_unique) >= 2:
+            diagnostic["evaluations_with_at_least_two_counted_families"] += 1
+
+        supporting = _json_value(row.get("supporting_families"), [])
+        opposing = _json_value(row.get("opposing_families"), [])
+        if direction in DIRECTIONAL:
+            _increment(diagnostic["supporting_family_combinations"], _combo(supporting))
+        if opposing:
+            _increment(diagnostic["opposing_family_combinations"], _combo(opposing))
+
+        families = _json_value(row.get("families"), {})
+        for family_name, family_payload in families.items():
+            family = family_payload if isinstance(family_payload, dict) else {}
+            name = str(family_name)
+            stance = str(family.get("stance") or "UNKNOWN").upper()
+            if stance not in DIRECTIONS:
+                stance = "UNKNOWN"
+            state = str(family.get("state") or "UNKNOWN")
+
+            stance_distribution = diagnostic["family_stance_distribution"].setdefault(name, {})
+            state_distribution = diagnostic["family_state_distribution"].setdefault(name, {})
+            _increment(stance_distribution, stance)
+            _increment(state_distribution, state)
+            if family.get("counts_for_direction") and stance in DIRECTIONAL:
+                _increment(diagnostic["family_counted_vote_frequency"], name)
+
+            if name == "OPTION_PARTICIPATION":
+                option = diagnostic["option_participation"]
+                detail = family.get("detail") if isinstance(family.get("detail"), dict) else {}
+                rule_version = str(detail.get("rule_version") or "")
+                if rule_version == OPTION_PARTICIPATION_RULE_VERSION:
+                    option["rule_version_observations"] += 1
+                if state in READY_OPTION_PARTICIPATION_STATES:
+                    option["ready_evaluations"] += 1
+                if family.get("counts_for_direction") and stance in DIRECTIONAL:
+                    option["vote_evaluations"] += 1
+                _increment(option["by_stance"], stance)
+                _increment(option["by_state"], state)
+
+    total = sum(int(value["evaluations"]) for value in contracts.values())
+    overall_direction: dict[str, int] = {}
+    overall_thesis: dict[str, int] = {}
+    for diagnostic in contracts.values():
+        evaluations = int(diagnostic["evaluations"])
+        diagnostic["directional_coverage_pct"] = _pct(
+            diagnostic["directional_evaluations"], evaluations
+        )
+        diagnostic["at_least_two_counted_families_pct"] = _pct(
+            diagnostic["evaluations_with_at_least_two_counted_families"], evaluations
+        )
+        option = diagnostic["option_participation"]
+        option["readiness_pct"] = _pct(option["ready_evaluations"], evaluations)
+        option["vote_rate_pct"] = _pct(option["vote_evaluations"], evaluations)
+        for key, count in diagnostic["by_direction"].items():
+            overall_direction[key] = overall_direction.get(key, 0) + int(count)
+        for key, count in diagnostic["by_thesis_state"].items():
+            overall_thesis[key] = overall_thesis.get(key, 0) + int(count)
+
+    directional = overall_direction.get("BULLISH", 0) + overall_direction.get("BEARISH", 0)
+    return {
+        "evaluations": total,
+        "first_board_as_of": (
+            first_board_as_of.isoformat() if hasattr(first_board_as_of, "isoformat") else first_board_as_of
+        ),
+        "last_board_as_of": (
+            last_board_as_of.isoformat() if hasattr(last_board_as_of, "isoformat") else last_board_as_of
+        ),
+        "by_contract_version": {
+            version: int(diagnostic["evaluations"])
+            for version, diagnostic in contracts.items()
+        },
+        "by_direction": overall_direction,
+        "by_thesis_state": overall_thesis,
+        "directional_evaluations": directional,
+        "abstentions": overall_direction.get("UNKNOWN", 0),
+        "directional_coverage_pct": _pct(directional, total),
+        "contract_diagnostics": contracts,
+    }
+
+
 def initialize_store_sync(database_url: str) -> None:
     database_url = str(database_url or "").strip()
     if not database_url:
@@ -266,12 +441,7 @@ async def initialize_store(database_url: str) -> None:
 
 
 class CopperDirectionV2ProspectiveStore:
-    """Append-only point-in-time provenance for shadow Direction V2 evaluations.
-
-    The unique ``(model_id, board_as_of)`` key plus ``ON CONFLICT DO NOTHING`` makes
-    the first evaluation for a point-in-time board authoritative. There is no update
-    method and no outcome column, so later labels cannot rewrite the stored thesis.
-    """
+    """Append-only point-in-time provenance for shadow Direction V2 evaluations."""
 
     def __init__(self, database_url: str):
         self.database_url = str(database_url or "").strip()
@@ -293,64 +463,31 @@ class CopperDirectionV2ProspectiveStore:
     def _coverage_sync(self) -> dict:
         with _connect(self.database_url) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT COUNT(*), MIN(board_as_of), MAX(board_as_of)
-                    FROM {TABLE_NAME}
-                    WHERE model_id = %s
-                    """,
-                    (MODEL_ID,),
-                )
-                total_row = cursor.fetchone() or (0, None, None)
-                cursor.execute(
-                    f"""
-                    SELECT direction, thesis_state, COUNT(*)
-                    FROM {TABLE_NAME}
-                    WHERE model_id = %s
-                    GROUP BY direction, thesis_state
-                    ORDER BY direction, thesis_state
-                    """,
-                    (MODEL_ID,),
-                )
-                grouped = cursor.fetchall()
-                cursor.execute(
-                    f"""
-                    SELECT contract_version, COUNT(*)
-                    FROM {TABLE_NAME}
-                    WHERE model_id = %s
-                    GROUP BY contract_version
-                    ORDER BY contract_version
-                    """,
-                    (MODEL_ID,),
-                )
-                contract_rows = cursor.fetchall()
-        total = int(total_row[0] or 0)
-        by_direction: dict[str, int] = {}
-        by_thesis_state: dict[str, int] = {}
-        for direction, thesis_state, count in grouped:
-            count = int(count or 0)
-            by_direction[str(direction)] = by_direction.get(str(direction), 0) + count
-            by_thesis_state[str(thesis_state)] = by_thesis_state.get(str(thesis_state), 0) + count
-        by_contract_version = {
-            str(contract_version): int(count or 0)
-            for contract_version, count in contract_rows
-        }
-        directional = by_direction.get("BULLISH", 0) + by_direction.get("BEARISH", 0)
+                cursor.execute(COVERAGE_ROWS_SQL, (MODEL_ID,))
+                rows = [
+                    {
+                        "contract_version": row[0],
+                        "board_as_of": row[1],
+                        "direction": row[2],
+                        "thesis_state": row[3],
+                        "supporting_families": row[4],
+                        "opposing_families": row[5],
+                        "counted_families": row[6],
+                        "families": row[7],
+                    }
+                    for row in cursor.fetchall()
+                ]
+        coverage = summarize_prospective_coverage_rows(rows)
         return {
             "status": "ACTIVE",
             "model_id": MODEL_ID,
             "provenance_id": PROVENANCE_ID,
-            "evaluations": total,
-            "first_board_as_of": total_row[1].isoformat() if total_row[1] else None,
-            "last_board_as_of": total_row[2].isoformat() if total_row[2] else None,
-            "by_contract_version": by_contract_version,
-            "by_direction": by_direction,
-            "by_thesis_state": by_thesis_state,
-            "directional_evaluations": directional,
-            "abstentions": by_direction.get("UNKNOWN", 0),
-            "directional_coverage_pct": round((directional / total) * 100.0, 3) if total else 0.0,
+            **coverage,
             "outcome_data_read": False,
             "performance_claim": None,
+            "diagnostic_only": True,
+            "thresholds_changed": False,
+            "model_rules_changed": False,
             "first_seen_immutable": True,
             "production_rules_changed": False,
             "live_execution_enabled": False,
