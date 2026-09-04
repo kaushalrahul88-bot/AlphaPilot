@@ -7,6 +7,11 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from .commodity_time import parse_ist_timestamp
+from .crude_oil_mini_option_observation_store import (
+    PROVENANCE_ID,
+    TABLE_NAME,
+    initialize_crude_oil_mini_option_observation_store_sync,
+)
 
 
 MODEL_ID = "CRUDE_OIL_MINI_OPTION_PREMIUM_MEMORY_V1"
@@ -19,12 +24,12 @@ MIN_DESCRIPTIVE_TRADING_DAYS = 2
 IST = ZoneInfo("Asia/Kolkata")
 
 
-READ_SQL = """
+READ_SQL = f"""
 SELECT
     underlying_symbol, trading_symbol, expiry_date, strike, option_type, lot_size,
     sample_bucket_at, observed_at, collected_at, underlying_price, last_price,
     volume, open_interest, bid_price, ask_price
-FROM commodity_option_snapshots
+FROM {TABLE_NAME}
 WHERE provider = %s
   AND underlying_symbol = %s
   AND sample_bucket_at >= %s
@@ -184,6 +189,7 @@ def analyze_premium_memory_rows(
     *,
     as_of,
     max_gap_minutes: float = MAX_INTRADAY_GAP_MINUTES,
+    provenance_verified: bool = False,
 ) -> dict:
     """Build exact-contract, PIT-visible option-premium response memory.
 
@@ -198,8 +204,9 @@ def analyze_premium_memory_rows(
         if item is not None:
             normalized.append(item)
 
-    # One immutable research observation per exact contract/sample bucket. If a
-    # caller supplies duplicates, retain the earliest collected observation.
+    # One research observation per exact contract/sample bucket. The immutable DB
+    # source already enforces first-seen semantics. Direct/test callers may still
+    # supply duplicates, so retain the earliest collected observation defensively.
     deduped = {}
     for row in sorted(normalized, key=lambda item: item["collected_at"]):
         key = (row["trading_symbol"], row["sample_bucket_at"])
@@ -236,7 +243,7 @@ def analyze_premium_memory_rows(
         "model_id": MODEL_ID,
         "underlying_symbol": UNDERLYING,
         "as_of": click.isoformat(),
-        "data_type": "LIVE_PIT_OPTION_LTP_SNAPSHOTS_NOT_OHLC",
+        "data_type": "LIVE_PIT_FIRST_SEEN_OPTION_LTP_SNAPSHOTS_NOT_OHLC",
         "snapshot_count": len(deduped),
         "contract_count": len(contracts),
         "response_segments": total_segments,
@@ -245,8 +252,14 @@ def analyze_premium_memory_rows(
         "contracts": contracts,
         "method": "EXACT_CONTRACT_CONSECUTIVE_INTRADAY_OBSERVATIONS_NO_INTERPOLATION",
         "pit_filter": "sample_bucket_at, observed_at and collected_at must all be <= as_of",
-        "first_seen_immutable": False,
-        "storage_note": "Existing generic snapshot buckets may be updated on same-bucket conflict; promotion remains blocked.",
+        "first_seen_immutable": bool(provenance_verified),
+        "provenance_id": PROVENANCE_ID if provenance_verified else "UNVERIFIED_CALLER_ROWS",
+        "storage_note": (
+            "Prospective Mini-only first-seen observations; legacy generic snapshots are not backfilled."
+            if provenance_verified
+            else "Caller-provided rows are PIT-filtered but immutable provenance is not asserted."
+        ),
+        "historical_backfill_used": False,
         "risk_translation_effect": "NONE",
         "current_mind_effect": "NONE",
         "integrated_v2_effect": "NONE",
@@ -261,6 +274,9 @@ def analyze_premium_memory_rows(
 def _read_sync(database_url: str, start: datetime, as_of: datetime) -> list[dict]:
     import psycopg
 
+    # Also guarantees the immutable source exists when this reader is used outside
+    # the Render bootstrap. No legacy row is copied during initialization.
+    initialize_crude_oil_mini_option_observation_store_sync(database_url)
     with psycopg.connect(database_url, connect_timeout=10) as connection:
         with connection.cursor() as cursor:
             cursor.execute(READ_SQL, (PROVIDER, UNDERLYING, start, as_of, as_of, as_of))
@@ -290,6 +306,11 @@ async def read_crude_oil_mini_premium_memory(
     days = max(1, min(int(lookback_days), 30))
     start = click - timedelta(days=days)
     rows = await asyncio.to_thread(_read_sync, database_url, start, click)
-    result = analyze_premium_memory_rows(rows, as_of=click, max_gap_minutes=max_gap_minutes)
+    result = analyze_premium_memory_rows(
+        rows,
+        as_of=click,
+        max_gap_minutes=max_gap_minutes,
+        provenance_verified=True,
+    )
     result["lookback_days"] = days
     return result
