@@ -8,7 +8,9 @@ from .crude_oil_mini_participation_v2 import build_participation_observation
 from .crude_oil_mini_point_in_time_context import latest_known_as_of
 
 MODE = "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_INTEGRATED_SHADOW"
+CONTRACT_VERSION = "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_INTEGRATED_SHADOW_V2"
 DIRECTIONAL = {"BULLISH", "BEARISH"}
+DIRECTION_MEMORY_DEPENDS_ON_ORIGINS = ("LOCAL_PRICE_STRUCTURE",)
 INDEPENDENT_FAMILIES = (
     "LOCAL_STRUCTURE",
     "PARTICIPATION",
@@ -103,11 +105,17 @@ def _memory_family(memory_cases: list[dict], snapshot: dict, click_timestamp: st
         "family": "DIRECTION_MEMORY",
         "causal_origin": "HISTORICAL_ANALOGUE",
         "independence_status": "INDEPENDENT" if directional else "INDEPENDENT_CONTEXT_ONLY",
-        "depends_on_origins": [],
+        "depends_on_origins": list(DIRECTION_MEMORY_DEPENDS_ON_ORIGINS),
         "counts_for_direction": directional,
         "stance": stance if directional else "UNKNOWN",
         "state": result.get("status"),
-        "detail": result,
+        "detail": {
+            **result,
+            "causal_dependency_rule": (
+                "Analogue selection uses current local-price/structure state, so Direction Memory "
+                "is suppressed whenever LOCAL_PRICE_STRUCTURE is simultaneously counted."
+            ),
+        },
     }
 
 
@@ -237,7 +245,8 @@ def evaluate_integrated_direction_v2_shadow(
             "An Event vote requires the PIT lifecycle plus mechanism, materiality, novelty, confirmed reaction, and auditable reaction dependency.",
             "An Event confirmed by a simultaneously directional Local Structure or Global Crude origin is suppressed as duplicate confirmation.",
             "USDINR is translation context only and cannot independently create or reverse direction.",
-            "Direction Memory remains geometry-independent and may use only historically matured cases.",
+            "Direction Memory is geometry-independent and may use only historically matured cases.",
+            "Direction Memory analogue selection depends on current local-price/structure state, so it cannot double-count LOCAL_STRUCTURE as a second independent confirmation.",
             "Direction does not imply setup validity, entry readiness, or an option trade.",
         ],
         "integration_contract": integration_contract(),
@@ -246,7 +255,7 @@ def evaluate_integrated_direction_v2_shadow(
 
 def integration_contract() -> dict:
     return {
-        "version": "CRUDE_OIL_MINI_DIRECTION_BRAIN_V2_INTEGRATED_SHADOW_V1",
+        "version": CONTRACT_VERSION,
         "research_only": True,
         "shadow_only": True,
         "current_mind_effect": "NONE",
@@ -256,6 +265,8 @@ def integration_contract() -> dict:
         "independent_direction_families": list(INDEPENDENT_FAMILIES),
         "causal_origin_deduplication": True,
         "dependent_reaction_confirmation_deduplication": True,
+        "direction_memory_depends_on_origins": list(DIRECTION_MEMORY_DEPENDS_ON_ORIGINS),
+        "local_structure_plus_direction_memory_two_family_allowed": False,
         "legacy_price_volume_participation_vote_allowed": False,
         "options_only_system": True,
         "option_oi_primary_positioning_context": True,
