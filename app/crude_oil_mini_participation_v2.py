@@ -8,6 +8,7 @@ from .crude_oil_mini_market_perception import clean_ohlcv, latest_visible_index
 DIRECTIONAL = {"BULLISH", "BEARISH"}
 INITIATIVE_STATES = {"INITIATIVE_BUYING", "INITIATIVE_SELLING"}
 DEFAULT_LOOKBACK_BARS = 6
+REGISTERED_OPTION_MODEL = "CRUDE_OIL_MINI_OPTION_OI_PREMIUM_INTERPRETATION_V1"
 
 
 def _f(value, default=None):
@@ -45,12 +46,13 @@ def build_participation_observation(
     option_positioning: dict | None = None,
     lookback_bars: int = DEFAULT_LOOKBACK_BARS,
 ) -> dict:
-    """Describe commitment/acceptance from completed CRUDEOILM bars only.
+    """Describe commitment/acceptance from completed CRUDEOILM bars and option flow.
 
-    AlphaPilot is options-only. Persisted point-in-time option-chain OI is therefore
-    the primary positioning context when available; futures OI is optional supporting
-    context. Neither raw option OI nor price+volume is converted into an independent
-    directional vote without a separately preregistered causal rule.
+    AlphaPilot is options-only. Persisted point-in-time option-chain OI is the
+    primary positioning context when available; futures OI is optional supporting
+    context. Raw option OI and price+volume cannot vote by themselves. The
+    preregistered OI+premium model may vote prospectively in this shadow family
+    only when its own two-sided confirmation contract qualifies.
     """
     if lookback_bars < 4:
         raise ValueError("lookback_bars must be at least 4")
@@ -105,6 +107,15 @@ def build_participation_observation(
 
     option_context = dict(option_positioning or {})
     option_available = option_context.get("status") == "AVAILABLE"
+    interpretation = option_context.get("oi_premium_interpretation") or {}
+    option_model_id = str(interpretation.get("model_id") or "")
+    option_direction = str(option_context.get("direction") or "UNKNOWN").upper()
+    registered_option_vote = (
+        option_available
+        and option_model_id == REGISTERED_OPTION_MODEL
+        and option_context.get("counts_for_direction") is True
+        and option_direction in DIRECTIONAL
+    )
     detail = {
         "click_timestamp": parse_ist_timestamp(click_timestamp).isoformat(),
         "lookback_bars": lookback_bars,
@@ -119,12 +130,26 @@ def build_participation_observation(
         "option_positioning_primary": True,
         "option_positioning_available": option_available,
         "option_positioning": option_context,
+        "registered_option_model": option_model_id or None,
+        "registered_option_model_vote": registered_option_vote,
         "accepted_above_prior_range": accepted_above,
         "accepted_below_prior_range": accepted_below,
         "value_agrees": value_agrees,
         "range_expanded": range_expanded,
         "local_volume_expanded": local_volume_expanded,
     }
+
+    if registered_option_vote:
+        return {
+            "family": "PARTICIPATION",
+            "causal_origin": "OPTION_OI_PREMIUM_FLOW",
+            "independence_status": "INDEPENDENT",
+            "depends_on_origins": [],
+            "counts_for_direction": True,
+            "stance": option_direction,
+            "state": "OPTION_OI_PREMIUM_CAUSAL_RULE_V1",
+            "detail": detail,
+        }
 
     if not activity_expanded:
         return _empty("LOW_OR_NORMAL_PARTICIPATION", detail=detail)
@@ -203,12 +228,14 @@ def participation_contract() -> dict:
         "current_mind_effect": "NONE",
         "default_lookback_bars": DEFAULT_LOOKBACK_BARS,
         "default_is_architecture_hypothesis_not_optimized": True,
-        "directional_states": sorted(INITIATIVE_STATES),
+        "directional_states": sorted(INITIATIVE_STATES | {"OPTION_OI_PREMIUM_CAUSAL_RULE_V1"}),
         "price_volume_only_can_vote": False,
         "position_closure_states_can_vote": False,
         "options_only_system": True,
         "option_oi_primary_positioning_context": True,
         "raw_option_oi_directional_vote_allowed": False,
+        "registered_option_oi_premium_rule_can_vote": True,
+        "registered_option_oi_premium_model": REGISTERED_OPTION_MODEL,
         "futures_oi_required": False,
         "futures_oi_role": "OPTIONAL_SUPPORTING_CONTEXT_ONLY",
         "requires_acceptance_for_direction": True,

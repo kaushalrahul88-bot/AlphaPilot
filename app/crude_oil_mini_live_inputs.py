@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .commodity_time import parse_ist_timestamp
 from .crude_news_intelligence import apply_crude_news_intelligence
+from .crude_oil_mini_option_oi_premium_v1 import interpret_option_oi_premium
 from .news import latest_commodity_news
 
 
@@ -316,6 +317,10 @@ def summarize_option_positioning(rows: list[dict], click_at) -> dict:
     latest_time = _as_ist(latest_bucket)
     age_minutes = max(0.0, (click - latest_time).total_seconds() / 60.0)
     oi_covered = sum(1 for row in contracts if _number(row.get("open_interest")) is not None)
+    interpretation = interpret_option_oi_premium(
+        contracts,
+        previous_sample_bucket_at=previous_bucket,
+    )
     return {
         "status": "AVAILABLE" if contracts else "UNAVAILABLE",
         "as_of": click.isoformat(),
@@ -338,9 +343,11 @@ def summarize_option_positioning(rows: list[dict], click_at) -> dict:
         "pe_total_volume": total(pe, "volume"),
         "top_ce_oi": top_oi(ce),
         "top_pe_oi": top_oi(pe),
-        "direction": "UNKNOWN",
-        "counts_for_direction": False,
-        "directional_inference": "WITHHELD_UNTIL_OPTION_OI_PREMIUM_CAUSAL_RULE_IS_PREREGISTERED",
+        "direction": interpretation["direction"],
+        "counts_for_direction": interpretation["counts_for_direction"],
+        "directional_inference": interpretation["status"],
+        "oi_premium_interpretation": interpretation,
+        "model_registration": interpretation["registration"],
         "futures_oi_required": False,
         "futures_oi_role": "OPTIONAL_SUPPORTING_CONTEXT_ONLY",
         "pit_filter": "sample_bucket_at, observed_at and collected_at must all be <= click",
@@ -440,7 +447,10 @@ def option_context_record(option_positioning: dict) -> dict | None:
             "pe_total_oi_change_from_previous_bucket": option_positioning.get("pe_total_oi_change_from_previous_bucket"),
             "top_ce_oi": option_positioning.get("top_ce_oi"),
             "top_pe_oi": option_positioning.get("top_pe_oi"),
+            "direction": option_positioning.get("direction"),
+            "counts_for_direction": option_positioning.get("counts_for_direction"),
             "directional_inference": option_positioning.get("directional_inference"),
+            "model_id": (option_positioning.get("oi_premium_interpretation") or {}).get("model_id"),
         },
     }
 
