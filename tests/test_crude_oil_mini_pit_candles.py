@@ -11,10 +11,12 @@ import app.crude_oil_mini_pit_candles as pit
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def test_crude_mini_pit_sql_preserves_earliest_observation():
+def test_crude_mini_pit_sql_preserves_first_seen_state_and_time():
     sql = " ".join(pit.CRUDE_MINI_PIT_UPSERT_SQL.split()).upper()
     assert "LEAST(COMMODITY_CANDLES.COLLECTED_AT, EXCLUDED.COLLECTED_AT)" in sql
     assert "COLLECTED_AT = EXCLUDED.COLLECTED_AT" not in sql
+    for column in ("OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "OPEN_INTEREST"):
+        assert f"{column} = EXCLUDED.{column}" not in sql
 
 
 def test_crude_mini_pit_reader_gates_availability_and_bar_close():
@@ -76,7 +78,7 @@ def test_live_collection_is_bounded_and_never_uses_regular_crude(monkeypatch):
     assert fetch_start == datetime(2026, 9, 4, 14, 10, tzinfo=IST)
     assert fetch_end == now
     assert result["regular_crude_alias_allowed"] is False
-    assert result["pit_provenance"] == "EARLIEST_COLLECTED_AT_PRESERVED"
+    assert result["pit_provenance"] == "FIRST_SEEN_CANDLE_STATE_IMMUTABLE"
 
 
 def test_pit_read_passes_exact_as_of_to_store():
