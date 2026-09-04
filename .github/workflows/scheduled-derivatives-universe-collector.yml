@@ -1,7 +1,10 @@
 name: Scheduled Live Derivatives State Collector
 on:
   schedule:
-    - cron: "5,35 3-18 * * 1-5"
+    # UTC :17/:47 => IST :47/:17. This preserves the 30-minute cadence while
+    # moving the high-volume universe scan away from AlphaPilot's quarter-hour
+    # Crude Mini live-shadow decision slots.
+    - cron: "17,47 3-18 * * 1-5"
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,7 +19,7 @@ jobs:
       matrix:
         shard: [0,1,2,3]
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
