@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from .commodities import mcx_session_status
 from .crude_oil_mini_live_click import evaluate_live_current_mind
 from .crude_oil_mini_live_inputs import read_live_crude_inputs
+from .crude_oil_mini_option_expression_v1 import build_option_expression
 from .crude_oil_mini_pit_candles import (
     CrudeOilMiniPITStore,
     collect_crude_oil_mini_pit_candles,
@@ -71,13 +72,23 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 click_at=click,
                 scheduled_slot_at=click,
             )
+            action = str((result.get("current_mind") or {}).get("action") or "NO_TRADE")
+            option_expression = build_option_expression(
+                action=action,
+                option_positioning=(live_inputs or {}).get("option_positioning"),
+                click_at=click,
+            )
             result["status"] = "EVALUATED"
             result["market_session"] = session
             result["data"]["candle_collection"] = collection
             result["data"]["candle_source"] = "POSTGRES_CRUDEOILM_PIT_FIRST_SEEN"
             result["data"]["expensive_180_day_live_refetch_used"] = False
             result["manual_dashboard_click"] = True
-            result["execution"] = {**result.get("execution", {}), **SAFE_EXECUTION}
+            result["execution"] = {
+                **result.get("execution", {}),
+                **SAFE_EXECUTION,
+                "option_expression": option_expression,
+            }
             return result
         except Exception as exc:
             return {
