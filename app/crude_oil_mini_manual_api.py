@@ -7,6 +7,7 @@ from .commodities import mcx_session_status
 from .crude_oil_mini_live_click import evaluate_live_current_mind
 from .crude_oil_mini_live_inputs import read_live_crude_inputs
 from .crude_oil_mini_option_expression_v1 import build_option_expression
+from .crude_oil_mini_option_premium_memory_v1 import read_crude_oil_mini_premium_memory
 from .crude_oil_mini_pit_candles import (
     CrudeOilMiniPITStore,
     collect_crude_oil_mini_pit_candles,
@@ -78,11 +79,31 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 option_positioning=(live_inputs or {}).get("option_positioning"),
                 click_at=click,
             )
+
+            # Descriptive premium memory is downstream research only. A memory
+            # read failure must never block or alter the frozen Current Mind.
+            try:
+                premium_memory = await read_crude_oil_mini_premium_memory(
+                    settings.database_url,
+                    as_of=click,
+                    lookback_days=7,
+                )
+            except Exception as exc:
+                premium_memory = {
+                    "status": "UNAVAILABLE",
+                    "model_id": "CRUDE_OIL_MINI_OPTION_PREMIUM_MEMORY_V1",
+                    "reason": f"{exc.__class__.__name__}: {str(exc)[:240]}",
+                    "risk_translation_effect": "NONE",
+                    "current_mind_effect": "NONE",
+                    "promotion_eligible": False,
+                }
+
             result["status"] = "EVALUATED"
             result["market_session"] = session
             result["data"]["candle_collection"] = collection
             result["data"]["candle_source"] = "POSTGRES_CRUDEOILM_PIT_FIRST_SEEN"
             result["data"]["expensive_180_day_live_refetch_used"] = False
+            result["data"]["option_premium_memory"] = premium_memory
             result["manual_dashboard_click"] = True
             result["execution"] = {
                 **result.get("execution", {}),
