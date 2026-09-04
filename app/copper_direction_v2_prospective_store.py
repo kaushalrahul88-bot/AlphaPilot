@@ -12,6 +12,7 @@ from .commodity_time import parse_ist_timestamp
 IST = ZoneInfo("Asia/Kolkata")
 TABLE_NAME = "copper_direction_v2_shadow_evaluations"
 MODEL_ID = "COPPER_DIRECTION_BRAIN_V2_SHADOW_V1"
+DEFAULT_CONTRACT_VERSION = "COPPER_DIRECTION_BRAIN_V2_SHADOW_V1"
 PROVENANCE_ID = "COPPER_DIRECTION_V2_FIRST_SEEN_IMMUTABLE_EVALUATIONS_V1"
 MAX_PROSPECTIVE_CAPTURE_LAG_SECONDS = 30.0
 DIRECTIONS = {"BULLISH", "BEARISH", "UNKNOWN"}
@@ -28,6 +29,7 @@ FORBIDDEN_BOARD_KEYS = {
 SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     model_id TEXT NOT NULL CHECK (model_id = '{MODEL_ID}'),
+    contract_version TEXT NOT NULL DEFAULT '{DEFAULT_CONTRACT_VERSION}',
     evaluation_id TEXT NOT NULL,
     evaluated_at TIMESTAMPTZ NOT NULL,
     board_as_of TIMESTAMPTZ NOT NULL,
@@ -47,21 +49,26 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     UNIQUE (evaluation_id),
     UNIQUE (record_hash)
 );
+ALTER TABLE {TABLE_NAME}
+    ADD COLUMN IF NOT EXISTS contract_version TEXT NOT NULL
+    DEFAULT '{DEFAULT_CONTRACT_VERSION}';
 CREATE INDEX IF NOT EXISTS copper_direction_v2_shadow_evaluated_idx
     ON {TABLE_NAME} (evaluated_at DESC);
 CREATE INDEX IF NOT EXISTS copper_direction_v2_shadow_direction_idx
     ON {TABLE_NAME} (direction, thesis_state, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS copper_direction_v2_shadow_contract_idx
+    ON {TABLE_NAME} (contract_version, evaluated_at DESC);
 """
 
 INSERT_FIRST_SEEN_SQL = f"""
 INSERT INTO {TABLE_NAME} (
-    model_id, evaluation_id, evaluated_at, board_as_of, direction,
+    model_id, contract_version, evaluation_id, evaluated_at, board_as_of, direction,
     direction_confidence, thesis_state, supporting_families,
     opposing_families, counted_families, families, modifiers,
     board_snapshot, evaluation_snapshot, record_hash
 ) VALUES (
-    %(model_id)s, %(evaluation_id)s, %(evaluated_at)s, %(board_as_of)s,
-    %(direction)s, %(direction_confidence)s, %(thesis_state)s,
+    %(model_id)s, %(contract_version)s, %(evaluation_id)s, %(evaluated_at)s,
+    %(board_as_of)s, %(direction)s, %(direction_confidence)s, %(thesis_state)s,
     %(supporting_families)s::jsonb, %(opposing_families)s::jsonb,
     %(counted_families)s::jsonb, %(families)s::jsonb, %(modifiers)s::jsonb,
     %(board_snapshot)s::jsonb, %(evaluation_snapshot)s::jsonb, %(record_hash)s
@@ -148,6 +155,12 @@ def _immutable_evaluation_snapshot(evaluation: dict) -> dict:
     return {key: evaluation.get(key) for key in keys}
 
 
+def _contract_version(evaluation: dict) -> str:
+    contract = evaluation.get("integration_contract") or {}
+    version = str(contract.get("version") or DEFAULT_CONTRACT_VERSION).strip()
+    return version or DEFAULT_CONTRACT_VERSION
+
+
 def build_prospective_record(
     board: dict,
     evaluation: dict,
@@ -158,7 +171,9 @@ def build_prospective_record(
 
     Prospective storage deliberately refuses historical ``as_of`` values. Historical
     Direction V2 reads remain available through the read-only endpoint, but they are
-    not allowed into this provenance table.
+    not allowed into this provenance table. Contract version is captured explicitly
+    so prospective records from different frozen Direction V2 rules are never mixed
+    silently; existing pre-version rows retain the V1 default and are not rewritten.
     """
     evaluated = _stamp(evaluated_at)
     board_as_of = _stamp(board.get("as_of"))
@@ -189,11 +204,13 @@ def build_prospective_record(
     board_snapshot = json.loads(_canonical(board))
     evaluation_snapshot = json.loads(_canonical(immutable_evaluation))
     board_as_of_iso = board_as_of.isoformat()
+    contract_version = _contract_version(evaluation)
     evaluation_id = hashlib.sha256(
         f"{MODEL_ID}|{board_as_of_iso}".encode("utf-8")
     ).hexdigest()
     record_payload = {
         "model_id": MODEL_ID,
+        "contract_version": contract_version,
         "evaluation_id": evaluation_id,
         "evaluated_at": evaluated.isoformat(),
         "board_as_of": board_as_of_iso,
@@ -296,6 +313,17 @@ class CopperDirectionV2ProspectiveStore:
                     (MODEL_ID,),
                 )
                 grouped = cursor.fetchall()
+                cursor.execute(
+                    f"""
+                    SELECT contract_version, COUNT(*)
+                    FROM {TABLE_NAME}
+                    WHERE model_id = %s
+                    GROUP BY contract_version
+                    ORDER BY contract_version
+                    """,
+                    (MODEL_ID,),
+                )
+                contract_rows = cursor.fetchall()
         total = int(total_row[0] or 0)
         by_direction: dict[str, int] = {}
         by_thesis_state: dict[str, int] = {}
@@ -303,6 +331,10 @@ class CopperDirectionV2ProspectiveStore:
             count = int(count or 0)
             by_direction[str(direction)] = by_direction.get(str(direction), 0) + count
             by_thesis_state[str(thesis_state)] = by_thesis_state.get(str(thesis_state), 0) + count
+        by_contract_version = {
+            str(contract_version): int(count or 0)
+            for contract_version, count in contract_rows
+        }
         directional = by_direction.get("BULLISH", 0) + by_direction.get("BEARISH", 0)
         return {
             "status": "ACTIVE",
@@ -311,6 +343,7 @@ class CopperDirectionV2ProspectiveStore:
             "evaluations": total,
             "first_board_as_of": total_row[1].isoformat() if total_row[1] else None,
             "last_board_as_of": total_row[2].isoformat() if total_row[2] else None,
+            "by_contract_version": by_contract_version,
             "by_direction": by_direction,
             "by_thesis_state": by_thesis_state,
             "directional_evaluations": directional,
