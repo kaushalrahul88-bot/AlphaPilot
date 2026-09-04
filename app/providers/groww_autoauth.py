@@ -1,6 +1,9 @@
 import asyncio
+import base64
 import hashlib
+import hmac
 import os
+import struct
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -15,16 +18,16 @@ class GrowwAuthRateLimitedError(RuntimeError):
 
 
 class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
-    """Session-aware Groww authentication with a manual-token fast path.
+    """Session-aware Groww authentication.
 
-    A configured ``GROWW_ACCESS_TOKEN`` is already a session credential. Prefer it
-    instead of generating another token from every fresh worker/process. Dynamic
-    API-key authentication remains the fallback when no manual token is present.
+    Authentication preference is deliberately deterministic:
+    1. GROWW_ACCESS_TOKEN: explicit session credential, if configured.
+    2. GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET: unattended TOTP session generation.
+    3. GROWW_API_KEY + GROWW_API_SECRET: legacy daily-approval fallback.
 
-    Groww authentication 429s are guarded by a process-wide circuit breaker so
-    scheduled collectors and dashboard clicks do not repeatedly hammer the token
-    endpoint while it is rate-limited. A configured access token always bypasses
-    the breaker.
+    Generated session tokens are shared inside the process for the Groww session
+    day. Authentication 429s open a process-wide circuit breaker so collectors
+    and dashboard clicks cannot repeatedly hammer the token endpoint.
     """
 
     AUTH_429_DEFAULT_COOLDOWN_SECONDS = 60 * 60
@@ -37,13 +40,20 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
     def __init__(self, settings):
         self.api_key = "".join(os.getenv("GROWW_API_KEY", "").split())
         self.api_secret = "".join(os.getenv("GROWW_API_SECRET", "").split())
+        self.totp_token = "".join(os.getenv("GROWW_TOTP_TOKEN", "").split())
+        self.totp_secret = "".join(os.getenv("GROWW_TOTP_SECRET", "").split())
         self.access_token = "".join(os.getenv("GROWW_ACCESS_TOKEN", "").split())
         self._cached_token = None
         self._cached_auth_session = None
 
-        if not (self.api_key and self.api_secret) and not self.access_token:
+        if not (
+            self.access_token
+            or (self.totp_token and self.totp_secret)
+            or (self.api_key and self.api_secret)
+        ):
             raise RuntimeError(
-                "Set both GROWW_API_KEY and GROWW_API_SECRET, or GROWW_ACCESS_TOKEN"
+                "Configure GROWW_ACCESS_TOKEN, GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET, "
+                "or GROWW_API_KEY + GROWW_API_SECRET"
             )
 
     @classmethod
@@ -68,8 +78,7 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
             return
         raise GrowwAuthRateLimitedError(
             "Groww dynamic authentication is temporarily blocked after HTTP 429; "
-            f"no token-generation request will be retried for about {int(remaining) + 1}s. "
-            "Configure a current GROWW_ACCESS_TOKEN to bypass dynamic authentication."
+            f"no token-generation request will be retried for about {int(remaining) + 1}s."
         )
 
     @classmethod
@@ -85,46 +94,57 @@ class AutoAuthAmountAwareGrowwProvider(AmountAwareGrowwProvider):
             time.monotonic() + cooldown,
         )
 
-    async def _generate_access_token(self):
-        ts = str(int(time.time()))
-        checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
+    @staticmethod
+    def _totp_now(secret: str, *, now: int | None = None) -> str:
+        """Generate RFC 6238 SHA-1/30s/6-digit TOTP without another dependency."""
+        normalized = "".join(secret.split()).upper()
+        padding = "=" * ((8 - len(normalized) % 8) % 8)
+        key = base64.b32decode(normalized + padding, casefold=True)
+        counter = int(time.time() if now is None else now) // 30
+        digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+        offset = digest[-1] & 0x0F
+        binary = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+        return f"{binary % 1_000_000:06d}"
+
+    async def _post_access_token(self, *, api_key: str, payload: dict) -> str:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        payload = {
-            "key_type": "approval",
-            "checksum": checksum,
-            "timestamp": ts,
-        }
-
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 f"{self.BASE_URL}/v1/token/api/access",
                 headers=headers,
                 json=payload,
             )
-
         response.raise_for_status()
         data = response.json()
         token = "".join(str(data.get("token", "")).split())
         if not token:
-            raise RuntimeError(f"Groww token generation failed: {data}")
+            raise RuntimeError("Groww token generation returned no access token")
         return token
 
+    async def _generate_access_token(self) -> str:
+        if self.totp_token and self.totp_secret:
+            return await self._post_access_token(
+                api_key=self.totp_token,
+                payload={"key_type": "totp", "totp": self._totp_now(self.totp_secret)},
+            )
+
+        ts = str(int(time.time()))
+        checksum = hashlib.sha256((self.api_secret + ts).encode()).hexdigest()
+        return await self._post_access_token(
+            api_key=self.api_key,
+            payload={"key_type": "approval", "checksum": checksum, "timestamp": ts},
+        )
+
     async def _get_access_token(self):
-        # A supplied session token is process-independent and therefore prevents
-        # stateless workers from each consuming Groww's token-generation quota.
         if self.access_token:
             return self.access_token
 
-        if not (self.api_key and self.api_secret):
-            raise RuntimeError("No Groww authentication credentials are configured")
-
         cls = self.__class__
         cls._raise_if_auth_blocked()
-
         session_key = self._auth_session_key()
         if cls._shared_token and cls._shared_auth_session == session_key:
             return cls._shared_token
