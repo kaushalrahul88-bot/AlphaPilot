@@ -22,13 +22,19 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .copper_option_observation_store import (  # noqa: E402
         register_copper_option_observation_startup,
     )
+    from .copper_pit_api import register_copper_pit_routes  # noqa: E402
     from .crude_oil_mini_manual_api import register_crude_oil_mini_manual_routes  # noqa: E402
     from .crude_oil_mini_option_observation_store import (  # noqa: E402
         register_crude_oil_mini_option_observation_startup,
     )
-    from .main import app as _app, settings as _settings  # noqa: E402
+    from .main import (  # noqa: E402
+        _collector_store as _collector_auth,
+        app as _app,
+        settings as _settings,
+    )
 
     register_crude_oil_mini_option_observation_startup(_app, _settings)
     register_copper_option_observation_startup(_app, _settings)
     register_copper_candle_observation_startup(_app, _settings)
+    register_copper_pit_routes(_app, _settings, _collector_auth)
     register_crude_oil_mini_manual_routes(_app, _settings)
