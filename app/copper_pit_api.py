@@ -102,6 +102,7 @@ def register_copper_pit_routes(app, settings, collector_auth) -> None:
         return {
             **evaluation,
             "prospective_persistence": {
+                "contract_version": record["contract_version"],
                 "evaluation_id": record["evaluation_id"],
                 "record_hash": record["record_hash"],
                 "board_as_of": record["board_as_of"],

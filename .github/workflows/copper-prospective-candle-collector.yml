@@ -133,6 +133,13 @@ jobs:
           import json
           d=json.load(open("copper-direction-v2-result.json"))
           p=d.get("prospective_persistence") or {}
+          contract=d.get("integration_contract") or {}
+          families=d.get("families") or {}
+          option=families.get("OPTION_PARTICIPATION") or {}
+          option_detail=option.get("detail") or {}
+          expected_contract="COPPER_DIRECTION_BRAIN_V2_SHADOW_V2"
+          expected_option_rule="COPPER_OPTION_PARTICIPATION_V1"
+
           assert d.get("mode")=="COPPER_DIRECTION_BRAIN_V2_SHADOW", d
           assert d.get("research_only") is True, d
           assert d.get("shadow_only") is True, d
@@ -143,6 +150,32 @@ jobs:
           assert d.get("live_execution_enabled") is False, d
           assert d.get("broker_order_placement_enabled") is False, d
           assert d.get("capital_committed")==0, d
+
+          assert contract.get("version")==expected_contract, contract
+          assert contract.get("option_participation_rule_version")==expected_option_rule, contract
+          assert contract.get("minimum_independent_confirmations")==2, contract
+          assert contract.get("raw_option_oi_directional_vote_allowed") is False, contract
+          assert contract.get("option_participation_oi_flat_or_decrease_vote_allowed") is False, contract
+          assert contract.get("option_participation_underlying_direction_vote_allowed") is False, contract
+          assert contract.get("promotion_allowed") is False, contract
+
+          assert option.get("family")=="OPTION_PARTICIPATION", option
+          assert option.get("causal_origin")=="OPTION_MARKET_POSITIONING", option
+          assert option_detail.get("rule_version")==expected_option_rule, option_detail
+          if option.get("counts_for_direction"):
+              assert option.get("stance") in {"BULLISH","BEARISH"}, option
+              if option.get("stance")=="BULLISH":
+                  assert int(option_detail.get("bullish_ce_evidence") or 0)>=1, option_detail
+                  assert int(option_detail.get("bullish_pe_evidence") or 0)>=1, option_detail
+                  assert int(option_detail.get("bearish_ce_evidence") or 0)==0, option_detail
+                  assert int(option_detail.get("bearish_pe_evidence") or 0)==0, option_detail
+              else:
+                  assert int(option_detail.get("bearish_ce_evidence") or 0)>=1, option_detail
+                  assert int(option_detail.get("bearish_pe_evidence") or 0)>=1, option_detail
+                  assert int(option_detail.get("bullish_ce_evidence") or 0)==0, option_detail
+                  assert int(option_detail.get("bullish_pe_evidence") or 0)==0, option_detail
+
+          assert p.get("contract_version")==expected_contract, p
           assert p.get("first_seen_immutable") is True, p
           assert p.get("outcome_fields_stored") is False, p
           assert p.get("historical_as_of_allowed") is False, p
@@ -151,11 +184,18 @@ jobs:
           assert p.get("board_as_of"), p
           assert p.get("evaluated_at"), p
           print(json.dumps({
+              "contract_version":contract.get("version"),
+              "option_participation_rule_version":option_detail.get("rule_version"),
               "direction":d.get("direction"),
               "direction_confidence":d.get("direction_confidence"),
               "thesis_state":d.get("thesis_state"),
               "supporting_families":d.get("supporting_families"),
               "opposing_families":d.get("opposing_families"),
+              "option_participation":{
+                  "stance":option.get("stance"),
+                  "counts_for_direction":option.get("counts_for_direction"),
+                  "state":option.get("state"),
+              },
               "prospective_persistence":p,
           }, indent=2, sort_keys=True))
           PY
@@ -177,6 +217,11 @@ jobs:
           python - <<'PY'
           import json
           d=json.load(open("copper-direction-v2-status.json"))
+          captured=json.load(open("copper-direction-v2-result.json"))
+          p=captured.get("prospective_persistence") or {}
+          expected_contract=p.get("contract_version")
+          versions=d.get("by_contract_version") or {}
+          assert expected_contract=="COPPER_DIRECTION_BRAIN_V2_SHADOW_V2", p
           assert d.get("status")=="ACTIVE", d
           assert d.get("first_seen_immutable") is True, d
           assert d.get("outcome_data_read") is False, d
@@ -185,6 +230,7 @@ jobs:
           assert d.get("live_execution_enabled") is False, d
           assert d.get("broker_order_placement_enabled") is False, d
           assert int(d.get("evaluations") or 0)>=1, d
+          assert int(versions.get(expected_contract) or 0)>=1, d
           print(json.dumps(d, indent=2, sort_keys=True))
           PY
 
