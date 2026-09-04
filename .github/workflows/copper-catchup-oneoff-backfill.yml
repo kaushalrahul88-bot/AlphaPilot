@@ -46,40 +46,54 @@ jobs:
           done
           [ "$ready" = "1" ] || { cat health.json 2>/dev/null || true; echo "Expected deploy not ready" >&2; exit 1; }
 
-      - name: Retest Groww exact expired Copper futures history
+      - name: Recover Sep 1 to Sep 4 from currently active Copper contract
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --max-time 240 \
-            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
-            "$API_BASE/v1/internal/copper/current-mind-provider-parity" \
-            -o expired-copper-provider-parity.json
           python - <<'PY'
-          import json
-          d=json.load(open("expired-copper-provider-parity.json"))
+          import json, os, subprocess
+          api=os.environ['API_BASE'].rstrip('/')
+          token=os.environ['COLLECTOR_TOKEN']
+          days=['2026-09-01','2026-09-02','2026-09-03','2026-09-04']
+          results=[]
+          for day in days:
+              payload={
+                  'symbol':'COPPER',
+                  'start_at':f'{day}T09:00:00+05:30',
+                  'end_at':f'{day}T23:30:00+05:30',
+                  'timeframe_minutes':5,
+              }
+              p=subprocess.run([
+                  'curl','--fail','--silent','--show-error','--max-time','180',
+                  '-H','Content-Type: application/json',
+                  '-H',f'X-Collector-Token: {token}',
+                  '-X','POST',f'{api}/v1/internal/commodity-candles/backfill',
+                  '-d',json.dumps(payload),
+              ],capture_output=True,text=True)
+              if p.returncode != 0:
+                  results.append({'day':day,'curl_rc':p.returncode,'stderr':p.stderr[-500:]})
+                  continue
+              body=json.loads(p.stdout)
+              results.append({'day':day,**body})
           summary={
-            "mode":d.get("mode"),
-            "reference_contract":d.get("reference_contract"),
-            "groww_symbol":d.get("groww_symbol"),
-            "contract_identity_source":d.get("contract_identity_source"),
-            "provider_rows":d.get("provider_rows"),
-            "stored_rows":d.get("stored_rows"),
-            "shared_rows":d.get("shared_rows"),
-            "provider_only_timestamps":d.get("provider_only_timestamps"),
-            "stored_only_timestamps":d.get("stored_only_timestamps"),
-            "ohlc_mismatch_count":d.get("ohlc_mismatch_count"),
-            "checks":d.get("checks"),
+              'research_only':True,
+              'purpose':'RECOVER_POST_EXPIRY_COPPER_5M_FOR_PIT_REPLAY',
+              'results':results,
+              'total_fetched':sum(int(x.get('fetched') or 0) for x in results),
+              'total_upserted':sum(int(x.get('upserted') or 0) for x in results),
+              'contracts':sorted({str(x.get('contract')) for x in results if x.get('contract')}),
           }
+          open('copper-sep1-sep4-recovery.json','w').write(json.dumps(summary,indent=2,sort_keys=True)+'\n')
           print(json.dumps(summary,indent=2,sort_keys=True))
           PY
 
-      - name: Upload exact-contract diagnostic
+      - name: Upload recovery audit
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: copper-expired-contract-retest-${{ github.run_id }}
+          name: copper-sep1-sep4-recovery-${{ github.run_id }}
           path: |
             health.json
-            expired-copper-provider-parity.json
+            copper-sep1-sep4-recovery.json
           if-no-files-found: warn
           retention-days: 30
