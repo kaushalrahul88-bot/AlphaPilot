@@ -1,0 +1,119 @@
+name: Copper Prospective 5m Candle Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 15 minutes from 09:05 through 23:20 IST on weekdays.
+    # UTC is IST-05:30, so :05/:20/:35/:50 IST maps to :35/:50/:05/:20 UTC.
+    - cron: "35,50 3 * * 1-5"
+    - cron: "5,20,35,50 4-17 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-prospective-5m-candle-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Confirm bounded Copper endpoint is deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for attempt in {1..18}; do
+            if curl --fail --silent --show-error --max-time 20 "$API_BASE/openapi.json" -o openapi.json \
+              && python - <<'PY'
+          import json
+          paths=(json.load(open("openapi.json")) or {}).get("paths") or {}
+          required={
+              "/v1/internal/copper/pit-candles/collect",
+              "/v1/internal/copper/pit-candles/status",
+          }
+          raise SystemExit(0 if required.issubset(paths) else 1)
+          PY
+            then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Copper PIT endpoint was not ready" >&2
+          exit 1
+
+      - name: Capture bounded prospective Copper tape
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -H "Accept: application/json" \
+            -X POST "$API_BASE/v1/internal/copper/pit-candles/collect" \
+            -o copper-pit-result.json || echo 000)
+          echo "HTTP=$CODE"
+          [ "$CODE" = "200" ] || {
+            cat copper-pit-result.json 2>/dev/null || true
+            exit 1
+          }
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-pit-result.json"))
+          assert d.get("status") in {"COLLECTED","MARKET_CLOSED"}, d
+          assert d.get("symbol")=="COPPER", d
+          assert d.get("timeframe_minutes")==5, d
+          assert d.get("research_only") is True, d
+          assert d.get("production_rules_changed") is False, d
+          assert d.get("live_execution_enabled") is False, d
+          assert d.get("broker_order_placement_enabled") is False, d
+          assert d.get("historical_backfill_used") is False, d
+          if d.get("status")=="COLLECTED":
+              assert d.get("first_seen_immutable") is True, d
+              assert d.get("generic_all_commodity_collector_used") is False, d
+              assert d.get("warmup_market_timestamps_retroactively_visible") is False, d
+              assert str(d.get("contract") or "").startswith("COPPER"), d
+          print(json.dumps({k:d.get(k) for k in (
+              "status","symbol","contract","collected_at","fetch_start",
+              "first_run_bounded_warmup","fetched","completed",
+              "candidate_records","inserted_first_seen","latest_completed_at",
+              "provenance_id"
+          )}, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify immutable store status
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/pit-candles/status" \
+            -o copper-pit-status.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-pit-status.json"))
+          assert d.get("status")=="ACTIVE", d
+          assert d.get("symbol")=="COPPER", d
+          assert d.get("timeframe_minutes")==5, d
+          assert d.get("first_seen_immutable") is True, d
+          assert d.get("historical_backfill_used") is False, d
+          assert d.get("live_execution_enabled") is False, d
+          assert d.get("broker_order_placement_enabled") is False, d
+          print(json.dumps(d, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload Copper PIT audit artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper-prospective-5m-${{ github.run_id }}
+          path: |
+            copper-pit-result.json
+            copper-pit-status.json
+          if-no-files-found: warn
+          retention-days: 30
