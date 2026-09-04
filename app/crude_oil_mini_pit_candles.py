@@ -6,6 +6,11 @@ from zoneinfo import ZoneInfo
 
 from .commodity_backtest import _fetch_chunked, _ts
 from .commodity_candle_collector import PROVIDER, PostgresCandleStore, _records
+from .commodity_contract_continuity import (
+    ContractArchiveStore,
+    archive_active_contract_if_needed,
+    retention_policy,
+)
 from .commodity_mtf import completed_rows
 from .crude_oil_mini_contracts import (
     fetch_crude_oil_mini_master,
@@ -39,18 +44,7 @@ DO UPDATE SET
 
 
 class CrudeOilMiniPITStore(PostgresCandleStore):
-    """CRUDEOILM-only store preserving first-seen candle state and availability.
-
-    The generic commodity store is intentionally left untouched because it is shared
-    with older Copper/CRUDEOIL/NATURALGAS research. This subclass changes only the
-    CRUDEOILM live/PIT path.
-
-    Existing OHLCV/OI values are not rewritten on refresh. If Groww revises a candle
-    later, using the revised values with the original availability timestamp would
-    leak future information into a historical PIT replay. A future revision-aware
-    store can retain both versions explicitly; this first implementation stays
-    strictly first-seen.
-    """
+    """CRUDEOILM-only store preserving first-seen candle state and availability."""
 
     def _initialize_sync(self):
         super()._initialize_sync()
@@ -160,11 +154,7 @@ async def collect_crude_oil_mini_pit_candles(
     store: CrudeOilMiniPITStore,
     now: datetime | None = None,
 ) -> dict:
-    """Collect only the bounded live overlap needed by CRUDEOILM Current Mind.
-
-    No regular CRUDEOIL alias is accepted. The expensive research/history path is
-    deliberately not used here.
-    """
+    """Collect bounded CRUDEOILM PIT tape and protect exact-contract replayability."""
     collected_at = _ts(now or datetime.now(IST))
     await store.initialize()
     contract = await resolve_current_crude_oil_mini_future(collected_at)
@@ -192,6 +182,25 @@ async def collect_crude_oil_mini_pit_candles(
         collected_at,
     )
     upserted = await store.upsert(records)
+
+    try:
+        continuity = await archive_active_contract_if_needed(
+            provider,
+            ContractArchiveStore(store.database_url),
+            symbol=SYMBOL,
+            contract=contract,
+            observed_at=collected_at,
+        )
+    except Exception as exc:
+        continuity = {
+            "status": "ARCHIVE_GUARD_ERROR",
+            "error": f"{exc.__class__.__name__}: {str(exc)[:240]}",
+            "archive_written": False,
+            "prospective_tape_changed": False,
+            "direction_effect": "NONE",
+            "live_execution_enabled": False,
+        }
+
     return {
         "status": "COLLECTED",
         "symbol": SYMBOL,
@@ -207,6 +216,11 @@ async def collect_crude_oil_mini_pit_candles(
         ),
         "pit_provenance": "FIRST_SEEN_CANDLE_STATE_IMMUTABLE",
         "regular_crude_alias_allowed": False,
+        "contract_continuity": continuity,
+        "contract_continuity_policy": retention_policy(),
+        "live_execution_enabled": False,
+        "broker_order_placement_enabled": False,
+        "capital_committed": 0,
     }
 
 
