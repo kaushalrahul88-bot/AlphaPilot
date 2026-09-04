@@ -22,92 +22,64 @@ jobs:
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+      EXPECTED_COMMIT: d2501cc6432c274bfc55819dbbe85c60c68d37b4
     steps:
-      - name: Verify authenticated collector
+      - name: Verify exact production deploy
         shell: bash
         run: |
           set -euo pipefail
           test -n "$COLLECTOR_TOKEN"
           ready=0
-          for attempt in {1..6}; do
+          for attempt in {1..10}; do
             if curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json; then
               if python - <<'PY'
-          import json
+          import json, os
           body=json.load(open("health.json"))
-          raise SystemExit(0 if body.get("commodity_collector_enabled") is True else 1)
+          raise SystemExit(0 if body.get("deployment_commit") == os.environ["EXPECTED_COMMIT"] else 1)
           PY
               then
                 ready=1
                 break
               fi
             fi
-            sleep $((attempt * 5))
+            sleep $((attempt * 6))
           done
-          [ "$ready" = "1" ] || { echo "Collector backend did not become ready" >&2; exit 1; }
-          python - <<'PY'
-          import json
-          body=json.load(open("health.json"))
-          print(json.dumps({"health":"ok","deployment_commit":body.get("deployment_commit")}, indent=2))
-          PY
+          [ "$ready" = "1" ] || { cat health.json 2>/dev/null || true; echo "Expected deploy not ready" >&2; exit 1; }
 
-      - name: Reconstruct Aug 31 to Sep 4 Copper 5m completed candles
+      - name: Retest Groww exact expired Copper futures history
         shell: bash
         run: |
           set -euo pipefail
+          curl --fail --silent --show-error --max-time 240 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/current-mind-provider-parity" \
+            -o expired-copper-provider-parity.json
           python - <<'PY'
           import json
-          import os
-          import subprocess
-
-          api=os.environ["API_BASE"].rstrip("/")
-          token=os.environ["COLLECTOR_TOKEN"]
-          days=["2026-08-31","2026-09-01","2026-09-02","2026-09-03","2026-09-04"]
-          results=[]
-          for day in days:
-              payload={
-                  "symbol":"COPPER",
-                  "start_at":f"{day}T09:00:00+05:30",
-                  "end_at":f"{day}T23:30:00+05:30",
-                  "timeframe_minutes":5,
-              }
-              command=[
-                  "curl","--fail","--silent","--show-error","--max-time","180",
-                  "-H","Content-Type: application/json",
-                  "-H",f"X-Collector-Token: {token}",
-                  "-X","POST",f"{api}/v1/internal/commodity-candles/backfill-continuous",
-                  "-d",json.dumps(payload),
-              ]
-              completed=subprocess.run(command,capture_output=True,text=True)
-              if completed.returncode != 0:
-                  raise SystemExit(f"{day} backfill failed: {completed.stderr[-1000:]}")
-              body=json.loads(completed.stdout)
-              if body.get("status") not in {"BACKFILLED_CONTINUOUS","NO_ARCHIVED_INTRADAY_DATA"}:
-                  raise SystemExit(f"Unexpected {day} response: {body}")
-              results.append(body)
-
+          d=json.load(open("expired-copper-provider-parity.json"))
           summary={
-              "research_only":True,
-              "purpose":"COPPER_COMMODITY_BRAIN_PIT_REPLAY_INPUT_RECONSTRUCTION",
-              "days":days,
-              "results":results,
-              "total_fetched":sum(int(x.get("fetched") or 0) for x in results),
-              "total_upserted":sum(int(x.get("upserted") or 0) for x in results),
-              "outcomes_collected":False,
-              "prospective_ledger_changed":False,
+            "mode":d.get("mode"),
+            "reference_contract":d.get("reference_contract"),
+            "groww_symbol":d.get("groww_symbol"),
+            "contract_identity_source":d.get("contract_identity_source"),
+            "provider_rows":d.get("provider_rows"),
+            "stored_rows":d.get("stored_rows"),
+            "shared_rows":d.get("shared_rows"),
+            "provider_only_timestamps":d.get("provider_only_timestamps"),
+            "stored_only_timestamps":d.get("stored_only_timestamps"),
+            "ohlc_mismatch_count":d.get("ohlc_mismatch_count"),
+            "checks":d.get("checks"),
           }
-          open("copper-catchup-backfill.json","w").write(json.dumps(summary,indent=2,sort_keys=True)+"\n")
           print(json.dumps(summary,indent=2,sort_keys=True))
-          if not any(int(x.get("upserted") or 0) > 0 for x in results):
-              raise SystemExit("No Copper candles were reconstructed")
           PY
 
-      - name: Upload reconstruction audit
+      - name: Upload exact-contract diagnostic
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: copper-catchup-oneoff-backfill-${{ github.run_id }}
+          name: copper-expired-contract-retest-${{ github.run_id }}
           path: |
             health.json
-            copper-catchup-backfill.json
+            expired-copper-provider-parity.json
           if-no-files-found: warn
           retention-days: 30
