@@ -1,0 +1,99 @@
+name: Copper Catch-up One-off Backfill
+
+on:
+  push:
+    branches:
+      - feat/commodity-brain-core-copper-catchup
+    paths:
+      - ".github/workflows/copper-catchup-oneoff-backfill.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-catchup-oneoff-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Verify authenticated collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --fail --silent --show-error --max-time 30 "$API_BASE/health" -o health.json
+          python - <<'PY'
+          import json
+          body=json.load(open("health.json"))
+          assert body.get("commodity_collector_enabled") is True, body
+          print(json.dumps({"health":"ok","deployment_commit":body.get("deployment_commit")}, indent=2))
+          PY
+
+      - name: Reconstruct Aug 31 to Sep 4 Copper 5m completed candles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          api=os.environ["API_BASE"].rstrip("/")
+          token=os.environ["COLLECTOR_TOKEN"]
+          days=["2026-08-31","2026-09-01","2026-09-02","2026-09-03","2026-09-04"]
+          results=[]
+          for day in days:
+              payload={
+                  "symbol":"COPPER",
+                  "start_at":f"{day}T09:00:00+05:30",
+                  "end_at":f"{day}T23:30:00+05:30",
+                  "timeframe_minutes":5,
+              }
+              command=[
+                  "curl","--fail","--silent","--show-error","--max-time","180",
+                  "-H","Content-Type: application/json",
+                  "-H",f"X-Collector-Token: {token}",
+                  "-X","POST",f"{api}/v1/internal/commodity-candles/backfill-continuous",
+                  "-d",json.dumps(payload),
+              ]
+              completed=subprocess.run(command,capture_output=True,text=True)
+              if completed.returncode != 0:
+                  raise SystemExit(f"{day} backfill failed: {completed.stderr[-1000:]}")
+              body=json.loads(completed.stdout)
+              if body.get("status") not in {"BACKFILLED_CONTINUOUS","NO_ARCHIVED_INTRADAY_DATA"}:
+                  raise SystemExit(f"Unexpected {day} response: {body}")
+              results.append(body)
+
+          summary={
+              "research_only":True,
+              "purpose":"COPPER_COMMODITY_BRAIN_PIT_REPLAY_INPUT_RECONSTRUCTION",
+              "days":days,
+              "results":results,
+              "total_fetched":sum(int(x.get("fetched") or 0) for x in results),
+              "total_upserted":sum(int(x.get("upserted") or 0) for x in results),
+              "outcomes_collected":False,
+              "prospective_ledger_changed":False,
+          }
+          open("copper-catchup-backfill.json","w").write(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          if not any(int(x.get("upserted") or 0) > 0 for x in results):
+              raise SystemExit("No Copper candles were reconstructed")
+          PY
+
+      - name: Upload reconstruction audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-catchup-oneoff-backfill-${{ github.run_id }}
+          path: |
+            health.json
+            copper-catchup-backfill.json
+          if-no-files-found: warn
+          retention-days: 30
