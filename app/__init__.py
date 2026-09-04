@@ -16,6 +16,9 @@ import os
 
 if os.getenv("RENDER_GIT_COMMIT"):
     from . import asgi as _supplemental_asgi_routes  # noqa: F401,E402
+    from .copper_candle_observation_store import (  # noqa: E402
+        register_copper_candle_observation_startup,
+    )
     from .copper_option_observation_store import (  # noqa: E402
         register_copper_option_observation_startup,
     )
@@ -27,4 +30,5 @@ if os.getenv("RENDER_GIT_COMMIT"):
 
     register_crude_oil_mini_option_observation_startup(_app, _settings)
     register_copper_option_observation_startup(_app, _settings)
+    register_copper_candle_observation_startup(_app, _settings)
     register_crude_oil_mini_manual_routes(_app, _settings)
