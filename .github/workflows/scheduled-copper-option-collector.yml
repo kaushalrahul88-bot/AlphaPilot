@@ -3,8 +3,10 @@ name: Scheduled MCX Option Snapshot Collector
 on:
   workflow_dispatch:
   schedule:
-    - cron: "35-55/5 3 * * 1-5"
-    - cron: "*/5 4-17 * * 1-5"
+    # Shift the five-minute collector by two minutes so it never starts exactly
+    # on AlphaPilot's :00/:15/:30/:45 live-shadow decision slots. In IST these
+    # UTC minutes remain a five-minute cadence at :02/:07/:12/:17/... .
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 3-17 * * 1-5"
 
 permissions:
   contents: read
