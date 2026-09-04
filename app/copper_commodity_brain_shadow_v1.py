@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .commodity_contract_continuity import retention_policy
 from .commodity_direction_core import (
     architecture_contract as shared_core_contract,
     build_direction_thesis,
@@ -37,8 +38,6 @@ def _adapt_participation(board: dict) -> dict:
 
 
 def _adapt_global(board: dict) -> dict:
-    # The current Copper builder deliberately abstains until a timestamp-safe
-    # first-seen COMEX/LME tape exists. The shared core must preserve that abstention.
     return normalize_family(
         global_copper_family(board),
         role="PERCEPTION",
@@ -47,8 +46,6 @@ def _adapt_global(board: dict) -> dict:
 
 
 def _adapt_china(board: dict) -> dict:
-    # Slow macro levels remain context only until a separately frozen surprise +
-    # reaction rule exists. Absolute PMI or similar levels cannot create a vote.
     return normalize_family(
         china_demand_family(board),
         role="CONTEXT",
@@ -57,8 +54,6 @@ def _adapt_china(board: dict) -> dict:
 
 
 def _adapt_event(board: dict) -> dict:
-    # The current builder is non-voting. If a future Copper event lifecycle is
-    # registered, its reaction dependencies must be declared before it may vote.
     return normalize_family(
         event_reaction_family(board),
         role="EVENT",
@@ -104,6 +99,7 @@ def evaluate_copper_commodity_brain_shadow(board: dict) -> dict:
     families = build_copper_families(board)
     thesis = build_direction_thesis(families, minimum_confirmations=2)
     dependency = thesis["dependency_audit"]
+    continuity = retention_policy()
 
     return {
         "mode": MODE,
@@ -125,6 +121,8 @@ def evaluate_copper_commodity_brain_shadow(board: dict) -> dict:
         "dependency_audit": dependency,
         "families": {row["family"]: row for row in families},
         "modifiers": context_modifiers(board),
+        "data_continuity_knowledge": continuity,
+        "data_continuity_directional_vote_allowed": False,
         "experience_memory_role": "CONTEXT_NOT_INDEPENDENT_CONFIRMATION",
         "current_mind_action": None,
         "entry_readiness": "NOT_EVALUATED_DIRECTION_ONLY",
@@ -151,6 +149,7 @@ def evaluate_copper_commodity_brain_shadow(board: dict) -> dict:
             "China macro is context until a separately frozen event-surprise and reaction rule exists.",
             "Headline sentiment cannot vote direction.",
             "Experience/Memory is context in this shared V1 and cannot satisfy the independent-family gate.",
+            "Provider historical retrievability before expiry is never assumed to persist after expiry; exact-contract continuity is protected separately from direction.",
             "Direction does not imply setup validity, entry readiness, CE/PE selection or a trade.",
         ],
         "integration_contract": integration_contract(),
@@ -161,6 +160,8 @@ def integration_contract() -> dict:
     return {
         "version": CONTRACT_VERSION,
         "shared_core": shared_core_contract(),
+        "data_continuity": retention_policy(),
+        "data_continuity_directional_vote_allowed": False,
         "research_only": True,
         "shadow_only": True,
         "current_mind_effect": "NONE",
