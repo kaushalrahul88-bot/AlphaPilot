@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     point_in_time_proven BOOLEAN NOT NULL CHECK (point_in_time_proven = TRUE),
     provenance_id TEXT NOT NULL DEFAULT '{PROVENANCE_ID}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (natural_key),
     UNIQUE (dataset, provider, source_key)
 );
 CREATE INDEX IF NOT EXISTS crypto_btc_pit_dataset_seen_idx
