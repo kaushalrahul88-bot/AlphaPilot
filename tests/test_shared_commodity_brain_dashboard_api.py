@@ -85,9 +85,11 @@ class SharedCommodityBrainDashboardTests(unittest.TestCase):
         self.assertTrue(status["crude_oil_mini"]["latest_parity"]["full_thesis_agreement"])
         self.assertFalse(status["safety"]["copper_phase1_sealed_outputs_exposed"])
         self.assertFalse(status["safety"]["outcomes_or_pnl_exposed"])
+        self.assertFalse(status["safety"]["broker_order_placement_enabled"])
         serialized = json.dumps(status, sort_keys=True).lower()
         self.assertNotIn("buy_ce", serialized)
-        self.assertNotIn("broker_order", serialized)
+        self.assertNotIn("must-not-leak", serialized)
+        self.assertNotIn('"broker_order":', serialized)
         self.assertNotIn("current_mind", serialized.replace("sealed_current_mind_phase1_visible", "").replace("sealed_current_mind_effect", ""))
 
     def test_empty_streams_report_waiting_state(self):
