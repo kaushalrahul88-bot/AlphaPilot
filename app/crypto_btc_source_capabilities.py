@@ -116,6 +116,18 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
     ),
     SourceCapability(
         lane="OPTIONS_MARKET",
+        dataset="BTC_GLOBAL_OPTIONS_GREEKS",
+        provider="DERIBIT_TICKER",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="Archive observed option ticker Greeks and 25-delta pair only after AlphaPilot receives both contributing ticker states. Preserve provider timestamps and first_seen_at separately.",
+        can_reconstruct_later=False,
+        live_capture_priority="HIGH",
+        decision_role="OPTIONS_TRANSLATION",
+        documented_endpoint="WSS ticker.{instrument_name}.{interval}",
+        notes="Global BTC option delta/gamma/theta/vega/rho and 25d skew context only. Delta must come from the documented ticker Greeks object; never infer delta from strike or use Deribit contracts as CoinDCX execution data.",
+    ),
+    SourceCapability(
+        lane="OPTIONS_MARKET",
         dataset="COINDCX_BTC_OPTION_CHAIN_GREEKS_IV_OI_QUOTES",
         provider="COINDCX",
         historical_mode="UNCONFIRMED",
@@ -274,13 +286,15 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V5",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V6",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
         "rule": "STORE_IRREPLACEABLE_PIT_STATE_FIRST; RECONSTRUCT_PUBLIC_CANDLES_LATER",
         "options_archive_required_before_economic_backtest": True,
         "global_options_context_is_not_coindcx_execution_data": True,
+        "global_options_greeks_is_separate_first_seen_state": True,
+        "global_options_greeks_is_not_coindcx_execution_data": True,
         "futures_context_capture_does_not_enable_futures_execution": True,
         "news_raw_and_enrichment_have_separate_first_seen_state": True,
         "social_raw_and_enrichment_have_separate_first_seen_state": True,
@@ -291,13 +305,16 @@ def live_capture_plan() -> dict:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V5",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V6",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
         "option_history_may_be_fabricated": False,
         "global_options_context_may_select_coindcx_contract": False,
         "global_options_context_may_fill_coindcx_replay": False,
+        "global_options_greeks_may_select_coindcx_contract": False,
+        "global_options_greeks_may_fill_coindcx_replay": False,
+        "global_options_delta_may_be_inferred_from_strike": False,
         "provider_entity_label_revision_may_rewrite_old_click": False,
         "scheduled_macro_revision_may_replace_first_release": False,
         "news_verification_learned_later_may_be_backdated": False,
