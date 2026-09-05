@@ -144,6 +144,7 @@ class BtcSpecialistPerceptionTests(unittest.TestCase):
         self.assertEqual(contract["default_platform"], "COINDCX")
         self.assertFalse(contract["options_market_may_create_underlying_direction"])
         self.assertFalse(contract["historical_memory_may_create_current_direction"])
+        self.assertFalse(contract["social_narrative_may_create_current_direction"])
         self.assertTrue(contract["two_independent_causal_origins_required"])
         self.assertFalse(contract["mixed_instrument_trade_allowed"])
         self.assertFalse(contract["broker_execution_enabled"])
