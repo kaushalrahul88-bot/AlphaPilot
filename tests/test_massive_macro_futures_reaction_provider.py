@@ -111,6 +111,9 @@ class _FakeClient:
                 if self.missing_post:
                     start = OBSERVED - timedelta(minutes=2)
                 return _FakeResponse({"status": "OK", "results": [_bar(ticker, start, close=19800.0, volume=9999.0)]})
+            if ticker == "NQZ6" and self.stale_nq:
+                start = OBSERVED - timedelta(minutes=1)
+                return _FakeResponse({"status": "OK", "results": [_bar(ticker, start, close=19900.0, volume=9999.0)]})
             if ticker == "6EU6":
                 start = OBSERVED - timedelta(minutes=1)
                 return _FakeResponse({"status": "OK", "results": [_bar(ticker, start, close=1.0945, volume=9999.0)]})
@@ -167,13 +170,24 @@ class MassiveMacroFuturesReactionProviderTests(unittest.TestCase):
                 release_at=RELEASE,
             )
 
-    def test_stale_pre_release_contract_close_is_not_forward_filled(self):
-        with self.assertRaisesRegex(ValueError, "no liquid NQ contract"):
-            self._provider(_FakeClient(stale_nq=True)).fetch_reaction(
-                event_key="BLS:CPI:2026-08",
-                event_type="CPI",
-                release_at=RELEASE,
-            )
+    def test_stale_front_contract_is_rejected_and_valid_alternate_is_selected(self):
+        client = _FakeClient(stale_nq=True)
+        reaction = self._provider(client).fetch_reaction(
+            event_key="BLS:CPI:2026-08",
+            event_type="CPI",
+            release_at=RELEASE,
+        )
+        self.assertEqual(reaction.nasdaq_contract.ticker, "NQZ6")
+        self.assertEqual(reaction.nasdaq_contract.pre_release_volume, 20.0)
+        self.assertAlmostEqual(reaction.nasdaq_futures_return_pct, (19900.0 / 20100.0 - 1.0) * 100.0)
+        queried_post_tickers = [
+            urlparse(url).path.rsplit("/", 1)[-1]
+            for url, params, _ in client.calls
+            if urlparse(url).path.startswith("/futures/v1/aggs/")
+            and int(params["window_start.lt"]) == _ns(OBSERVED)
+        ]
+        self.assertIn("NQZ6", queried_post_tickers)
+        self.assertNotIn("NQU6", queried_post_tickers)
 
     def test_missing_exact_post_event_close_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "NQ lacks exact completed reaction-window close"):
