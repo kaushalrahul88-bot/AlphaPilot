@@ -1,1 +1,1 @@
-# abandoned diagnostic branch; ref reset follows
+# This branch is intentionally abandoned and must not be merged.
