@@ -102,6 +102,24 @@ jobs:
           assert memory.get("decision_effect") == "NONE", memory
           assert memory.get("promotion_eligible") is False, memory
 
+          shared = data.get("shared_commodity_brain_shadow_v1") or {}
+          parity = data.get("shared_commodity_brain_parity_v1") or {}
+          assert shared.get("mode") == "CRUDE_OIL_MINI_COMMODITY_BRAIN_SHARED_SHADOW_V1", shared
+          assert shared.get("research_only") is True, shared
+          assert shared.get("shadow_only") is True, shared
+          assert shared.get("same_pit_family_snapshot_as_legacy") is True, shared
+          assert shared.get("decision_effect") == "NONE", shared
+          assert shared.get("execution_effect") == "NONE", shared
+          assert int(shared.get("capital_committed") or 0) == 0, shared
+          assert shared.get("promotion_eligible") is False, shared
+          assert parity.get("mode") == "CRUDE_OIL_MINI_SHARED_BRAIN_PARITY_V1", parity
+          assert parity.get("prospective_capture") is True, parity
+          assert parity.get("same_pit_input_snapshot") is True, parity
+          assert parity.get("same_pit_family_snapshot") is True, parity
+          assert parity.get("decision_effect") == "NONE", parity
+          assert parity.get("execution_effect") == "NONE", parity
+          assert parity.get("promotion_eligible") is False, parity
+
           print(json.dumps({
               "status": status,
               "click_at": data.get("click_at"),
@@ -111,7 +129,13 @@ jobs:
               "new_outcomes_resolved": ledger.get("new_outcomes_resolved"),
               "memory_status": memory.get("status"),
               "prior_resolved_primary_cases": memory.get("prior_resolved_primary_cases"),
-              "decision_effect": memory.get("decision_effect"),
+              "legacy_direction": (parity.get("legacy") or {}).get("direction"),
+              "legacy_confidence": (parity.get("legacy") or {}).get("confidence"),
+              "shared_direction": (parity.get("shared") or {}).get("direction"),
+              "shared_confidence": (parity.get("shared") or {}).get("confidence"),
+              "full_thesis_agreement": parity.get("full_thesis_agreement"),
+              "divergence_reason": parity.get("divergence_reason"),
+              "decision_effect": parity.get("decision_effect"),
               "paper_only": execution.get("paper_signal_only"),
           }, indent=2, sort_keys=True))
           PY
