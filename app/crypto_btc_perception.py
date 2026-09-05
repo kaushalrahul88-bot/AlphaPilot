@@ -8,7 +8,7 @@ the BTC direction that is later used to select an option.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -273,6 +273,7 @@ def assemble_btc_perception(
         "global_market_intelligence": True,
         "options_market_is_direction_creator": False,
         "historical_memory_is_direction_creator": False,
+        "social_narrative_is_direction_creator": False,
         "news_may_contribute_only_after_news_gate": True,
         "onchain_may_contribute_only_after_onchain_gate": True,
         "futures_data_may_inform_options": True,
@@ -296,6 +297,7 @@ def architecture_contract() -> dict:
         "coherent_macro_may_create_direction_conditionally": True,
         "options_market_may_create_underlying_direction": False,
         "historical_memory_may_create_current_direction": False,
+        "social_narrative_may_create_current_direction": False,
         "two_independent_causal_origins_required": True,
         "instrument_neutral": True,
         "options_trade_generated": False,
