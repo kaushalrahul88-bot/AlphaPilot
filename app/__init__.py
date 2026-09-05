@@ -19,6 +19,9 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .copper_candle_observation_store import (  # noqa: E402
         register_copper_candle_observation_startup,
     )
+    from .copper_commodity_brain_prospective_startup import (  # noqa: E402
+        register_copper_commodity_brain_prospective_startup,
+    )
     from .copper_direction_v2_startup import (  # noqa: E402
         register_copper_direction_v2_prospective_startup,
     )
@@ -40,5 +43,6 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_copper_option_observation_startup(_app, _settings)
     register_copper_candle_observation_startup(_app, _settings)
     register_copper_direction_v2_prospective_startup(_app, _settings)
+    register_copper_commodity_brain_prospective_startup(_app, _settings)
     register_copper_pit_routes(_app, _settings, _collector_auth)
     register_crude_oil_mini_manual_routes(_app, _settings)
