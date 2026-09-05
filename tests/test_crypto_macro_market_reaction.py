@@ -75,7 +75,7 @@ def _cross(event_key="BLS:CPI:2026-08"):
     ).validated()
 
 
-def _raw_prior(i, *, event_type="CPI", window=10, release_at=None, btc_return=None, btc_source=BTC_SOURCE):
+def _raw_prior(i, *, event_type="CPI", window=10, release_at=None, btc_return=None):
     release = release_at or (RELEASE - timedelta(days=30 * (i + 1)))
     observed = release + timedelta(minutes=window)
     value = btc_return if btc_return is not None else (-0.95 + i * 0.1)
@@ -89,7 +89,7 @@ def _raw_prior(i, *, event_type="CPI", window=10, release_at=None, btc_return=No
         btc_return_pct=value,
         nasdaq_return_pct=-0.2,
         usd_strength_proxy_return_pct=0.1,
-        btc_source=btc_source,
+        btc_source=BTC_SOURCE,
         cross_asset_source="MASSIVE_CME_FUTURES",
     ).validated()
 
@@ -169,7 +169,7 @@ class CryptoMacroMarketReactionTests(unittest.TestCase):
         self.assertIsNone(normalized.broad_usd_return_pct)
         self.assertIsNone(normalized.real_yield_change_bps)
 
-    def test_future_wrong_event_type_window_and_btc_source_do_not_enter_distribution(self):
+    def test_future_wrong_event_type_and_window_do_not_enter_distribution(self):
         current = RawMacroMarketReaction(
             event_key="BLS:CPI:2026-08",
             event_type="CPI",
@@ -187,13 +187,28 @@ class CryptoMacroMarketReactionTests(unittest.TestCase):
         priors.extend([
             _raw_prior(100, event_type="EMPLOYMENT_SITUATION"),
             _raw_prior(101, window=5),
-            _raw_prior(102, btc_source="OTHER"),
             _raw_prior(103, release_at=RELEASE + timedelta(days=1)),
             _raw_prior(104, release_at=RELEASE),
         ])
         normalized = normalize_macro_market_reaction(current, priors)
         expected = sum(1 for row in priors[:20] if abs(row.btc_return_pct) <= 1.0) / 20
         self.assertAlmostEqual(normalized.btc_abs_move_percentile, expected)
+
+    def test_raw_reaction_rejects_non_coindcx_btc_source(self):
+        with self.assertRaisesRegex(ValueError, "requires CoinDCX"):
+            RawMacroMarketReaction(
+                event_key="BLS:CPI:2026-08",
+                event_type="CPI",
+                release_at=RELEASE,
+                observed_at=OBSERVED,
+                reconstructible_available_at=OBSERVED,
+                window_minutes=10,
+                btc_return_pct=-1.0,
+                nasdaq_return_pct=-0.8,
+                usd_strength_proxy_return_pct=0.3,
+                btc_source="OTHER",
+                cross_asset_source="MASSIVE_CME_FUTURES",
+            ).validated()
 
     def test_full_hawkish_chain_can_create_one_bearish_macro_origin_only(self):
         raw = assemble_raw_macro_reaction(
@@ -206,7 +221,6 @@ class CryptoMacroMarketReactionTests(unittest.TestCase):
             ],
             cross_asset_reaction=_cross(),
         )
-        # Prior BTC event moves are deliberately smaller so current magnitude is extreme.
         priors = [_raw_prior(i, btc_return=0.05 + i * 0.02) for i in range(20)]
         market = normalize_macro_market_reaction(raw, priors)
         state = NormalizedMacroSurprise(
