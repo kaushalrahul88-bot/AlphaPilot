@@ -169,6 +169,18 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
     ),
     SourceCapability(
         lane="STABLECOIN_LIQUIDITY",
+        dataset="STABLECOIN_SUPPLY_LIQUIDITY",
+        provider="DEFILLAMA",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="Capture the aggregate USD-pegged supply snapshot with AlphaPilot first_seen_at; later API history is not proof of exact click-time availability.",
+        can_reconstruct_later=False,
+        live_capture_priority="HIGH",
+        decision_role="CONTEXT_ONLY",
+        documented_endpoint="GET https://stablecoins.llama.fi/stablecoins?includePrices=true",
+        notes="Aggregate stablecoin supply measures broad liquidity capacity only. It must not be treated as exchange inflow, deployable venue buying power, or a standalone bullish/bearish signal.",
+    ),
+    SourceCapability(
+        lane="STABLECOIN_LIQUIDITY",
         dataset="STABLECOIN_EXCHANGE_AND_CHAIN_FLOWS",
         provider="MULTI_PROVIDER",
         historical_mode="EXTERNAL_PIT_ARCHIVE_REQUIRED",
@@ -176,6 +188,7 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
         can_reconstruct_later=False,
         live_capture_priority="HIGH",
         decision_role="DIRECTIONAL_EVIDENCE",
+        notes="Venue-specific stablecoin exchange/chain flows remain separate from aggregate stablecoin supply.",
     ),
     SourceCapability(
         lane="MACRO_CROSS_ASSET",
@@ -237,7 +250,7 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V2",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V3",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
@@ -245,12 +258,13 @@ def live_capture_plan() -> dict:
         "options_archive_required_before_economic_backtest": True,
         "futures_context_capture_does_not_enable_futures_execution": True,
         "news_raw_and_enrichment_have_separate_first_seen_state": True,
+        "stablecoin_supply_is_separate_from_exchange_flows": True,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V2",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V3",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
@@ -259,6 +273,7 @@ def architecture_contract() -> dict:
         "scheduled_macro_revision_may_replace_first_release": False,
         "news_verification_learned_later_may_be_backdated": False,
         "raw_news_may_be_rewritten_by_enrichment": False,
+        "stablecoin_supply_equals_exchange_buying_power": False,
         "reconstructible_ohlcv_should_be_storage_priority": False,
         "irrecoverable_pit_state_should_be_storage_priority": True,
         "futures_context_may_inform_options": True,
