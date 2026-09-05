@@ -7,7 +7,7 @@ visibility only after the record's first_seen_at.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -51,6 +51,17 @@ def _walk_keys(value: Any) -> set[str]:
         for nested in value:
             keys.update(_walk_keys(nested))
     return keys
+
+
+def same_immutable_observation(existing: dict, candidate: dict) -> bool:
+    """Return True when a later poll rediscovered the same provider observation.
+
+    ``first_seen_at`` is deliberately excluded. The earliest stored first-seen
+    timestamp wins forever, while a restart/poll that sees identical provider
+    content for the same natural key is safely idempotent.
+    """
+    fields = ("dataset", "provider", "source_key", "event_at", "source_version", "payload_hash")
+    return all(existing.get(field) == candidate.get(field) for field in fields)
 
 
 @dataclass(frozen=True)
@@ -136,7 +147,7 @@ class ImmutableBtcPitLedger:
         if existing is None:
             self._records[key] = frozen
             return {"status": "INSERTED_FIRST_SEEN", "record": frozen}
-        if existing["record_fingerprint"] == frozen["record_fingerprint"]:
+        if same_immutable_observation(existing, frozen):
             return {"status": "IDEMPOTENT_DUPLICATE", "record": existing}
         raise ValueError("conflicting later observation cannot overwrite immutable first-seen record")
 
@@ -187,7 +198,7 @@ def archive_record_from_capture(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_PIT_ARCHIVE_CONTRACT_V1",
+        "version": "BTC_PIT_ARCHIVE_CONTRACT_V2",
         "storage_backend_selected": False,
         "semantic_contract_storage_agnostic": True,
         "irrecoverable_pit_data_only": True,
@@ -195,6 +206,8 @@ def architecture_contract() -> dict:
         "first_seen_wins": True,
         "overwrite_existing_first_seen_record": False,
         "idempotent_exact_duplicate_allowed": True,
+        "same_provider_observation_seen_later_is_idempotent": True,
+        "earliest_first_seen_is_preserved": True,
         "conflicting_duplicate_allowed": False,
         "future_outcome_fields_allowed": False,
         "record_visible_before_first_seen": False,
