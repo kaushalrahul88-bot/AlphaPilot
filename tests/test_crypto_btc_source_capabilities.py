@@ -76,6 +76,20 @@ class BtcSourceCapabilityTests(unittest.TestCase):
             self.assertFalse(row.can_reconstruct_later)
             self.assertIn(row.historical_mode, {"EXTERNAL_PIT_ARCHIVE_REQUIRED", "FIRST_SEEN_ARCHIVE_REQUIRED"})
 
+    def test_aggregate_stablecoin_supply_is_context_only_and_separate_from_venue_flows(self):
+        aggregate = capability_for("STABLECOIN_SUPPLY_LIQUIDITY")
+        venue = capability_for("STABLECOIN_EXCHANGE_AND_CHAIN_FLOWS")
+        plan = live_capture_plan()
+        self.assertEqual(aggregate.provider, "DEFILLAMA")
+        self.assertEqual(aggregate.historical_mode, "FIRST_SEEN_ARCHIVE_REQUIRED")
+        self.assertEqual(aggregate.decision_role, "CONTEXT_ONLY")
+        self.assertFalse(aggregate.can_reconstruct_later)
+        self.assertEqual(venue.historical_mode, "EXTERNAL_PIT_ARCHIVE_REQUIRED")
+        self.assertEqual(venue.decision_role, "DIRECTIONAL_EVIDENCE")
+        self.assertNotEqual(aggregate.dataset, venue.dataset)
+        self.assertIn(aggregate.dataset, plan["capture_high_priority"])
+        self.assertIn(venue.dataset, plan["capture_high_priority"])
+
     def test_macro_release_revisions_cannot_replace_first_release(self):
         row = capability_for("SCHEDULED_MACRO_RELEASES")
         self.assertEqual(row.historical_mode, "OFFICIAL_RELEASE_ARCHIVE")
