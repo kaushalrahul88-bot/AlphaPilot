@@ -107,6 +107,15 @@ def _iv_percentile(*, current_iv: float, current_seen: datetime, visible: list[d
 
 
 def _empty_evidence(*, decision: datetime, context_status: str, greeks_status: str) -> Evidence:
+    if context_status == "STALE":
+        status = "STALE_DERIBIT_OPTIONS_CONTEXT"
+        reason = "Latest Deribit global BTC options chain snapshot is stale and no fresh Greeks state can replace the missing chain context."
+    elif context_status == "MISSING" and greeks_status == "MISSING":
+        status = "NO_VISIBLE_DERIBIT_OPTIONS_CONTEXT"
+        reason = "No Deribit global BTC options PIT snapshot was visible by the decision time."
+    else:
+        status = "NO_FRESH_DERIBIT_OPTIONS_CONTEXT"
+        reason = "No fresh Deribit BTC options chain or Greeks PIT state was usable by the decision time."
     return Evidence(
         family="BTC_OPTIONS_MARKET",
         causal_origin="OPTIONS_POSITIONING",
@@ -114,13 +123,16 @@ def _empty_evidence(*, decision: datetime, context_status: str, greeks_status: s
         strength="LOW",
         confidence=0.4,
         observed_at=decision,
-        reason="No fresh Deribit BTC options chain or Greeks PIT state was visible by the decision time.",
+        reason=reason,
         context_only=True,
         source="DERIBIT_PIT_GLOBAL_OPTIONS_CONTEXT",
         metadata={
-            "status": "NO_FRESH_DERIBIT_OPTIONS_CONTEXT",
+            "status": status,
             "chain_context_status": context_status,
             "greeks_status": greeks_status,
+            "skew_25d": None,
+            "skew_25d_inferred": False,
+            "skew_25d_inferred_from_strike": False,
             "standalone_direction_allowed": False,
             "coindcx_contract_selection_allowed": False,
             "coindcx_quote_fill_allowed": False,
@@ -216,6 +228,7 @@ def deribit_options_evidence_from_pit_records(
         "put_call_open_interest_ratio": oi_ratio,
         "term_structure_slope_iv_points": term_slope,
         "skew_25d": skew_25d,
+        "skew_25d_inferred": False,
         "skew_25d_observed_from_ticker_delta": skew_25d is not None,
         "skew_25d_inferred_from_strike": False,
         "greeks_call_instrument": (greeks_payload.get("call") or {}).get("instrument_name") if isinstance(greeks_payload.get("call"), dict) else None,
@@ -250,6 +263,7 @@ def architecture_contract() -> dict:
         "iv_percentile_uses_only_prior_visible_history": True,
         "insufficient_iv_history_invents_percentile": False,
         "skew_25d_uses_observed_ticker_delta": True,
+        "skew_25d_inferred": False,
         "skew_25d_inferred_from_strike": False,
         "stale_chain_may_be_replaced_by_fresh_greeks": False,
         "stale_greeks_may_be_carried_forward": False,
