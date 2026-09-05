@@ -36,6 +36,9 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .crypto_macro_live_availability_api import (  # noqa: E402
         register_crypto_macro_live_availability_routes,
     )
+    from .shared_commodity_brain_dashboard_api import (  # noqa: E402
+        register_shared_commodity_brain_dashboard_routes,
+    )
     from .main import (  # noqa: E402
         _collector_store as _collector_auth,
         app as _app,
@@ -50,3 +53,4 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_copper_pit_routes(_app, _settings, _collector_auth)
     register_crude_oil_mini_manual_routes(_app, _settings)
     register_crypto_macro_live_availability_routes(_app, _settings, _collector_auth)
+    register_shared_commodity_brain_dashboard_routes(_app, _settings)
