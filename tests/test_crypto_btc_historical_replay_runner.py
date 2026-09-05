@@ -57,8 +57,8 @@ def _candles(click=_t(), future_hours=6):
             close_at=close_at,
             available_at=close_at,
             open=close - 40.0,
-            high=close + 50.0,
-            low=close - 50.0,
+            high=close + 10.0,
+            low=close - 60.0,
             close=close,
             volume=100.0 + i,
             provenance=_prov(f"spot-{i}", basis="BAR_COMPLETION_RECONSTRUCTION"),
@@ -150,8 +150,6 @@ def _contract(click=_t(), *, available_at=None, symbol="BTC-TEST-CALL", bid=99.0
 def _archive(click=_t(), *, contracts=True, derivative_proven=True):
     candles = _candles(click)
     contract_rows = [_contract(click)] if contracts else []
-    # Structural target from the last two completed candles is reached around +3h.
-    contract_rows and None
     quote = BtcOptionQuoteArchiveRow(
         symbol="BTC-TEST-CALL",
         event_at=click + timedelta(hours=3),
@@ -301,7 +299,6 @@ class BtcHistoricalReplayRunnerTests(unittest.TestCase):
 
     def test_stale_spot_is_input_unresolved_and_excluded_from_performance(self):
         policy = replace(_policy(), max_spot_age_seconds=0)
-        # Shift click half an hour after the latest completed candle.
         click = _t() + timedelta(minutes=30)
         policy = replace(policy, click_policy=BtcRandomClickPolicy(click, click + timedelta(seconds=1), 1, 7))
         result = run_btc_historical_random_click_backtest(archive=_archive(), policy=policy, risk_policy=_risk())
