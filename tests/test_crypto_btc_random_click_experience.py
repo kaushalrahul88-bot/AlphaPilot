@@ -76,14 +76,14 @@ class BtcRandomClickExperienceTests(unittest.TestCase):
         self.assertNotEqual(a, b)
 
     def test_random_clicks_stay_inside_window_and_respect_spacing(self):
-        start, end = _t(), _t(1)
+        start, end = _t(), _t(5)
         rows = generate_random_clicks(BtcRandomClickPolicy(start, end, 12, 7, min_spacing_seconds=120))
         self.assertTrue(all(start <= row < end for row in rows))
         self.assertTrue(all((b - a).total_seconds() >= 120 for a, b in zip(rows, rows[1:])))
 
     def test_impossible_dense_click_policy_fails(self):
         with self.assertRaises(ValueError):
-            generate_random_clicks(BtcRandomClickPolicy(_t(), _t(0, 1), 10, 1, min_spacing_seconds=30))
+            generate_random_clicks(BtcRandomClickPolicy(_t(), _t(4, 1), 10, 1, min_spacing_seconds=30))
 
     def test_future_evidence_at_click_is_rejected(self):
         with self.assertRaises(ValueError):
