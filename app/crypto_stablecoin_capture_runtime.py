@@ -36,6 +36,12 @@ def _int(value: str | None, default: int) -> int:
         raise ValueError(f"invalid integer environment value: {value!r}") from exc
 
 
+def _explicit_text(source: Mapping[str, str], key: str, default: str) -> str:
+    if key not in source:
+        return default
+    return str(source.get(key, "") or "").strip()
+
+
 @dataclass(frozen=True)
 class StablecoinSupplyRuntimeConfig:
     archive_enabled: bool = False
@@ -52,7 +58,7 @@ class StablecoinSupplyRuntimeConfig:
             database_url=str(source.get(ENV_DATABASE_URL, "") or "").strip(),
             stablecoin_enabled=_bool(source.get(ENV_STABLECOIN_ENABLED), False),
             poll_seconds=_int(source.get(ENV_STABLECOIN_POLL_SECONDS), 3600),
-            peg_type=str(source.get(ENV_STABLECOIN_PEG_TYPE, "peggedUSD") or "peggedUSD").strip(),
+            peg_type=_explicit_text(source, ENV_STABLECOIN_PEG_TYPE, "peggedUSD"),
         ).validated()
 
     def validated(self) -> "StablecoinSupplyRuntimeConfig":
