@@ -14,6 +14,7 @@ REQUIRED_ROUTES = {
     "/v1/internal/crude-oil-mini/research-framework/status",
     "/v1/internal/crude-oil-mini/research-framework/result",
     "/v1/internal/crypto/macro-live-availability/report",
+    "/v1/internal/crypto/btc/prospective-thesis/freeze",
 }
 
 

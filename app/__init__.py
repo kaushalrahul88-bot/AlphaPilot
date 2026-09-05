@@ -24,6 +24,8 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .crude_oil_mini_manual_api import register_crude_oil_mini_manual_routes  # noqa: E402
     from .crude_oil_mini_option_observation_store import register_crude_oil_mini_option_observation_startup  # noqa: E402
     from .crypto_btc_capture_startup import register_btc_capture_startup  # noqa: E402
+    from .crypto_btc_prospective_proof_api import register_btc_prospective_proof_routes  # noqa: E402
+    from .crypto_btc_prospective_proof_startup import register_btc_prospective_proof_startup  # noqa: E402
     from .crypto_macro_live_availability_api import register_crypto_macro_live_availability_routes  # noqa: E402
     from .shared_commodity_brain_dashboard_api import register_shared_commodity_brain_dashboard_routes  # noqa: E402
     from .main import _collector_store as _collector_auth, app as _app, settings as _settings  # noqa: E402
@@ -34,7 +36,9 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_copper_direction_v2_prospective_startup(_app, _settings)
     register_copper_commodity_brain_prospective_startup(_app, _settings)
     register_btc_capture_startup(_app)
+    register_btc_prospective_proof_startup(_app, _settings)
     register_copper_pit_routes(_app, _settings, _collector_auth)
     register_crude_oil_mini_manual_routes(_app, _settings)
+    register_btc_prospective_proof_routes(_app, _settings, _collector_auth)
     register_crypto_macro_live_availability_routes(_app, _settings, _collector_auth)
     register_shared_commodity_brain_dashboard_routes(_app, _settings)
