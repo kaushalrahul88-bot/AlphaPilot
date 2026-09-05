@@ -149,12 +149,6 @@ class DeribitBtcOptionsContextProvider:
         return [row for row in payload["result"] if isinstance(row, dict)]
 
     def refresh_instruments(self) -> int:
-        """Explicitly refresh cached instrument metadata.
-
-        Normal snapshot polling never calls this after the initial lazy seed.
-        A long-running WebSocket lifecycle tracker can replace this explicit
-        refresh in a later version without changing snapshot/evidence semantics.
-        """
         rows = self._get_result(
             INSTRUMENTS_URL,
             params={"currency": "BTC", "kind": "option", "expired": "false"},
@@ -165,13 +159,6 @@ class DeribitBtcOptionsContextProvider:
         return len(rows)
 
     def instrument_rows(self, *, refresh: bool = False) -> list[dict]:
-        """Return a defensive copy of the authoritative cached instrument seed.
-
-        Calling this method may perform exactly one lazy ``get_instruments``
-        request when the cache is empty. Subsequent calls are cache-only unless
-        the caller explicitly requests ``refresh=True``. It performs no trade or
-        ticker subscription.
-        """
         self._require_enabled()
         if refresh:
             self.refresh_instruments()
@@ -208,12 +195,7 @@ class DeribitBtcOptionsContextProvider:
                 continue
             if expiry <= minimum_expiry:
                 continue
-            normalized[name] = {
-                "instrument_name": name,
-                "expiry": expiry,
-                "strike": strike,
-                "option_type": option_type,
-            }
+            normalized[name] = {"instrument_name": name, "expiry": expiry, "strike": strike, "option_type": option_type}
         if not normalized:
             raise ValueError("Deribit returned no active BTC option instruments inside policy horizon")
         return normalized
@@ -231,12 +213,7 @@ class DeribitBtcOptionsContextProvider:
                 underlying = _finite("underlying_price", raw["underlying_price"], positive=True)
             except (KeyError, TypeError, ValueError):
                 continue
-            normalized[name] = {
-                "instrument_name": name,
-                "mark_iv": mark_iv,
-                "open_interest": open_interest,
-                "underlying_price": underlying,
-            }
+            normalized[name] = {"instrument_name": name, "mark_iv": mark_iv, "open_interest": open_interest, "underlying_price": underlying}
         if not normalized:
             raise ValueError("Deribit option summary contains no valid mark-IV/OI rows")
         return normalized
@@ -246,7 +223,6 @@ class DeribitBtcOptionsContextProvider:
         by_expiry: dict[datetime, list[dict]] = {}
         for row in matched:
             by_expiry.setdefault(row["expiry"], []).append(row)
-
         results: list[dict] = []
         for expiry in sorted(by_expiry)[: int(max_expiries)]:
             rows = by_expiry[expiry]
@@ -258,13 +234,11 @@ class DeribitBtcOptionsContextProvider:
             if not paired:
                 continue
             strike, sides = min(paired, key=lambda item: abs(item[0] - underlying))
-            call_iv = float(sides["call"]["mark_iv"])
-            put_iv = float(sides["put"]["mark_iv"])
             results.append({
                 "expiry": expiry,
                 "underlying_price": underlying,
                 "atm_strike": strike,
-                "atm_mark_iv": (call_iv + put_iv) / 2.0,
+                "atm_mark_iv": (float(sides["call"]["mark_iv"]) + float(sides["put"]["mark_iv"])) / 2.0,
             })
         return results
 
@@ -273,7 +247,6 @@ class DeribitBtcOptionsContextProvider:
         first_seen = _utc(self._clock())
         instruments = self._normalize_instruments(instruments_raw, first_seen_at=first_seen, policy=self.policy)
         summaries = self._normalize_summaries(summaries_raw)
-
         matched: list[dict] = []
         call_oi = 0.0
         put_oi = 0.0
@@ -289,7 +262,6 @@ class DeribitBtcOptionsContextProvider:
                 put_oi += float(row["open_interest"])
         if not matched:
             raise ValueError("Deribit instrument and summary responses have no matched BTC options")
-
         term = self._paired_atm_by_expiry(matched, max_expiries=self.policy.max_expiries_for_term_structure)
         if not term:
             raise ValueError("Deribit chain has no expiry with paired call/put ATM IV")
@@ -297,7 +269,6 @@ class DeribitBtcOptionsContextProvider:
         second = term[1] if len(term) >= 2 else None
         ratio = None if call_oi <= 0 else put_oi / call_oi
         slope = None if second is None else float(second["atm_mark_iv"]) - float(nearest["atm_mark_iv"])
-
         return DeribitBtcOptionsContextCapture(
             first_seen_at=first_seen,
             underlying_price_usd=float(nearest["underlying_price"]),
@@ -326,6 +297,7 @@ def architecture_contract() -> dict:
         "instrument_kind": "option",
         "currency": "BTC",
         "instrument_list_seeded_lazily": True,
+        "instrument_list_polled_each_snapshot": False,
         "instrument_seed_cached": True,
         "instrument_rows_public_seed_method": True,
         "instrument_refresh_explicit": True,
