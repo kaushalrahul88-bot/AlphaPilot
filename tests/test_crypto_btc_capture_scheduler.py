@@ -2,15 +2,22 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.coindcx_btc_public_provider import CoinDcxFuturesRtCapture
+from app.coinglass_btc_derivatives_provider import (
+    CoinGlassLiquidationCapture,
+    CoinGlassOpenInterestCapture,
+)
 from app.crypto_btc_capture_scheduler import (
     BtcCaptureSchedulerPolicy,
     BtcPitCaptureScheduler,
     COINDCX_FUTURES_RT_DATASET,
     COINDCX_FUTURES_RT_JOB,
+    COINGLASS_LIQUIDATIONS_JOB,
+    COINGLASS_OPEN_INTEREST_JOB,
     architecture_contract,
     capture_gap_report,
     coindcx_futures_rt_archive_record,
 )
+from app.crypto_btc_derivatives_capture import BTC_LIQUIDATIONS_DATASET, BTC_OPEN_INTEREST_DATASET
 from app.crypto_btc_historical_data_adapter import HistoricalProvenance
 from app.crypto_btc_pit_archive import ImmutableBtcPitLedger
 
@@ -63,6 +70,36 @@ class _FailingProvider:
         raise RuntimeError("provider unavailable")
 
 
+class _FakeCoinGlassProvider:
+    def __init__(self, provider_time=None):
+        self.provider_time = provider_time or _t() - timedelta(hours=4)
+        self.oi_calls = 0
+        self.liq_calls = 0
+
+    def capture_open_interest(self, *, first_seen_at):
+        self.oi_calls += 1
+        return CoinGlassOpenInterestCapture(
+            first_seen_at=first_seen_at,
+            provider_time=self.provider_time,
+            interval="4h",
+            open_interest_open_usd=10_000_000,
+            open_interest_high_usd=12_000_000,
+            open_interest_low_usd=9_000_000,
+            open_interest_close_usd=11_000_000,
+        ).validated()
+
+    def capture_liquidations(self, *, first_seen_at):
+        self.liq_calls += 1
+        return CoinGlassLiquidationCapture(
+            first_seen_at=first_seen_at,
+            provider_time=self.provider_time,
+            interval="4h",
+            long_liquidation_usd=2_000_000,
+            short_liquidation_usd=3_000_000,
+            exchanges=("Binance", "OKX", "Bybit"),
+        ).validated()
+
+
 class CryptoBtcCaptureSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_scheduler_makes_no_provider_or_store_call(self):
         provider = _FakeProvider()
@@ -91,6 +128,66 @@ class CryptoBtcCaptureSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger.manifest()["record_count"], 1)
         self.assertFalse(result["options_trade_generated"])
         self.assertFalse(result["futures_trade_generated"])
+
+    async def test_optional_coinglass_jobs_archive_oi_and_liquidations(self):
+        provider = _FakeProvider()
+        coinglass = _FakeCoinGlassProvider()
+        ledger = ImmutableBtcPitLedger()
+        scheduler = BtcPitCaptureScheduler(
+            provider=provider,
+            coinglass_provider=coinglass,
+            store=ledger,
+            policy=BtcCaptureSchedulerPolicy(
+                enabled=True,
+                poll_seconds=60,
+                coinglass_poll_seconds=300,
+                enabled_jobs=(COINGLASS_OPEN_INTEREST_JOB, COINGLASS_LIQUIDATIONS_JOB),
+            ),
+        )
+        result = await scheduler.run_cycle(now=_t())
+        self.assertEqual(result["status"], "BTC_CAPTURE_CYCLE_COMPLETE")
+        self.assertEqual(coinglass.oi_calls, 1)
+        self.assertEqual(coinglass.liq_calls, 1)
+        self.assertEqual({row["dataset"] for row in result["captured"]}, {BTC_OPEN_INTEREST_DATASET, BTC_LIQUIDATIONS_DATASET})
+        self.assertEqual(ledger.manifest()["record_count"], 2)
+        self.assertFalse(result["options_trade_generated"])
+        self.assertFalse(result["futures_trade_generated"])
+
+    async def test_coinglass_jobs_fail_closed_when_provider_not_configured(self):
+        ledger = ImmutableBtcPitLedger()
+        scheduler = BtcPitCaptureScheduler(
+            provider=_FakeProvider(),
+            store=ledger,
+            policy=BtcCaptureSchedulerPolicy(
+                enabled=True,
+                enabled_jobs=(COINGLASS_OPEN_INTEREST_JOB,),
+            ),
+        )
+        result = await scheduler.run_cycle(now=_t())
+        self.assertEqual(result["status"], "BTC_CAPTURE_CYCLE_PARTIAL_FAILURE")
+        self.assertEqual(result["errors"][0]["error_type"], "RuntimeError")
+        self.assertEqual(ledger.manifest()["record_count"], 0)
+
+    async def test_repoll_of_same_coinglass_provider_bar_is_idempotent(self):
+        coinglass = _FakeCoinGlassProvider()
+        ledger = ImmutableBtcPitLedger()
+        scheduler = BtcPitCaptureScheduler(
+            provider=_FakeProvider(),
+            coinglass_provider=coinglass,
+            store=ledger,
+            policy=BtcCaptureSchedulerPolicy(
+                enabled=True,
+                coinglass_poll_seconds=300,
+                enabled_jobs=(COINGLASS_OPEN_INTEREST_JOB,),
+            ),
+        )
+        first = await scheduler.run_cycle(now=_t())
+        second = await scheduler.run_cycle(now=_t() + timedelta(minutes=5))
+        self.assertEqual(first["captured"][0]["storage_status"], "INSERTED_FIRST_SEEN")
+        self.assertEqual(second["captured"][0]["storage_status"], "IDEMPOTENT_DUPLICATE")
+        self.assertEqual(ledger.manifest()["record_count"], 1)
+        visible = ledger.visible_as_of(_t() + timedelta(hours=1), dataset=BTC_OPEN_INTEREST_DATASET)
+        self.assertEqual(visible[0]["first_seen_at"], _t().isoformat())
 
     async def test_scheduler_does_not_repoll_before_interval(self):
         provider = _FakeProvider()
@@ -142,11 +239,13 @@ class CryptoBtcCaptureSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(record.payload["open_interest_inferred"])
         self.assertFalse(record.payload["liquidations_inferred"])
 
-    def test_gap_report_keeps_unimplemented_critical_feeds_explicit(self):
+    def test_gap_report_marks_oi_and_liquidations_implemented_but_options_still_missing(self):
         report = capture_gap_report()
+        self.assertIn(BTC_OPEN_INTEREST_DATASET, report["implemented_datasets"])
+        self.assertIn(BTC_LIQUIDATIONS_DATASET, report["implemented_datasets"])
+        self.assertNotIn(BTC_OPEN_INTEREST_DATASET, report["missing_collectors"])
+        self.assertNotIn(BTC_LIQUIDATIONS_DATASET, report["missing_collectors"])
         self.assertIn("COINDCX_BTC_OPTION_CHAIN_GREEKS_IV_OI_QUOTES", report["missing_collectors"])
-        self.assertIn("BTC_OPEN_INTEREST", report["missing_collectors"])
-        self.assertIn("BTC_LIQUIDATIONS", report["missing_collectors"])
         self.assertFalse(report["missing_collectors_are_treated_as_neutral"])
         self.assertFalse(report["historical_options_fabricated"])
 
@@ -154,13 +253,18 @@ class CryptoBtcCaptureSchedulerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             BtcCaptureSchedulerPolicy(enabled=True, poll_seconds=9).validated()
         with self.assertRaises(ValueError):
+            BtcCaptureSchedulerPolicy(enabled=True, coinglass_poll_seconds=59).validated()
+        with self.assertRaises(ValueError):
             BtcCaptureSchedulerPolicy(enabled=True, enabled_jobs=("UNKNOWN",)).validated()
 
     def test_architecture_contract_keeps_collection_and_execution_off_by_default(self):
         contract = architecture_contract()
         self.assertFalse(contract["collection_enabled_by_default"])
         self.assertFalse(contract["scheduler_starts_at_import"])
-        self.assertEqual(contract["implemented_jobs"], [COINDCX_FUTURES_RT_JOB])
+        self.assertIn(COINDCX_FUTURES_RT_JOB, contract["implemented_jobs"])
+        self.assertIn(COINGLASS_OPEN_INTEREST_JOB, contract["implemented_jobs"])
+        self.assertIn(COINGLASS_LIQUIDATIONS_JOB, contract["implemented_jobs"])
+        self.assertEqual(contract["default_enabled_jobs"], [COINDCX_FUTURES_RT_JOB])
         self.assertFalse(contract["options_trade_generation_allowed"])
         self.assertFalse(contract["futures_trade_generation_allowed"])
 
