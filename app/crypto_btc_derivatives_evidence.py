@@ -12,6 +12,7 @@ from math import isfinite
 from typing import Iterable
 
 from app.crypto_btc_derivatives_capture import BTC_LIQUIDATIONS_DATASET, BTC_OPEN_INTEREST_DATASET
+from app.crypto_btc_funding_percentile import FundingPercentilePolicy, funding_percentile_from_pit_records
 from app.crypto_market_intelligence import Evidence, derivatives_context
 
 
@@ -76,8 +77,9 @@ def derivatives_evidence_from_pit_records(
     if max_event_misalignment_seconds < 0:
         raise ValueError("max_event_misalignment_seconds must be >= 0")
 
-    oi = _latest_visible(records, dataset=BTC_OPEN_INTEREST_DATASET, decision_at=decision)
-    liq = _latest_visible(records, dataset=BTC_LIQUIDATIONS_DATASET, decision_at=decision)
+    rows = list(records)
+    oi = _latest_visible(rows, dataset=BTC_OPEN_INTEREST_DATASET, decision_at=decision)
+    liq = _latest_visible(rows, dataset=BTC_LIQUIDATIONS_DATASET, decision_at=decision)
     if oi is None or liq is None:
         return _unknown(
             decision,
@@ -151,13 +153,43 @@ def derivatives_evidence_from_pit_records(
     return replace(evidence, metadata=metadata)
 
 
+def derivatives_evidence_from_full_pit_context(
+    records: Iterable[dict],
+    *,
+    decision_at: datetime,
+    price_change_pct: float,
+    perp_premium_bps: float | None = None,
+    funding_policy: FundingPercentilePolicy | None = None,
+    max_event_misalignment_seconds: int = 60,
+) -> Evidence:
+    rows = list(records)
+    funding = funding_percentile_from_pit_records(rows, decision_at=decision_at, policy=funding_policy)
+    evidence = derivatives_evidence_from_pit_records(
+        rows,
+        decision_at=decision_at,
+        price_change_pct=price_change_pct,
+        funding_percentile=funding.get("percentile"),
+        perp_premium_bps=perp_premium_bps,
+        max_event_misalignment_seconds=max_event_misalignment_seconds,
+    )
+    metadata = dict(evidence.metadata)
+    metadata.update({
+        "funding_context_status": funding["status"],
+        "funding_prior_sample_count": funding.get("prior_sample_count", 0),
+        "funding_percentile_point_in_time": funding.get("percentile"),
+    })
+    return replace(evidence, metadata=metadata)
+
+
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_DERIVATIVES_PIT_EVIDENCE_V1",
+        "version": "BTC_DERIVATIVES_PIT_EVIDENCE_V2",
         "requires_open_interest": True,
         "requires_liquidations": True,
         "requires_point_in_time_visibility": True,
         "requires_temporal_alignment": True,
+        "funding_percentile_may_be_derived_from_prior_pit_history": True,
+        "insufficient_funding_history_blocks_oi_liquidation_evidence": False,
         "missing_leg_may_be_directional": False,
         "mismatched_intervals_may_be_directional": False,
         "provider_history_assumed_immutable": False,
