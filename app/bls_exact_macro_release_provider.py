@@ -132,7 +132,7 @@ def _parse_cpi(text: str, month_name: str) -> tuple[dict[str, float], dict[str, 
         re.compile(
             r"Consumer\s+Price\s+Index\s+for\s+All\s+Urban\s+Consumers\s*\(CPI-U\)\s+"
             r"(?P<verb>increased|rose|fell|declined|decreased|was\s+unchanged)"
-            r"(?:\s+(?:by\s+)??(?P<value>\d+(?:\.\d+)?)\s+percent)?"
+            r"(?:\s+(?:by\s+)?(?P<value>\d+(?:\.\d+)?)\s+percent)?"
             r".*?\s+in\s+" + re.escape(month_name),
             re.IGNORECASE,
         ),
@@ -142,7 +142,7 @@ def _parse_cpi(text: str, month_name: str) -> tuple[dict[str, float], dict[str, 
         re.compile(
             r"index\s+for\s+all\s+items\s+less\s+food\s+and\s+energy\s+"
             r"(?P<verb>increased|rose|fell|declined|decreased|was\s+unchanged)"
-            r"(?:\s+(?:by\s+)??(?P<value>\d+(?:\.\d+)?)\s+percent)?",
+            r"(?:\s+(?:by\s+)?(?P<value>\d+(?:\.\d+)?)\s+percent)?",
             re.IGNORECASE,
         ),
     )
