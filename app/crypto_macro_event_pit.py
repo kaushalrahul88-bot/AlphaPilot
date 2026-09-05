@@ -1,6 +1,8 @@
 """Immutable PIT adapters for exact official macro releases and consensus states."""
 from __future__ import annotations
 
+from datetime import timezone
+
 from app.crypto_btc_pit_archive import BtcPitArchiveRecord, archive_record_from_capture
 from app.crypto_macro_event_intelligence import MacroConsensusSnapshot, OfficialMacroRelease
 
@@ -42,9 +44,9 @@ def official_macro_release_archive_record(release: OfficialMacroRelease) -> BtcP
 
 def macro_consensus_archive_record(consensus: MacroConsensusSnapshot) -> BtcPitArchiveRecord:
     row = consensus.validated()
-    provider_time = None if row.provider_time is None else row.provider_time.astimezone(row.first_seen_at.tzinfo).astimezone(__import__("datetime").timezone.utc)
-    first_seen = row.first_seen_at.astimezone(__import__("datetime").timezone.utc)
-    release_at = row.release_at.astimezone(__import__("datetime").timezone.utc)
+    provider_time = None if row.provider_time is None else row.provider_time.astimezone(timezone.utc)
+    first_seen = row.first_seen_at.astimezone(timezone.utc)
+    release_at = row.release_at.astimezone(timezone.utc)
     payload = {
         "event_key": row.event_key,
         "event_type": row.event_type,
