@@ -70,11 +70,30 @@ class BtcSourceCapabilityTests(unittest.TestCase):
         for dataset in (
             "CRYPTO_NEWS_EVENTS",
             "CRYPTO_SOCIAL_POSTS_AND_NARRATIVE_VELOCITY",
+            "CRYPTO_SOCIAL_ENRICHMENT",
             "BTC_ONCHAIN_ENTITY_AND_FLOW_METRICS",
         ):
             row = capability_for(dataset)
             self.assertFalse(row.can_reconstruct_later)
             self.assertIn(row.historical_mode, {"EXTERNAL_PIT_ARCHIVE_REQUIRED", "FIRST_SEEN_ARCHIVE_REQUIRED"})
+
+    def test_social_raw_requires_approved_source_and_enrichment_is_separate_context(self):
+        raw = capability_for("CRYPTO_SOCIAL_POSTS_AND_NARRATIVE_VELOCITY")
+        enrichment = capability_for("CRYPTO_SOCIAL_ENRICHMENT")
+        plan = live_capture_plan()
+        contract = architecture_contract()
+        self.assertEqual(raw.provider, "APPROVED_OR_LICENSED_SOURCE")
+        self.assertEqual(raw.decision_role, "CONTEXT_ONLY")
+        self.assertEqual(enrichment.provider, "ALPHAPILOT")
+        self.assertEqual(enrichment.historical_mode, "FIRST_SEEN_ARCHIVE_REQUIRED")
+        self.assertEqual(enrichment.decision_role, "CONTEXT_ONLY")
+        self.assertIn(raw.dataset, plan["capture_high_priority"])
+        self.assertIn(enrichment.dataset, plan["capture_high_priority"])
+        self.assertTrue(plan["social_raw_and_enrichment_have_separate_first_seen_state"])
+        self.assertTrue(plan["social_provider_requires_verified_rights"])
+        self.assertFalse(contract["social_public_visibility_equals_retention_permission"])
+        self.assertFalse(contract["social_analysis_learned_later_may_be_backdated"])
+        self.assertFalse(contract["raw_social_may_be_rewritten_by_enrichment"])
 
     def test_aggregate_stablecoin_supply_is_context_only_and_separate_from_venue_flows(self):
         aggregate = capability_for("STABLECOIN_SUPPLY_LIQUIDITY")
