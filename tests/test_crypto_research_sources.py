@@ -6,6 +6,7 @@ def test_source_inventory_spans_online_offline_and_structured_sources():
     mediums = {row["medium"] for row in inventory["sources"]}
     assert "BOOK" in mediums
     assert "ACADEMIC_PAPER" in mediums
+    assert "NEWS" in mediums
     assert "NEWS_MAGAZINE" in mediums
     assert "SOCIAL_X" in mediums
     assert "REDDIT_FORUM" in mediums
@@ -13,6 +14,17 @@ def test_source_inventory_spans_online_offline_and_structured_sources():
     assert "TELEGRAM_DISCORD" in mediums
     assert "ONCHAIN_DATA" in mediums
     assert "MARKET_DATA" in mediums
+
+
+def test_news_is_first_class_and_split_by_reporting_role():
+    inventory = source_inventory_v1()
+    ids = {row["id"] for row in inventory["sources"]}
+    assert inventory["news_is_first_class_live_intelligence"] is True
+    assert inventory["news_truth_and_market_impact_scored_separately"] is True
+    assert inventory["news_primary_corroboration_preferred"] is True
+    assert {"BREAKING_NEWS", "FINANCIAL_NEWS", "CRYPTO_NATIVE_NEWS", "OFFICIAL_ANNOUNCEMENTS"}.issubset(ids)
+    assert source_class("BREAKING_NEWS").timestamp_required is True
+    assert source_class("CRYPTO_NATIVE_NEWS").historical_reliability_tracking is True
 
 
 def test_book_ingestion_does_not_default_to_full_text_persistence():
