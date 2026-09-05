@@ -1,12 +1,13 @@
 """On-chain metric semantics and horizon guardrails for the Crypto Brain.
 
-This module deliberately treats most slow/cycle metrics as context. It prevents
-metrics such as MVRV, SOPR, network activity, miner flows or token unlocks from
-silently becoming short-horizon trading triggers without empirical promotion.
+This module deliberately treats on-chain metrics as context by default. It
+prevents cycle metrics such as MVRV/SOPR, and faster entity-flow metrics such as
+exchange/whale transfers, from silently becoming standalone short-horizon trade
+signals without empirical promotion and market confirmation.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -64,6 +65,18 @@ METRIC_SEMANTICS = {
         "horizon": "days_to_months",
         "standalone_direction_allowed": False,
         "meaning": "Market value relative to realized value; useful for broad profitability/cycle context, not intraday timing.",
+    },
+    "EXCHANGE_NETFLOW": {
+        "role": "FAST_EVENT",
+        "horizon": "minutes_to_days",
+        "standalone_direction_allowed": False,
+        "meaning": "Exchange netflow can indicate changes in liquid supply, but labeled exchange entities can be revised and flow intent is ambiguous; require first-seen provenance plus spot/derivatives confirmation.",
+    },
+    "WHALE_EXCHANGE_FLOW": {
+        "role": "FAST_EVENT",
+        "horizon": "minutes_to_days",
+        "standalone_direction_allowed": False,
+        "meaning": "Large-holder transfers to exchanges may represent potential sell-side liquidity but can also reflect custody, collateral, OTC or market-making activity; never infer selling from transfer size alone.",
     },
     "REALIZED_PRICE": {
         "role": "CYCLE_CONTEXT",
@@ -181,8 +194,10 @@ def token_unlock_context(
 
 def onchain_architecture_contract() -> dict:
     return {
-        "version": "CRYPTO_ONCHAIN_INTELLIGENCE_V1",
+        "version": "CRYPTO_ONCHAIN_INTELLIGENCE_V2",
         "raw_transfer_equals_trade": False,
+        "exchange_inflow_equals_sell": False,
+        "whale_transfer_equals_sell": False,
         "slow_cycle_metric_may_trigger_intraday_trade": False,
         "network_activity_is_directional_by_itself": False,
         "miner_or_validator_flow_is_directional_by_itself": False,
