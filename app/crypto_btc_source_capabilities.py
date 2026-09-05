@@ -104,6 +104,18 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
     ),
     SourceCapability(
         lane="OPTIONS_MARKET",
+        dataset="BTC_GLOBAL_OPTIONS_CONTEXT",
+        provider="DERIBIT",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="Archive each Deribit chain-context snapshot with AlphaPilot first_seen_at. Current chain summaries fetched later cannot be backdated into earlier clicks.",
+        can_reconstruct_later=False,
+        live_capture_priority="HIGH",
+        decision_role="OPTIONS_TRANSLATION",
+        documented_endpoint="GET https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option",
+        notes="Global BTC options IV/OI/term-structure context only. Deribit contracts and quotes may not select, fill, or score a CoinDCX option trade.",
+    ),
+    SourceCapability(
+        lane="OPTIONS_MARKET",
         dataset="COINDCX_BTC_OPTION_CHAIN_GREEKS_IV_OI_QUOTES",
         provider="COINDCX",
         historical_mode="UNCONFIRMED",
@@ -227,11 +239,11 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
         dataset="ALPHAPILOT_PRIOR_RESOLVED_EXPERIENCE",
         provider="ALPHAPILOT",
         historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
-        point_in_time_requirement="Only experiences resolved strictly before the current click may be visible.",
+        point_in_time_requirement="Use the dedicated immutable Experience Memory store; only cases with resolved_at strictly before the current click may be visible.",
         can_reconstruct_later=False,
         live_capture_priority="CRITICAL",
         decision_role="CONTEXT_ONLY",
-        notes="Memory cannot use future outcomes and cannot create the second directional confirmation by itself.",
+        notes="Resolved outcomes belong in dedicated Experience Memory, not the market-data PIT archive. Memory cannot use future outcomes or create the second directional confirmation by itself.",
     ),
 )
 
@@ -262,12 +274,13 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V4",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V5",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
         "rule": "STORE_IRREPLACEABLE_PIT_STATE_FIRST; RECONSTRUCT_PUBLIC_CANDLES_LATER",
         "options_archive_required_before_economic_backtest": True,
+        "global_options_context_is_not_coindcx_execution_data": True,
         "futures_context_capture_does_not_enable_futures_execution": True,
         "news_raw_and_enrichment_have_separate_first_seen_state": True,
         "social_raw_and_enrichment_have_separate_first_seen_state": True,
@@ -278,11 +291,13 @@ def live_capture_plan() -> dict:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V4",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V5",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
         "option_history_may_be_fabricated": False,
+        "global_options_context_may_select_coindcx_contract": False,
+        "global_options_context_may_fill_coindcx_replay": False,
         "provider_entity_label_revision_may_rewrite_old_click": False,
         "scheduled_macro_revision_may_replace_first_release": False,
         "news_verification_learned_later_may_be_backdated": False,
