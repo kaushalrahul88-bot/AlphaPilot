@@ -1,9 +1,9 @@
 """Disabled-by-default scheduler for irrecoverable BTC point-in-time capture.
 
-The scheduler is deliberately narrow. It may archive verified data collectors,
-but it never creates an Options/Futures trade and never starts automatically.
-At present only CoinDCX's current BTC Futures funding/mark snapshot has a public
-collector implementation. Missing critical collectors are reported as gaps.
+The scheduler archives verified research data only. It never creates an
+Options/Futures trade and never starts automatically. CoinDCX funding/mark is the
+default implemented job; optional CoinGlass OI/liquidation jobs require an
+explicitly configured provider/API key.
 """
 from __future__ import annotations
 
@@ -14,12 +14,30 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.coindcx_btc_public_provider import CoinDcxBtcPublicProvider, CoinDcxFuturesRtCapture
+from app.coinglass_btc_derivatives_provider import CoinGlassBtcDerivativesProvider
+from app.crypto_btc_derivatives_capture import (
+    BTC_LIQUIDATIONS_DATASET,
+    BTC_OPEN_INTEREST_DATASET,
+    coinglass_liquidation_archive_record,
+    coinglass_open_interest_archive_record,
+)
 from app.crypto_btc_pit_archive import BtcPitArchiveRecord, archive_record_from_capture
 from app.crypto_btc_source_capabilities import live_capture_plan
 
 COINDCX_FUTURES_RT_JOB = "COINDCX_BTC_FUTURES_FUNDING_MARK"
 COINDCX_FUTURES_RT_DATASET = "BTC_FUTURES_FUNDING_MARK_SNAPSHOT"
-IMPLEMENTED_DATASETS = frozenset({COINDCX_FUTURES_RT_DATASET})
+COINGLASS_OPEN_INTEREST_JOB = "COINGLASS_BTC_OPEN_INTEREST"
+COINGLASS_LIQUIDATIONS_JOB = "COINGLASS_BTC_LIQUIDATIONS"
+SUPPORTED_JOBS = frozenset({
+    COINDCX_FUTURES_RT_JOB,
+    COINGLASS_OPEN_INTEREST_JOB,
+    COINGLASS_LIQUIDATIONS_JOB,
+})
+IMPLEMENTED_DATASETS = frozenset({
+    COINDCX_FUTURES_RT_DATASET,
+    BTC_OPEN_INTEREST_DATASET,
+    BTC_LIQUIDATIONS_DATASET,
+})
 
 
 def _utc(dt: datetime) -> datetime:
@@ -36,14 +54,16 @@ def _iso(dt: datetime | None) -> str | None:
 class BtcCaptureSchedulerPolicy:
     enabled: bool = False
     poll_seconds: int = 60
+    coinglass_poll_seconds: int = 300
     enabled_jobs: tuple[str, ...] = (COINDCX_FUTURES_RT_JOB,)
     continue_after_job_failure: bool = True
 
     def validated(self) -> "BtcCaptureSchedulerPolicy":
         if int(self.poll_seconds) < 10:
             raise ValueError("BTC capture poll_seconds must be >= 10")
-        supported = {COINDCX_FUTURES_RT_JOB}
-        unknown = sorted(set(self.enabled_jobs) - supported)
+        if int(self.coinglass_poll_seconds) < 60:
+            raise ValueError("CoinGlass poll_seconds must be >= 60")
+        unknown = sorted(set(self.enabled_jobs) - SUPPORTED_JOBS)
         if unknown:
             raise ValueError(f"unsupported BTC capture jobs: {unknown}")
         if len(set(self.enabled_jobs)) != len(self.enabled_jobs):
@@ -65,9 +85,10 @@ class BtcCaptureSchedulerState:
 
     def snapshot(self, *, policy: BtcCaptureSchedulerPolicy) -> dict:
         return {
-            "version": "BTC_CAPTURE_SCHEDULER_STATE_V1",
+            "version": "BTC_CAPTURE_SCHEDULER_STATE_V2",
             "enabled": policy.enabled,
             "poll_seconds": policy.poll_seconds,
+            "coinglass_poll_seconds": policy.coinglass_poll_seconds,
             "enabled_jobs": list(policy.enabled_jobs),
             "started_at": _iso(self.started_at),
             "last_cycle_at": _iso(self.last_cycle_at),
@@ -136,27 +157,58 @@ class BtcPitCaptureScheduler:
         provider: CoinDcxBtcPublicProvider,
         store: Any,
         policy: BtcCaptureSchedulerPolicy | None = None,
+        coinglass_provider: CoinGlassBtcDerivativesProvider | None = None,
     ) -> None:
         self.provider = provider
+        self.coinglass_provider = coinglass_provider
         self.store = store
         self.policy = (policy or BtcCaptureSchedulerPolicy()).validated()
         self.state = BtcCaptureSchedulerState()
 
+    def _job_poll_seconds(self, job: str) -> int:
+        if job in {COINGLASS_OPEN_INTEREST_JOB, COINGLASS_LIQUIDATIONS_JOB}:
+            return int(self.policy.coinglass_poll_seconds)
+        return int(self.policy.poll_seconds)
+
     def _job_due(self, job: str, now: datetime) -> bool:
         last = self.state.job_last_attempt_at.get(job)
-        return last is None or _utc(now) - _utc(last) >= timedelta(seconds=self.policy.poll_seconds)
+        return last is None or _utc(now) - _utc(last) >= timedelta(seconds=self._job_poll_seconds(job))
 
     async def _capture_coindcx_futures_rt(self, now: datetime) -> dict:
         capture = await asyncio.to_thread(self.provider.capture_futures_rt, first_seen_at=_utc(now))
         record = coindcx_futures_rt_archive_record(capture)
         stored = await _store_insert(self.store, record)
+        return self._capture_result(COINDCX_FUTURES_RT_JOB, record, stored)
+
+    def _require_coinglass(self) -> CoinGlassBtcDerivativesProvider:
+        if self.coinglass_provider is None:
+            raise RuntimeError("CoinGlass BTC derivatives provider is not configured")
+        return self.coinglass_provider
+
+    async def _capture_coinglass_open_interest(self, now: datetime) -> dict:
+        provider = self._require_coinglass()
+        capture = await asyncio.to_thread(provider.capture_open_interest, first_seen_at=_utc(now))
+        record = coinglass_open_interest_archive_record(capture)
+        stored = await _store_insert(self.store, record)
+        return self._capture_result(COINGLASS_OPEN_INTEREST_JOB, record, stored)
+
+    async def _capture_coinglass_liquidations(self, now: datetime) -> dict:
+        provider = self._require_coinglass()
+        capture = await asyncio.to_thread(provider.capture_liquidations, first_seen_at=_utc(now))
+        record = coinglass_liquidation_archive_record(capture)
+        stored = await _store_insert(self.store, record)
+        return self._capture_result(COINGLASS_LIQUIDATIONS_JOB, record, stored)
+
+    @staticmethod
+    def _capture_result(job: str, record: BtcPitArchiveRecord, stored: dict) -> dict:
         return {
-            "job": COINDCX_FUTURES_RT_JOB,
-            "dataset": COINDCX_FUTURES_RT_DATASET,
+            "job": job,
+            "dataset": record.dataset,
             "storage_status": stored.get("status"),
             "natural_key": stored.get("natural_key") or record.natural_key,
             "record_fingerprint": stored.get("record_fingerprint") or record.record_fingerprint,
             "first_seen_at": _iso(record.first_seen_at),
+            "event_at": _iso(record.event_at),
             "options_trade_generated": False,
             "futures_trade_generated": False,
         }
@@ -188,7 +240,11 @@ class BtcPitCaptureScheduler:
             try:
                 if job == COINDCX_FUTURES_RT_JOB:
                     result = await self._capture_coindcx_futures_rt(stamp)
-                else:  # policy validation makes this unreachable; fail closed if contract changes.
+                elif job == COINGLASS_OPEN_INTEREST_JOB:
+                    result = await self._capture_coinglass_open_interest(stamp)
+                elif job == COINGLASS_LIQUIDATIONS_JOB:
+                    result = await self._capture_coinglass_liquidations(stamp)
+                else:
                     raise ValueError(f"unsupported BTC capture job: {job}")
                 captured.append(result)
                 if result["storage_status"] == "INSERTED_FIRST_SEEN":
@@ -233,7 +289,7 @@ def capture_gap_report() -> dict:
     desired = list(dict.fromkeys(plan["capture_first"] + plan["capture_high_priority"]))
     missing = [dataset for dataset in desired if dataset not in IMPLEMENTED_DATASETS]
     return {
-        "version": "BTC_CAPTURE_GAP_REPORT_V1",
+        "version": "BTC_CAPTURE_GAP_REPORT_V2",
         "implemented_datasets": sorted(IMPLEMENTED_DATASETS),
         "desired_critical_and_high_datasets": desired,
         "missing_collectors": missing,
@@ -241,17 +297,24 @@ def capture_gap_report() -> dict:
         "missing_collectors_are_reported_unavailable": True,
         "historical_options_fabricated": False,
         "collection_enabled": False,
+        "optional_provider_configuration_required": {
+            BTC_OPEN_INTEREST_DATASET: "COINGLASS_API_KEY_OR_OTHER_VERIFIED_PROVIDER",
+            BTC_LIQUIDATIONS_DATASET: "COINGLASS_API_KEY_OR_OTHER_VERIFIED_PROVIDER",
+        },
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_CAPTURE_SCHEDULER_CONTRACT_V1",
+        "version": "BTC_CAPTURE_SCHEDULER_CONTRACT_V2",
         "collection_enabled_by_default": False,
         "scheduler_starts_at_import": False,
         "caller_must_explicitly_invoke_service_loop": True,
         "minimum_poll_seconds": 10,
-        "implemented_jobs": [COINDCX_FUTURES_RT_JOB],
+        "implemented_jobs": sorted(SUPPORTED_JOBS),
+        "default_enabled_jobs": [COINDCX_FUTURES_RT_JOB],
+        "coinglass_jobs_require_explicit_provider": True,
+        "provider_history_is_not_assumed_immutable": True,
         "unimplemented_sources_may_be_fabricated": False,
         "missing_source_treated_as_neutral": False,
         "futures_context_capture_enables_futures_execution": False,
