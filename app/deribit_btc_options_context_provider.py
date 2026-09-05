@@ -325,6 +325,7 @@ def architecture_contract() -> dict:
         "documented_book_summary_endpoint": BOOK_SUMMARY_URL,
         "instrument_kind": "option",
         "currency": "BTC",
+        "instrument_list_seeded_lazily": True,
         "instrument_seed_cached": True,
         "instrument_rows_public_seed_method": True,
         "instrument_refresh_explicit": True,
