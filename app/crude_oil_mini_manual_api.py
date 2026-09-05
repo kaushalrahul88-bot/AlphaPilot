@@ -18,6 +18,10 @@ from .crude_oil_mini_pit_candles import (
 from .crude_oil_mini_prospective_memory_v1 import read_prospective_experience_memory
 from .crude_oil_mini_research_protocol_v1 import baseline_manifest
 from .crude_oil_mini_research_status_v1 import read_crude_oil_mini_research_status
+from .crude_oil_mini_shared_brain_parity_v1 import (
+    build_shared_brain_parity,
+    build_shared_shadow_from_legacy_families,
+)
 from .crude_oil_pit_context_probe import probe_crude_oil_pit_context
 from .providers.factory import get_provider
 
@@ -103,6 +107,17 @@ def register_crude_oil_mini_manual_routes(app, settings) -> None:
                 click_at=click,
                 scheduled_slot_at=click,
             )
+
+            # Prospective parity is a pure synthesis comparison over the exact
+            # legacy PIT evidence-family snapshot. No second market/data read occurs.
+            legacy_shadow = dict(result.get("integrated_v2_shadow") or {})
+            shared_shadow = build_shared_shadow_from_legacy_families(legacy_shadow)
+            result["shared_commodity_brain_shadow_v1"] = shared_shadow
+            result["shared_commodity_brain_parity_v1"] = build_shared_brain_parity(
+                legacy=legacy_shadow,
+                shared=shared_shadow,
+            )
+
             action = str((result.get("current_mind") or {}).get("action") or "NO_TRADE")
             option_expression = build_option_expression(
                 action=action,
