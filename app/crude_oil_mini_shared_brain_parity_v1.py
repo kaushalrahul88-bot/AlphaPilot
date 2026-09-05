@@ -17,29 +17,59 @@ REQUIRED_FAMILIES = (
 )
 
 
+def _unavailable_shared(reason: str) -> dict:
+    return {
+        "mode": SHARED_MODE,
+        "status": "UNAVAILABLE",
+        "reason": reason[:500],
+        "research_only": True,
+        "shadow_only": True,
+        "same_pit_family_snapshot_as_legacy": True,
+        "direction": "UNKNOWN",
+        "direction_confidence": "UNKNOWN",
+        "thesis_state": "PARITY_SYNTHESIS_UNAVAILABLE",
+        "supporting_families": [],
+        "opposing_families": [],
+        "dependency_audit": {},
+        "families": {},
+        "current_mind_effect": "NONE",
+        "geometry_effect": "NONE",
+        "option_brain_effect": "NONE",
+        "decision_effect": "NONE",
+        "execution_effect": "NONE",
+        "capital_committed": 0,
+        "promotion_eligible": False,
+    }
+
+
 def build_shared_shadow_from_legacy_families(legacy: dict) -> dict:
     """Run only shared synthesis over the exact legacy PIT family snapshot.
 
     No market source, candle store, option store, news source, or memory store is
-    queried here. This makes prospective parity a pure architecture comparison:
-    both syntheses consume the same already-frozen evidence-family objects.
+    queried here. Any parity failure is converted to research-unavailable state so
+    it cannot block or alter the already-frozen Current Mind decision.
     """
     families = dict((legacy or {}).get("families") or {})
     missing = [name for name in REQUIRED_FAMILIES if not isinstance(families.get(name), dict)]
     if missing:
-        raise ValueError(f"Legacy PIT family snapshot is incomplete: {','.join(missing)}")
+        return _unavailable_shared(f"Legacy PIT family snapshot is incomplete: {','.join(missing)}")
 
-    synthesis = synthesize_crude_shared_families(
-        local=families["LOCAL_STRUCTURE"],
-        participation=families["PARTICIPATION"],
-        global_crude=families["GLOBAL_CRUDE"],
-        event=families["EVENT_REACTION"],
-        memory=families["DIRECTION_MEMORY"],
-    )
+    try:
+        synthesis = synthesize_crude_shared_families(
+            local=families["LOCAL_STRUCTURE"],
+            participation=families["PARTICIPATION"],
+            global_crude=families["GLOBAL_CRUDE"],
+            event=families["EVENT_REACTION"],
+            memory=families["DIRECTION_MEMORY"],
+        )
+    except Exception as exc:
+        return _unavailable_shared(f"{exc.__class__.__name__}: {str(exc)}")
+
     thesis = synthesis["thesis"]
     normalized = synthesis["families"]
     return {
         "mode": SHARED_MODE,
+        "status": "EVALUATED",
         "research_only": True,
         "shadow_only": True,
         "same_pit_family_snapshot_as_legacy": True,
@@ -66,6 +96,7 @@ def _summary(result: dict, *, default_mode: str | None = None) -> dict:
         confidence = result.get("confidence")
     return {
         "mode": result.get("mode") or default_mode,
+        "status": result.get("status", "EVALUATED"),
         "direction": str(result.get("direction") or "UNKNOWN").upper(),
         "confidence": str(confidence or "UNKNOWN").upper(),
         "thesis_state": result.get("thesis_state"),
@@ -90,10 +121,13 @@ def build_shared_brain_parity(*, legacy: dict, shared: dict) -> dict:
     """Compare legacy and shared synthesis from one prospective PIT family snapshot."""
     legacy_view = _summary(legacy or {}, default_mode=LEGACY_MODE)
     shared_view = _summary(shared or {}, default_mode=SHARED_MODE)
-    direction_agreement = legacy_view["direction"] == shared_view["direction"]
-    confidence_agreement = legacy_view["confidence"] == shared_view["confidence"]
+    available = shared_view["status"] == "EVALUATED"
+    direction_agreement = available and legacy_view["direction"] == shared_view["direction"]
+    confidence_agreement = available and legacy_view["confidence"] == shared_view["confidence"]
 
-    if direction_agreement and confidence_agreement:
+    if not available:
+        divergence = "SHARED_PARITY_UNAVAILABLE"
+    elif direction_agreement and confidence_agreement:
         divergence = "NONE"
     elif _legacy_memory_counted(legacy or {}):
         divergence = "MEMORY_CONTEXT_ONLY_CORRECTION"
@@ -104,15 +138,16 @@ def build_shared_brain_parity(*, legacy: dict, shared: dict) -> dict:
 
     return {
         "mode": MODE,
+        "status": "EVALUATED" if available else "UNAVAILABLE",
         "research_only": True,
         "prospective_capture": True,
         "same_pit_input_snapshot": True,
         "same_pit_family_snapshot": True,
         "legacy": legacy_view,
         "shared": shared_view,
-        "direction_agreement": direction_agreement,
-        "confidence_agreement": confidence_agreement,
-        "full_thesis_agreement": direction_agreement and confidence_agreement,
+        "direction_agreement": direction_agreement if available else None,
+        "confidence_agreement": confidence_agreement if available else None,
+        "full_thesis_agreement": (direction_agreement and confidence_agreement) if available else None,
         "divergence_reason": divergence,
         "memory_policy": {
             "legacy_memory_counted": _legacy_memory_counted(legacy or {}),
