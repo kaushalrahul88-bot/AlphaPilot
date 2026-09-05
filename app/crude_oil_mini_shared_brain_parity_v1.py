@@ -1,7 +1,62 @@
 from __future__ import annotations
 
+from .crude_oil_mini_commodity_brain_shadow_v1 import (
+    MODE as SHARED_MODE,
+    synthesize_crude_shared_families,
+)
+
 MODE = "CRUDE_OIL_MINI_SHARED_BRAIN_PARITY_V1"
 MEMORY_FAMILY = "DIRECTION_MEMORY"
+REQUIRED_FAMILIES = (
+    "LOCAL_STRUCTURE",
+    "PARTICIPATION",
+    "GLOBAL_CRUDE",
+    "EVENT_REACTION",
+    "DIRECTION_MEMORY",
+)
+
+
+def build_shared_shadow_from_legacy_families(legacy: dict) -> dict:
+    """Run only shared synthesis over the exact legacy PIT family snapshot.
+
+    No market source, candle store, option store, news source, or memory store is
+    queried here. This makes prospective parity a pure architecture comparison:
+    both syntheses consume the same already-frozen evidence-family objects.
+    """
+    families = dict((legacy or {}).get("families") or {})
+    missing = [name for name in REQUIRED_FAMILIES if not isinstance(families.get(name), dict)]
+    if missing:
+        raise ValueError(f"Legacy PIT family snapshot is incomplete: {','.join(missing)}")
+
+    synthesis = synthesize_crude_shared_families(
+        local=families["LOCAL_STRUCTURE"],
+        participation=families["PARTICIPATION"],
+        global_crude=families["GLOBAL_CRUDE"],
+        event=families["EVENT_REACTION"],
+        memory=families["DIRECTION_MEMORY"],
+    )
+    thesis = synthesis["thesis"]
+    normalized = synthesis["families"]
+    return {
+        "mode": SHARED_MODE,
+        "research_only": True,
+        "shadow_only": True,
+        "same_pit_family_snapshot_as_legacy": True,
+        "direction": thesis["direction"],
+        "direction_confidence": thesis["confidence"],
+        "thesis_state": thesis["state"],
+        "supporting_families": thesis["supporting_families"],
+        "opposing_families": thesis["opposing_families"],
+        "dependency_audit": thesis["dependency_audit"],
+        "families": {row["family"]: row for row in normalized},
+        "current_mind_effect": "NONE",
+        "geometry_effect": "NONE",
+        "option_brain_effect": "NONE",
+        "decision_effect": "NONE",
+        "execution_effect": "NONE",
+        "capital_committed": 0,
+        "promotion_eligible": False,
+    }
 
 
 def _summary(result: dict) -> dict:
@@ -25,11 +80,7 @@ def _legacy_memory_counted(legacy: dict) -> bool:
 
 
 def build_shared_brain_parity(*, legacy: dict, shared: dict) -> dict:
-    """Compare two direction shadows produced from the same PIT click inputs.
-
-    This diagnostic is descriptive only. It cannot change Current Mind, geometry,
-    option expression, execution, capital, research promotion, or historical rows.
-    """
+    """Compare legacy and shared synthesis from one prospective PIT family snapshot."""
     legacy_view = _summary(legacy or {})
     shared_view = _summary(shared or {})
     direction_agreement = legacy_view["direction"] == shared_view["direction"]
@@ -49,6 +100,7 @@ def build_shared_brain_parity(*, legacy: dict, shared: dict) -> dict:
         "research_only": True,
         "prospective_capture": True,
         "same_pit_input_snapshot": True,
+        "same_pit_family_snapshot": True,
         "legacy": legacy_view,
         "shared": shared_view,
         "direction_agreement": direction_agreement,
