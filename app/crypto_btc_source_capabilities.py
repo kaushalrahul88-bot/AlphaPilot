@@ -179,11 +179,12 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
         notes="First-seen same-day daily macro regime context only. It is not a timestamped CPI/NFP/FOMC surprise feed and cannot supply the second intraday BTC directional origin.",
     ),
     SourceCapability(
-        lane="MACRO_CROSS_ASSET", dataset="MACRO_CONSENSUS_SNAPSHOTS", provider="VERIFIED_FORECAST_SOURCE",
+        lane="MACRO_CROSS_ASSET", dataset="MACRO_CONSENSUS_SNAPSHOTS", provider="TRADING_ECONOMICS",
         historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
-        point_in_time_requirement="Archive each verified consensus state with provider timestamp when available and AlphaPilot first_seen_at strictly before the official release. A consensus learned or fetched after release can never be backdated into surprise calculation.",
+        point_in_time_requirement="Archive each Trading Economics representative-economist Forecast state with provider LastUpdate and AlphaPilot first_seen_at strictly before the official release. Exact official release time/reference period and DateSpan=0 are required; a forecast learned or fetched after release can never be backdated into surprise calculation.",
         can_reconstruct_later=False, live_capture_priority="MEDIUM", decision_role="CONTEXT_ONLY",
-        notes="Consensus is an input to exact numeric surprise only. It does not assign BTC direction, and changing pre-release consensus states must remain separate immutable first-seen observations.",
+        documented_endpoint="GET https://api.tradingeconomics.com/calendar/country/united%20states/{yyyy-mm-dd}/{yyyy-mm-dd}?values=true&f=json",
+        notes="Forecast is representative-economist consensus; TEForecast is the provider's own projection and may never substitute for consensus. V1 archives prospective pre-release CPI/Employment states only; documented historical point-in-time backfill remains disabled until separately validated.",
     ),
     SourceCapability(
         lane="MACRO_CROSS_ASSET", dataset="SCHEDULED_MACRO_RELEASES", provider="OFFICIAL_OR_VERIFIED_RELEASE_SOURCE",
@@ -233,7 +234,7 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V8",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V9",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "capture_medium_priority": [row["dataset"] for row in rows if row["live_capture_priority"] == "MEDIUM"],
@@ -253,12 +254,15 @@ def live_capture_plan() -> dict:
         "fred_daily_regime_is_not_exact_macro_event_surprise": True,
         "macro_consensus_requires_pre_release_first_seen_archive": True,
         "macro_consensus_is_not_directional_evidence": True,
+        "tradingeconomics_consensus_provider_verified": True,
+        "tradingeconomics_teforecast_is_not_consensus": True,
+        "tradingeconomics_historical_pit_backfill_enabled": False,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V8",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V9",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
@@ -272,6 +276,8 @@ def architecture_contract() -> dict:
         "scheduled_macro_revision_may_replace_first_release": False,
         "macro_consensus_learned_after_release_may_be_backdated": False,
         "macro_consensus_may_assign_btc_direction": False,
+        "tradingeconomics_teforecast_may_substitute_consensus": False,
+        "tradingeconomics_historical_pit_backfill_enabled": False,
         "fred_historical_same_day_vintage_proves_intraday_visibility": False,
         "fred_live_first_seen_may_be_backdated": False,
         "fred_daily_regime_may_supply_second_intraday_origin": False,
