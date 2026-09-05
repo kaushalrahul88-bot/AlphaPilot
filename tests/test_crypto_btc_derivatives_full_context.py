@@ -29,7 +29,7 @@ def _base_rows():
 
 
 class CryptoBtcDerivativesFullContextTests(unittest.TestCase):
-    def test_prior_funding_history_is_added_to_derivatives_metadata(self):
+    def test_prior_funding_history_is_added_and_extreme_crowding_suppresses_chase(self):
         rows = _base_rows()
         for i in range(6):
             rows.append({
@@ -46,7 +46,8 @@ class CryptoBtcDerivativesFullContextTests(unittest.TestCase):
         )
         self.assertEqual(evidence.metadata["funding_context_status"], "FUNDING_PERCENTILE_READY")
         self.assertEqual(evidence.metadata["funding_percentile_point_in_time"], 1.0)
-        self.assertEqual(evidence.stance, "BULLISH")
+        self.assertEqual(evidence.stance, "NEUTRAL")
+        self.assertTrue(evidence.metadata["crowded_long"])
         self.assertFalse(evidence.metadata["may_generate_futures_trade"])
 
     def test_insufficient_funding_history_does_not_invent_percentile_or_block_valid_oi_liquidation_state(self):
