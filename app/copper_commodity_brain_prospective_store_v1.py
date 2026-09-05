@@ -73,8 +73,7 @@ RETURNING evaluation_id;
 """
 
 COVERAGE_SQL = f"""
-SELECT board_as_of, direction, direction_confidence, thesis_state,
-       supporting_families, opposing_families, counted_families, input_provenance
+SELECT board_as_of, direction, direction_confidence, thesis_state
 FROM {TABLE_NAME}
 WHERE model_id = %s
 ORDER BY board_as_of ASC
@@ -133,7 +132,7 @@ def _evaluation_snapshot(evaluation: dict) -> dict:
         "sealed_current_mind_effect", "decision_effect", "option_expression_effect",
         "production_rules_changed", "historical_records_rewritten",
         "historical_backfill_used", "outcome_blind_at_decision_time",
-        "future_return_read", "pnl_read", "live_execution_enabled",
+        "forward_outcome_data_read", "pnl_read", "live_execution_enabled",
         "broker_order_placement_enabled", "capital_committed", "promotion_eligible",
         "prospective_memory_eligible", "input_provenance", "integration_contract",
     )
@@ -168,7 +167,11 @@ def build_prospective_record(board: dict, evaluation: dict, *, evaluated_at) -> 
         raise ValueError("Copper shared prospective storage requires zero capital")
     if evaluation.get("historical_backfill_used") or evaluation.get("historical_records_rewritten"):
         raise ValueError("Historical reconstruction/rewrite cannot enter Copper shared prospective storage")
-    if evaluation.get("outcome_blind_at_decision_time") is not True or evaluation.get("future_return_read") or evaluation.get("pnl_read"):
+    if (
+        evaluation.get("outcome_blind_at_decision_time") is not True
+        or evaluation.get("forward_outcome_data_read")
+        or evaluation.get("pnl_read")
+    ):
         raise ValueError("Copper shared prospective observation must be outcome blind")
 
     provenance = evaluation.get("input_provenance") or {}
@@ -224,18 +227,6 @@ def _db_record(record: dict) -> dict:
             "historical_as_of_allowed", "prospective_memory_eligible",
         }
     }
-
-
-def _json(value, default):
-    if isinstance(value, type(default)):
-        return value
-    if isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-            return decoded if isinstance(decoded, type(default)) else default
-        except Exception:
-            return default
-    return default
 
 
 def initialize_store_sync(database_url: str) -> None:
