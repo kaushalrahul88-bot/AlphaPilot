@@ -133,7 +133,18 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
         can_reconstruct_later=False,
         live_capture_priority="HIGH",
         decision_role="DIRECTIONAL_EVIDENCE",
-        notes="Article existence in a later archive does not prove AlphaPilot could see it at the historical click.",
+        notes="Article existence in a later archive does not prove AlphaPilot could see it at the historical click. Raw feed discovery is unverified context until enriched.",
+    ),
+    SourceCapability(
+        lane="NEWS",
+        dataset="CRYPTO_NEWS_ENRICHMENT",
+        provider="ALPHAPILOT",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="Store analysis_first_seen_at separately from article first_seen/published time; verification learned later cannot be backdated.",
+        can_reconstruct_later=False,
+        live_capture_priority="HIGH",
+        decision_role="DIRECTIONAL_EVIDENCE",
+        notes="Versioned derived intelligence stores event grouping, source tier, verification, truth/impact confidence, materiality and direction without rewriting raw news capture.",
     ),
     SourceCapability(
         lane="SOCIAL_NARRATIVE",
@@ -226,25 +237,28 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V1",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V2",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
         "rule": "STORE_IRREPLACEABLE_PIT_STATE_FIRST; RECONSTRUCT_PUBLIC_CANDLES_LATER",
         "options_archive_required_before_economic_backtest": True,
         "futures_context_capture_does_not_enable_futures_execution": True,
+        "news_raw_and_enrichment_have_separate_first_seen_state": True,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V1",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V2",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
         "option_history_may_be_fabricated": False,
         "provider_entity_label_revision_may_rewrite_old_click": False,
         "scheduled_macro_revision_may_replace_first_release": False,
+        "news_verification_learned_later_may_be_backdated": False,
+        "raw_news_may_be_rewritten_by_enrichment": False,
         "reconstructible_ohlcv_should_be_storage_priority": False,
         "irrecoverable_pit_state_should_be_storage_priority": True,
         "futures_context_may_inform_options": True,
