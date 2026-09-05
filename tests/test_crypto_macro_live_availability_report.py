@@ -9,6 +9,7 @@ from app.crypto_macro_live_availability_report import (
     architecture_contract,
     build_macro_live_availability_report,
     build_macro_live_availability_report_from_store,
+    macro_live_availability_report_payload,
 )
 
 
@@ -197,6 +198,27 @@ class CryptoMacroLiveAvailabilityReportTests(unittest.TestCase):
         self.assertFalse(report.options_trade_generated)
         self.assertFalse(report.futures_trade_generated)
 
+    def test_api_payload_is_explicitly_whitelisted_and_contains_no_credentials(self):
+        report = build_macro_live_availability_report(
+            [_attempt("BLS:CPI:2026-06", BASE_RELEASE)],
+            generated_at=GENERATED,
+        )
+        payload = macro_live_availability_report_payload(report)
+        self.assertEqual(payload["status"], "MACRO_LIVE_AVAILABILITY_REPORT_READY")
+        self.assertEqual(payload["generated_at"], GENERATED.isoformat())
+        self.assertEqual(payload["coverage"]["unique_events_observed"], 1)
+        self.assertEqual(payload["events"][0]["event_key"], "BLS:CPI:2026-06")
+        self.assertFalse(payload["qualification"]["auto_enable_live_confirmation"])
+        self.assertFalse(payload["live_confirmation_enabled"])
+        self.assertFalse(payload["provider_network_called"])
+        self.assertFalse(payload["store_written"])
+        self.assertFalse(payload["runtime_mutated"])
+        rendered = repr(payload).lower()
+        self.assertNotIn("database_url", rendered)
+        self.assertNotIn("api_key", rendered)
+        self.assertNotIn("password", rendered)
+        self.assertNotIn("secret", rendered)
+
     def test_architecture_is_read_only_manual_review_only_and_nontrading(self):
         contract = architecture_contract()
         self.assertTrue(contract["read_only"])
@@ -211,6 +233,7 @@ class CryptoMacroLiveAvailabilityReportTests(unittest.TestCase):
         self.assertTrue(contract["qualification_reused_from_core_audit"])
         self.assertTrue(contract["qualified_state_requires_manual_review"])
         self.assertFalse(contract["live_confirmation_auto_enabled"])
+        self.assertFalse(contract["api_payload_contains_credentials"])
         self.assertFalse(contract["direction_generated"])
         self.assertFalse(contract["options_trade_generated"])
         self.assertFalse(contract["futures_trade_generated"])
