@@ -5,15 +5,17 @@ Raw differences never use fixed economic-unit thresholds. Each metric is ranked
 against strictly prior, already-valid surprises of the same event type. At least
 20 prior samples are required by default.
 
-A hawkish/dovish semantic state becomes one MACRO_EVENT_SHOCK directional origin
-only when contemporaneous BTC and at least two independent cross-asset reactions
-confirm the expected risk direction. This module never emits an Options or
-Futures trade.
+A hawkish/dovish semantic state may become one GLOBAL_RISK_LIQUIDITY directional
+origin only when contemporaneous BTC and at least two cross-asset reactions
+confirm the expected risk direction. The causal origin intentionally matches the
+generic macro/cross-asset lane so one macro cause cannot be double-counted through
+both representations. This module never emits an Options or Futures trade.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Literal
 
 from app.crypto_macro_event_intelligence import MacroNumericSurprise
@@ -36,15 +38,24 @@ def _utc_exact(value: datetime, *, name: str) -> datetime:
 
 def _bounded(value: float, *, name: str) -> float:
     number = float(value)
-    if not 0.0 <= number <= 1.0:
-        raise ValueError(f"{name} must be between 0 and 1")
+    if not isfinite(number) or not 0.0 <= number <= 1.0:
+        raise ValueError(f"{name} must be finite and between 0 and 1")
+    return number
+
+
+def _finite_number(value: float, *, name: str) -> float:
+    number = float(value)
+    if not isfinite(number):
+        raise ValueError(f"{name} must be finite")
     return number
 
 
 def _empirical_percentile(value: float, prior: list[float]) -> float:
     if not prior:
         raise ValueError("prior sample is required")
-    return sum(1 for item in prior if float(item) <= float(value)) / len(prior)
+    current = _finite_number(value, name="current surprise")
+    normalized_prior = [_finite_number(item, name="prior surprise") for item in prior]
+    return sum(1 for item in normalized_prior if item <= current) / len(normalized_prior)
 
 
 @dataclass(frozen=True)
@@ -107,7 +118,7 @@ class MacroMarketReaction:
             ("real_yield_change_bps", self.real_yield_change_bps),
         ):
             if value is not None:
-                float(value)
+                _finite_number(value, name=name)
         return self
 
 
@@ -231,6 +242,8 @@ def macro_event_evidence(
     state = normalized.validated()
     market = reaction.validated()
     decision = _utc_exact(decision_at, name="decision_at")
+    if int(max_reaction_minutes) <= 0:
+        raise ValueError("max_reaction_minutes must be > 0")
     if state.event_key != market.event_key or _utc_exact(state.release_at, name="state release_at") != _utc_exact(market.release_at, name="reaction release_at"):
         raise ValueError("macro semantic state and market reaction must refer to same event")
     if _utc_exact(market.first_seen_at, name="reaction first_seen_at") > decision:
@@ -260,7 +273,7 @@ def macro_event_evidence(
     stance = "BULLISH" if bullish else "BEARISH"
     return Evidence(
         family="MACRO_CROSS_ASSET",
-        causal_origin="MACRO_EVENT_SHOCK",
+        causal_origin="GLOBAL_RISK_LIQUIDITY",
         stance=stance,
         strength="HIGH" if cross_asset_aligned == 3 else "MEDIUM",
         confidence=0.85 if cross_asset_aligned == 3 else 0.78,
@@ -276,6 +289,8 @@ def macro_event_evidence(
             "event_key": state.event_key,
             "event_type": state.event_type,
             "semantic_state": state.semantic_state,
+            "macro_event_suborigin": "OFFICIAL_MACRO_EVENT_SHOCK",
+            "causal_origin_dedup_group": "GLOBAL_RISK_LIQUIDITY",
             "metric_percentiles": dict(state.metric_percentiles),
             "prior_sample_count": state.prior_sample_count,
             "btc_abs_move_percentile": market.btc_abs_move_percentile,
@@ -299,7 +314,7 @@ def _unknown_evidence(
 ) -> Evidence:
     return Evidence(
         family="MACRO_CROSS_ASSET",
-        causal_origin="MACRO_EVENT_SHOCK",
+        causal_origin="GLOBAL_RISK_LIQUIDITY",
         stance="UNKNOWN",
         strength="LOW",
         confidence=0.5,
@@ -311,6 +326,8 @@ def _unknown_evidence(
             "event_key": state.event_key,
             "event_type": state.event_type,
             "semantic_state": state.semantic_state,
+            "macro_event_suborigin": "OFFICIAL_MACRO_EVENT_SHOCK",
+            "causal_origin_dedup_group": "GLOBAL_RISK_LIQUIDITY",
             "metric_percentiles": dict(state.metric_percentiles),
             "prior_sample_count": state.prior_sample_count,
             "btc_abs_move_percentile": market.btc_abs_move_percentile,
@@ -324,7 +341,7 @@ def _unknown_evidence(
 
 def architecture_contract() -> dict:
     return {
-        "version": "CRYPTO_MACRO_EVENT_SEMANTICS_V1",
+        "version": "CRYPTO_MACRO_EVENT_SEMANTICS_V2",
         "supported_directional_events": ["CPI", "EMPLOYMENT_SITUATION"],
         "fixed_raw_surprise_thresholds_used": False,
         "strictly_prior_surprise_distribution_required": True,
@@ -335,7 +352,9 @@ def architecture_contract() -> dict:
         "btc_market_confirmation_required": True,
         "minimum_cross_asset_confirmations": 2,
         "btc_event_move_prior_percentile_required": True,
-        "macro_event_can_be_one_independent_causal_origin": True,
+        "macro_event_can_be_one_independent_causal_origin_vs_spot_or_derivatives": True,
+        "shares_causal_origin_with_generic_macro_lane": True,
+        "same_macro_cause_may_be_double_counted": False,
         "macro_event_directly_generates_options_trade": False,
         "macro_event_directly_generates_futures_trade": False,
         "research_only": True,
