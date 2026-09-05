@@ -38,6 +38,7 @@ jobs:
               "/v1/internal/copper/pit-candles/status",
               "/v1/internal/copper/direction-v2-shadow/evaluate",
               "/v1/internal/copper/direction-v2-shadow/prospective-status",
+              "/v1/internal/copper/shared-commodity-brain/prospective-status",
           }
           raise SystemExit(0 if required.issubset(paths) else 1)
           PY
@@ -46,7 +47,7 @@ jobs:
             fi
             sleep 10
           done
-          echo "Copper PIT/Direction V2 endpoints were not ready" >&2
+          echo "Copper PIT/Direction V2/shared-brain endpoints were not ready" >&2
           exit 1
 
       - name: Capture bounded prospective Copper tape
@@ -109,7 +110,7 @@ jobs:
           print(json.dumps(d, indent=2, sort_keys=True))
           PY
 
-      - name: Capture prospective Direction V2 shadow evaluation
+      - name: Capture prospective Direction V2 and shared Commodity Brain
         if: success()
         shell: bash
         run: |
@@ -183,20 +184,72 @@ jobs:
           assert p.get("record_hash"), p
           assert p.get("board_as_of"), p
           assert p.get("evaluated_at"), p
+
+          shared=d.get("shared_commodity_brain_prospective_v1") or {}
+          sp=shared.get("prospective_persistence") or {}
+          provenance=shared.get("input_provenance") or {}
+          shared_contract=shared.get("integration_contract") or {}
+          memory=(shared.get("families") or {}).get("EXPERIENCE_MEMORY") or {}
+          assert shared.get("status")=="EVALUATED", shared
+          assert shared.get("mode")=="COPPER_COMMODITY_BRAIN_SHARED_SHADOW_V1", shared
+          assert shared.get("prospective_stream_id")=="COPPER_COMMODITY_BRAIN_SHARED_PROSPECTIVE_V1", shared
+          assert shared.get("evaluation_class")=="PROSPECTIVE_SHADOW", shared
+          assert shared.get("prospective") is True, shared
+          assert shared.get("research_only") is True, shared
+          assert shared.get("shadow_only") is True, shared
+          assert shared.get("same_pit_board_as_direction_v2") is True, shared
+          assert shared.get("sealed_current_mind_effect")=="NONE", shared
+          assert shared.get("decision_effect")=="NONE", shared
+          assert shared.get("live_execution_enabled") is False, shared
+          assert shared.get("broker_order_placement_enabled") is False, shared
+          assert int(shared.get("capital_committed") or 0)==0, shared
+          assert shared.get("promotion_eligible") is False, shared
+          assert shared.get("outcome_blind_at_decision_time") is True, shared
+          assert shared.get("forward_outcome_data_read") is False, shared
+          assert shared.get("pnl_read") is False, shared
+          assert provenance.get("status")=="VALID", provenance
+          assert provenance.get("historical_backfill_used") is False, provenance
+          if provenance.get("market_status")=="AVAILABLE":
+              assert provenance.get("market_first_seen_immutable") is True, provenance
+          if provenance.get("option_status")=="AVAILABLE":
+              assert provenance.get("option_first_seen_immutable") is True, provenance
+          assert memory.get("counts_for_direction") is False, memory
+          assert memory.get("role")=="MEMORY", memory
+          assert shared_contract.get("minimum_independent_confirmations")==2, shared_contract
+          assert shared_contract.get("experience_memory_can_satisfy_confirmation_gate") is False, shared_contract
+          assert shared_contract.get("historical_reconstruction_allowed") is False, shared_contract
+          assert shared_contract.get("mutable_generic_fallback_allowed") is False, shared_contract
+          assert shared_contract.get("sealed_copper_current_mind_effect")=="NONE", shared_contract
+          assert shared_contract.get("direction_v2_history_effect")=="NONE", shared_contract
+          assert sp.get("model_id")=="COPPER_COMMODITY_BRAIN_SHARED_PROSPECTIVE_V1", sp
+          assert sp.get("contract_version")=="COPPER_COMMODITY_BRAIN_SHARED_SHADOW_V1", sp
+          assert sp.get("first_seen_immutable") is True, sp
+          assert sp.get("outcome_fields_stored") is False, sp
+          assert sp.get("historical_as_of_allowed") is False, sp
+          assert sp.get("prospective_memory_eligible") is False, sp
+          assert sp.get("evaluation_id"), sp
+          assert sp.get("record_hash"), sp
+          assert sp.get("board_as_of")==p.get("board_as_of"), (sp,p)
+          assert sp.get("evaluated_at")==p.get("evaluated_at"), (sp,p)
+
           print(json.dumps({
-              "contract_version":contract.get("version"),
-              "option_participation_rule_version":option_detail.get("rule_version"),
-              "direction":d.get("direction"),
-              "direction_confidence":d.get("direction_confidence"),
-              "thesis_state":d.get("thesis_state"),
-              "supporting_families":d.get("supporting_families"),
-              "opposing_families":d.get("opposing_families"),
-              "option_participation":{
-                  "stance":option.get("stance"),
-                  "counts_for_direction":option.get("counts_for_direction"),
-                  "state":option.get("state"),
+              "direction_v2":{
+                  "contract_version":contract.get("version"),
+                  "direction":d.get("direction"),
+                  "confidence":d.get("direction_confidence"),
+                  "thesis_state":d.get("thesis_state"),
               },
-              "prospective_persistence":p,
+              "shared_commodity_brain":{
+                  "stream_id":shared.get("prospective_stream_id"),
+                  "contract_version":sp.get("contract_version"),
+                  "direction":shared.get("direction"),
+                  "confidence":shared.get("direction_confidence"),
+                  "thesis_state":shared.get("thesis_state"),
+                  "supporting_families":shared.get("supporting_families"),
+                  "opposing_families":shared.get("opposing_families"),
+                  "market_contract":provenance.get("market_trading_symbol"),
+              },
+              "same_board_as_of":sp.get("board_as_of"),
           }, indent=2, sort_keys=True))
           PY
 
@@ -234,6 +287,42 @@ jobs:
           print(json.dumps(d, indent=2, sort_keys=True))
           PY
 
+      - name: Verify outcome-blind shared Commodity Brain coverage
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=$(python -c 'import json; print(json.load(open("copper-pit-result.json")).get("status",""))')
+          if [ "$STATUS" = "MARKET_CLOSED" ]; then
+            echo '{"status":"SKIPPED_MARKET_CLOSED"}' > copper-shared-brain-status.json
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 30 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/copper/shared-commodity-brain/prospective-status" \
+            -o copper-shared-brain-status.json
+          python - <<'PY'
+          import json
+          d=json.load(open("copper-shared-brain-status.json"))
+          assert d.get("status")=="ACTIVE", d
+          assert d.get("model_id")=="COPPER_COMMODITY_BRAIN_SHARED_PROSPECTIVE_V1", d
+          assert d.get("contract_version")=="COPPER_COMMODITY_BRAIN_SHARED_SHADOW_V1", d
+          assert d.get("first_seen_immutable") is True, d
+          assert d.get("historical_backfill_used") is False, d
+          assert d.get("historical_as_of_allowed") is False, d
+          assert d.get("outcome_data_read") is False, d
+          assert d.get("performance_claim") is None, d
+          assert d.get("sealed_current_mind_effect")=="NONE", d
+          assert d.get("direction_v2_history_effect")=="NONE", d
+          assert d.get("production_rules_changed") is False, d
+          assert d.get("live_execution_enabled") is False, d
+          assert d.get("broker_order_placement_enabled") is False, d
+          assert int(d.get("capital_committed") or 0)==0, d
+          assert d.get("promotion_eligible") is False, d
+          assert int(d.get("evaluations") or 0)>=1, d
+          print(json.dumps(d, indent=2, sort_keys=True))
+          PY
+
       - name: Upload Copper PIT audit artifact
         uses: actions/upload-artifact@v4
         if: always()
@@ -244,5 +333,6 @@ jobs:
             copper-pit-status.json
             copper-direction-v2-result.json
             copper-direction-v2-status.json
+            copper-shared-brain-status.json
           if-no-files-found: warn
           retention-days: 30
