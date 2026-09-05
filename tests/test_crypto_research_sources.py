@@ -1,40 +1,44 @@
+import unittest
+
 from app.crypto_research_sources import source_class, source_inventory_v1
 
 
-def test_source_inventory_spans_online_offline_and_structured_sources():
-    inventory = source_inventory_v1()
-    mediums = {row["medium"] for row in inventory["sources"]}
-    assert "BOOK" in mediums
-    assert "ACADEMIC_PAPER" in mediums
-    assert "NEWS" in mediums
-    assert "NEWS_MAGAZINE" in mediums
-    assert "SOCIAL_X" in mediums
-    assert "REDDIT_FORUM" in mediums
-    assert "VIDEO_PODCAST" in mediums
-    assert "TELEGRAM_DISCORD" in mediums
-    assert "ONCHAIN_DATA" in mediums
-    assert "MARKET_DATA" in mediums
+class CryptoResearchSourceTests(unittest.TestCase):
+    def test_source_inventory_spans_online_offline_and_structured_sources(self):
+        inventory = source_inventory_v1()
+        mediums = {row["medium"] for row in inventory["sources"]}
+        self.assertIn("BOOK", mediums)
+        self.assertIn("ACADEMIC_PAPER", mediums)
+        self.assertIn("NEWS", mediums)
+        self.assertIn("NEWS_MAGAZINE", mediums)
+        self.assertIn("SOCIAL_X", mediums)
+        self.assertIn("REDDIT_FORUM", mediums)
+        self.assertIn("VIDEO_PODCAST", mediums)
+        self.assertIn("TELEGRAM_DISCORD", mediums)
+        self.assertIn("ONCHAIN_DATA", mediums)
+        self.assertIn("MARKET_DATA", mediums)
+
+    def test_news_is_first_class_and_split_by_reporting_role(self):
+        inventory = source_inventory_v1()
+        ids = {row["id"] for row in inventory["sources"]}
+        self.assertTrue(inventory["news_is_first_class_live_intelligence"])
+        self.assertTrue(inventory["news_truth_and_market_impact_scored_separately"])
+        self.assertTrue(inventory["news_primary_corroboration_preferred"])
+        self.assertTrue({"BREAKING_NEWS", "FINANCIAL_NEWS", "CRYPTO_NATIVE_NEWS", "OFFICIAL_ANNOUNCEMENTS"}.issubset(ids))
+        self.assertTrue(source_class("BREAKING_NEWS").timestamp_required)
+        self.assertTrue(source_class("CRYPTO_NATIVE_NEWS").historical_reliability_tracking)
+
+    def test_book_ingestion_does_not_default_to_full_text_persistence(self):
+        books = source_class("BOOK_LIBRARY")
+        self.assertEqual(books.ingestion_mode, "CLAIM_EXTRACTION")
+        self.assertFalse(books.full_text_persistence_default)
+
+    def test_social_sources_require_corroboration_and_track_reliability(self):
+        social = source_class("X_SOCIAL")
+        self.assertTrue(social.requires_corroboration)
+        self.assertTrue(social.historical_reliability_tracking)
+        self.assertFalse(source_inventory_v1()["community_source_standalone_trade_signal"])
 
 
-def test_news_is_first_class_and_split_by_reporting_role():
-    inventory = source_inventory_v1()
-    ids = {row["id"] for row in inventory["sources"]}
-    assert inventory["news_is_first_class_live_intelligence"] is True
-    assert inventory["news_truth_and_market_impact_scored_separately"] is True
-    assert inventory["news_primary_corroboration_preferred"] is True
-    assert {"BREAKING_NEWS", "FINANCIAL_NEWS", "CRYPTO_NATIVE_NEWS", "OFFICIAL_ANNOUNCEMENTS"}.issubset(ids)
-    assert source_class("BREAKING_NEWS").timestamp_required is True
-    assert source_class("CRYPTO_NATIVE_NEWS").historical_reliability_tracking is True
-
-
-def test_book_ingestion_does_not_default_to_full_text_persistence():
-    books = source_class("BOOK_LIBRARY")
-    assert books.ingestion_mode == "CLAIM_EXTRACTION"
-    assert books.full_text_persistence_default is False
-
-
-def test_social_sources_require_corroboration_and_track_reliability():
-    social = source_class("X_SOCIAL")
-    assert social.requires_corroboration is True
-    assert social.historical_reliability_tracking is True
-    assert source_inventory_v1()["community_source_standalone_trade_signal"] is False
+if __name__ == "__main__":
+    unittest.main()
