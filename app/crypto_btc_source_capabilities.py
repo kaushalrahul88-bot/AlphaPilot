@@ -193,10 +193,12 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
         can_reconstruct_later=False, live_capture_priority="MEDIUM", decision_role="DIRECTIONAL_EVIDENCE",
     ),
     SourceCapability(
-        lane="MACRO_CROSS_ASSET", dataset="CROSS_ASSET_MARKET_PRICES", provider="VERIFIED_MARKET_DATA",
+        lane="MACRO_CROSS_ASSET", dataset="CROSS_ASSET_MARKET_PRICES", provider="MASSIVE_CME",
         historical_mode="RECONSTRUCTIBLE_PUBLIC_HISTORY",
-        point_in_time_requirement="Completed bar or timestamped trade only; provider history must preserve original observation time.",
+        point_in_time_requirement="Historical macro-event replay requires exact completed 1-minute CME NQ and 6E bars. Contract selection uses only active contracts and exact pre-release bars/volume; post-release volume can never choose the representative contract. Missing or stale exact boundary bars fail closed.",
         can_reconstruct_later=True, live_capture_priority="LOW", decision_role="DIRECTIONAL_EVIDENCE",
+        documented_endpoint="GET /futures/v1/contracts; GET /futures/v1/aggs/{ticker}",
+        notes="Approved for research/replay reconstruction only. NQ supplies Nasdaq-100 futures reaction; inverse 6E is one explicitly labelled USD-strength proxy and is not DXY. Prospective live availability is not proven, and this market-data context can never generate a Futures trade or duplicate a direct broad-USD confirmation.",
     ),
     SourceCapability(
         lane="HISTORICAL_MEMORY", dataset="ALPHAPILOT_PRIOR_RESOLVED_EXPERIENCE", provider="ALPHAPILOT",
@@ -234,7 +236,7 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V9",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V10",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "capture_medium_priority": [row["dataset"] for row in rows if row["live_capture_priority"] == "MEDIUM"],
@@ -257,12 +259,19 @@ def live_capture_plan() -> dict:
         "tradingeconomics_consensus_provider_verified": True,
         "tradingeconomics_teforecast_is_not_consensus": True,
         "tradingeconomics_historical_pit_backfill_enabled": False,
+        "massive_cme_macro_reaction_replay_verified": True,
+        "massive_cme_prospective_live_availability_proven": False,
+        "massive_contract_selection_uses_pre_release_data_only": True,
+        "massive_post_release_volume_may_select_contract": False,
+        "massive_6e_is_inverse_usd_proxy_not_dxy": True,
+        "direct_usd_and_proxy_may_double_count": False,
+        "massive_macro_reaction_may_generate_futures_trade": False,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V9",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V10",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
@@ -281,6 +290,13 @@ def architecture_contract() -> dict:
         "fred_historical_same_day_vintage_proves_intraday_visibility": False,
         "fred_live_first_seen_may_be_backdated": False,
         "fred_daily_regime_may_supply_second_intraday_origin": False,
+        "massive_cme_macro_reaction_replay_verified": True,
+        "massive_cme_prospective_live_availability_proven": False,
+        "massive_contract_selection_uses_pre_release_data_only": True,
+        "massive_post_release_volume_may_select_contract": False,
+        "massive_6e_proxy_claimed_to_be_dxy": False,
+        "direct_usd_and_proxy_may_double_count": False,
+        "massive_macro_reaction_may_generate_futures_trade": False,
         "news_verification_learned_later_may_be_backdated": False,
         "raw_news_may_be_rewritten_by_enrichment": False,
         "social_public_visibility_equals_retention_permission": False,
