@@ -74,7 +74,7 @@ def evaluate_copper_commodity_brain_prospective(board: dict) -> dict:
             "evaluation_class": EVALUATION_CLASS,
             "prospective": True,
             "outcome_blind_at_decision_time": True,
-            "future_return_read": False,
+            "forward_outcome_data_read": False,
             "pnl_read": False,
             "historical_backfill_used": False,
             "prospective_memory_eligible": False,
