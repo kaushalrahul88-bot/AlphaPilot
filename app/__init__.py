@@ -33,6 +33,9 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .crude_oil_mini_option_observation_store import (  # noqa: E402
         register_crude_oil_mini_option_observation_startup,
     )
+    from .crypto_macro_live_availability_api import (  # noqa: E402
+        register_crypto_macro_live_availability_routes,
+    )
     from .shared_commodity_brain_dashboard_api import (  # noqa: E402
         register_shared_commodity_brain_dashboard_routes,
     )
@@ -49,4 +52,5 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_copper_commodity_brain_prospective_startup(_app, _settings)
     register_copper_pit_routes(_app, _settings, _collector_auth)
     register_crude_oil_mini_manual_routes(_app, _settings)
+    register_crypto_macro_live_availability_routes(_app, _settings, _collector_auth)
     register_shared_commodity_brain_dashboard_routes(_app, _settings)
