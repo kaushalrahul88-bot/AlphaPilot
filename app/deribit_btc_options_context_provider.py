@@ -5,6 +5,10 @@ CoinDCX execution substitute: its contracts, quotes and marks cannot select or
 fill a CoinDCX option. The provider consumes documented public endpoints for the
 active option instrument list and periodic chain summaries.
 
+The instrument list is seeded lazily once per provider lifetime and then cached;
+metadata refresh is explicit rather than timer-polled, matching Deribit's own
+options-data collection guidance. The chain summary may be sampled periodically.
+
 The full-chain summary exposes mark IV and open interest, while instrument
 metadata exposes expiry, strike and call/put type. V1 deliberately does not
 approximate 25-delta skew from strike; skew remains unknown until a documented
@@ -127,6 +131,7 @@ class DeribitBtcOptionsContextProvider:
         self.policy = (policy or DeribitBtcOptionsContextPolicy()).validated()
         self._client = client
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._instrument_rows_cache: list[dict] | None = None
 
     def _require_enabled(self) -> None:
         if not self.policy.enabled:
@@ -145,11 +150,29 @@ class DeribitBtcOptionsContextProvider:
             raise ValueError("invalid Deribit JSON-RPC result payload")
         return [row for row in payload["result"] if isinstance(row, dict)]
 
-    def _fetch_chain(self) -> tuple[list[dict], list[dict]]:
-        instruments = self._get_result(
+    def refresh_instruments(self) -> int:
+        """Explicitly refresh cached instrument metadata.
+
+        Normal snapshot polling never calls this after the initial lazy seed.
+        A long-running WebSocket lifecycle tracker can replace this explicit
+        refresh in a later version without changing snapshot/evidence semantics.
+        """
+        rows = self._get_result(
             INSTRUMENTS_URL,
             params={"currency": "BTC", "kind": "option", "expired": "false"},
         )
+        if not rows:
+            raise ValueError("Deribit returned an empty BTC option instrument list")
+        self._instrument_rows_cache = rows
+        return len(rows)
+
+    def _seed_instruments_if_needed(self) -> list[dict]:
+        if self._instrument_rows_cache is None:
+            self.refresh_instruments()
+        return list(self._instrument_rows_cache or [])
+
+    def _fetch_chain(self) -> tuple[list[dict], list[dict]]:
+        instruments = self._seed_instruments_if_needed()
         summaries = self._get_result(
             BOOK_SUMMARY_URL,
             params={"currency": "BTC", "kind": "option"},
@@ -283,7 +306,7 @@ class DeribitBtcOptionsContextProvider:
 
 def architecture_contract() -> dict:
     return {
-        "version": "DERIBIT_BTC_OPTIONS_CONTEXT_PROVIDER_V1",
+        "version": "DERIBIT_BTC_OPTIONS_CONTEXT_PROVIDER_V2",
         "provider": "DERIBIT_PUBLIC_API",
         "collection_enabled_by_default": False,
         "authentication_required": False,
@@ -291,6 +314,9 @@ def architecture_contract() -> dict:
         "documented_book_summary_endpoint": BOOK_SUMMARY_URL,
         "instrument_kind": "option",
         "currency": "BTC",
+        "instrument_list_seeded_lazily": True,
+        "instrument_list_polled_each_snapshot": False,
+        "instrument_refresh_explicit": True,
         "mark_iv_captured": True,
         "open_interest_captured": True,
         "expiry_strike_option_type_captured": True,
