@@ -265,6 +265,70 @@ async def build_macro_live_availability_report_from_store(
     )
 
 
+def macro_live_availability_report_payload(report: MacroLiveAvailabilityReport) -> dict:
+    """Return an explicit API-safe payload with no provider/database credentials."""
+    report = report.validated()
+    qualification = report.qualification
+    return {
+        "status": "MACRO_LIVE_AVAILABILITY_REPORT_READY",
+        "generated_at": _utc(report.generated_at).isoformat(),
+        "qualification": {
+            "status": qualification.status,
+            "unique_events_observed": qualification.unique_events_observed,
+            "events_available_within_latency": qualification.events_available_within_latency,
+            "failed_event_keys": list(qualification.failed_event_keys),
+            "max_latency_seconds": qualification.max_latency_seconds,
+            "min_unique_events": qualification.min_unique_events,
+            "auto_enable_live_confirmation": False,
+        },
+        "coverage": {
+            "unique_events_observed": report.unique_events_observed,
+            "successful_event_count": report.successful_event_count,
+            "too_late_only_event_count": report.too_late_only_event_count,
+            "unavailable_only_event_count": report.unavailable_only_event_count,
+            "event_type_counts": dict(report.event_type_counts),
+            "event_type_success_counts": dict(report.event_type_success_counts),
+        },
+        "successful_event_latency_seconds": {
+            "min": report.successful_event_latency_min_seconds,
+            "median": report.successful_event_latency_median_seconds,
+            "max": report.successful_event_latency_max_seconds,
+        },
+        "events": [
+            {
+                "event_key": event.event_key,
+                "event_type": event.event_type,
+                "release_at": _utc(event.release_at).isoformat(),
+                "attempt_count": event.attempt_count,
+                "earliest_attempt_at": _utc(event.earliest_attempt_at).isoformat(),
+                "latest_attempt_at": _utc(event.latest_attempt_at).isoformat(),
+                "terminal_status": event.terminal_status,
+                "earliest_in_latency_success_at": (
+                    None
+                    if event.earliest_in_latency_success_at is None
+                    else _utc(event.earliest_in_latency_success_at).isoformat()
+                ),
+                "earliest_in_latency_success_seconds": event.earliest_in_latency_success_seconds,
+                "minimum_observed_latency_seconds": event.minimum_observed_latency_seconds,
+                "maximum_observed_latency_seconds": event.maximum_observed_latency_seconds,
+                "has_in_latency_success": event.has_in_latency_success,
+                "has_too_late_observation": event.has_too_late_observation,
+                "has_provider_failure": event.has_provider_failure,
+            }
+            for event in report.events
+        ],
+        "manual_review_required": report.manual_review_required,
+        "live_confirmation_enabled": False,
+        "provider_network_called": False,
+        "store_written": False,
+        "runtime_mutated": False,
+        "direction_generated": False,
+        "options_trade_generated": False,
+        "futures_trade_generated": False,
+        "research_only": True,
+    }
+
+
 def architecture_contract() -> dict:
     return {
         "version": "MASSIVE_MACRO_LIVE_AVAILABILITY_REPORT_V1",
@@ -280,6 +344,7 @@ def architecture_contract() -> dict:
         "qualification_reused_from_core_audit": True,
         "qualified_state_requires_manual_review": True,
         "live_confirmation_auto_enabled": False,
+        "api_payload_contains_credentials": False,
         "direction_generated": False,
         "options_trade_generated": False,
         "futures_trade_generated": False,
