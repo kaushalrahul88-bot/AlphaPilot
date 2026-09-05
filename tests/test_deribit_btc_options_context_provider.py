@@ -106,7 +106,7 @@ class DeribitBtcOptionsContextProviderTests(unittest.TestCase):
             provider.capture_context()
         self.assertEqual(client.calls, [])
 
-    def test_documented_option_endpoints_and_params_are_used(self):
+    def test_documented_option_endpoints_and_params_are_used_on_initial_seed(self):
         instruments, summaries, _, _ = _chain()
         client = _Client(instruments, summaries)
         provider = DeribitBtcOptionsContextProvider(
@@ -117,6 +117,29 @@ class DeribitBtcOptionsContextProviderTests(unittest.TestCase):
         self.assertEqual(client.calls[0][1], {"currency": "BTC", "kind": "option", "expired": "false"})
         self.assertEqual(client.calls[1][0], BOOK_SUMMARY_URL)
         self.assertEqual(client.calls[1][1], {"currency": "BTC", "kind": "option"})
+
+    def test_subsequent_snapshot_reuses_instrument_cache_and_only_refreshes_summary(self):
+        instruments, summaries, _, _ = _chain()
+        client = _Client(instruments, summaries)
+        provider = DeribitBtcOptionsContextProvider(
+            DeribitBtcOptionsContextPolicy(enabled=True), client=client, clock=_t
+        )
+        provider.capture_context()
+        provider.capture_context()
+        urls = [call[0] for call in client.calls]
+        self.assertEqual(urls.count(INSTRUMENTS_URL), 1)
+        self.assertEqual(urls.count(BOOK_SUMMARY_URL), 2)
+
+    def test_explicit_instrument_refresh_is_available_but_not_automatic(self):
+        instruments, summaries, _, _ = _chain()
+        client = _Client(instruments, summaries)
+        provider = DeribitBtcOptionsContextProvider(
+            DeribitBtcOptionsContextPolicy(enabled=True), client=client, clock=_t
+        )
+        provider.capture_context()
+        count = provider.refresh_instruments()
+        self.assertEqual(count, len(instruments))
+        self.assertEqual([call[0] for call in client.calls].count(INSTRUMENTS_URL), 2)
 
     def test_capture_pairs_atm_call_put_and_computes_term_structure_and_oi(self):
         instruments, summaries, e1, e2 = _chain()
@@ -204,6 +227,9 @@ class DeribitBtcOptionsContextProviderTests(unittest.TestCase):
             DeribitBtcOptionsContextPolicy(max_expiries_for_term_structure=1).validated()
         contract = architecture_contract()
         self.assertFalse(contract["collection_enabled_by_default"])
+        self.assertTrue(contract["instrument_list_seeded_lazily"])
+        self.assertFalse(contract["instrument_list_polled_each_snapshot"])
+        self.assertTrue(contract["instrument_refresh_explicit"])
         self.assertTrue(contract["mark_iv_captured"])
         self.assertTrue(contract["open_interest_captured"])
         self.assertFalse(contract["skew_25d_inferred_from_strike"])
