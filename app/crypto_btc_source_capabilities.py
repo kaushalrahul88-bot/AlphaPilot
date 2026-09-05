@@ -149,12 +149,24 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
     SourceCapability(
         lane="SOCIAL_NARRATIVE",
         dataset="CRYPTO_SOCIAL_POSTS_AND_NARRATIVE_VELOCITY",
-        provider="MULTI_SOURCE",
+        provider="APPROVED_OR_LICENSED_SOURCE",
         historical_mode="EXTERNAL_PIT_ARCHIVE_REQUIRED",
-        point_in_time_requirement="Post timestamp, first_seen_at, source identity, and deletion/edit state when available.",
+        point_in_time_requirement="Post timestamp and AlphaPilot first_seen_at are required. Provider access, analysis-use and retention rights must be verified before archival; edit/deletion state is preserved when available.",
         can_reconstruct_later=False,
         live_capture_priority="HIGH",
         decision_role="CONTEXT_ONLY",
+        notes="Public visibility is not permission to persist. Raw popularity, engagement or virality cannot become truth, market impact or standalone directional evidence.",
+    ),
+    SourceCapability(
+        lane="SOCIAL_NARRATIVE",
+        dataset="CRYPTO_SOCIAL_ENRICHMENT",
+        provider="ALPHAPILOT",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="Derived event grouping, narrative velocity, source reliability and truth/impact confidence use a separate analysis_first_seen_at and cannot be backdated into raw social capture.",
+        can_reconstruct_later=False,
+        live_capture_priority="HIGH",
+        decision_role="CONTEXT_ONLY",
+        notes="Verified factual claims discovered socially must still pass Crypto News Intelligence before they may become directional event evidence.",
     ),
     SourceCapability(
         lane="ONCHAIN",
@@ -250,7 +262,7 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V3",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V4",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
@@ -258,13 +270,15 @@ def live_capture_plan() -> dict:
         "options_archive_required_before_economic_backtest": True,
         "futures_context_capture_does_not_enable_futures_execution": True,
         "news_raw_and_enrichment_have_separate_first_seen_state": True,
+        "social_raw_and_enrichment_have_separate_first_seen_state": True,
+        "social_provider_requires_verified_rights": True,
         "stablecoin_supply_is_separate_from_exchange_flows": True,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V3",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V4",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
@@ -273,6 +287,9 @@ def architecture_contract() -> dict:
         "scheduled_macro_revision_may_replace_first_release": False,
         "news_verification_learned_later_may_be_backdated": False,
         "raw_news_may_be_rewritten_by_enrichment": False,
+        "social_public_visibility_equals_retention_permission": False,
+        "social_analysis_learned_later_may_be_backdated": False,
+        "raw_social_may_be_rewritten_by_enrichment": False,
         "stablecoin_supply_equals_exchange_buying_power": False,
         "reconstructible_ohlcv_should_be_storage_priority": False,
         "irrecoverable_pit_state_should_be_storage_priority": True,
