@@ -6,10 +6,14 @@ against strictly prior, already-valid surprises of the same event type. At least
 20 prior samples are required by default.
 
 A hawkish/dovish semantic state may become one GLOBAL_RISK_LIQUIDITY directional
-origin only when contemporaneous BTC and at least two cross-asset reactions
-confirm the expected risk direction. The causal origin intentionally matches the
-generic macro/cross-asset lane so one macro cause cannot be double-counted through
-both representations. This module never emits an Options or Futures trade.
+origin only when contemporaneous BTC and at least two cross-asset dimensions
+confirm the expected risk direction. A verified USD-strength proxy may stand in
+for the broad-USD dimension when a direct broad-USD series is unavailable, but
+proxy and direct USD observations can never count as two confirmations.
+
+The causal origin intentionally matches the generic macro/cross-asset lane so
+one macro cause cannot be double-counted through both representations. This
+module never emits an Options or Futures trade.
 """
 from __future__ import annotations
 
@@ -99,6 +103,8 @@ class MacroMarketReaction:
     btc_abs_move_percentile: float
     source: str
     source_verified: bool = True
+    usd_strength_proxy_return_pct: float | None = None
+    usd_strength_proxy_kind: str | None = None
 
     def validated(self) -> "MacroMarketReaction":
         release = _utc_exact(self.release_at, name="release_at")
@@ -116,9 +122,14 @@ class MacroMarketReaction:
             ("nasdaq_return_pct", self.nasdaq_return_pct),
             ("broad_usd_return_pct", self.broad_usd_return_pct),
             ("real_yield_change_bps", self.real_yield_change_bps),
+            ("usd_strength_proxy_return_pct", self.usd_strength_proxy_return_pct),
         ):
             if value is not None:
                 _finite_number(value, name=name)
+        if self.usd_strength_proxy_return_pct is not None and not str(self.usd_strength_proxy_kind or "").strip():
+            raise ValueError("usd_strength_proxy_kind is required when USD proxy return is supplied")
+        if self.usd_strength_proxy_return_pct is None and self.usd_strength_proxy_kind is not None:
+            raise ValueError("usd_strength_proxy_kind cannot be supplied without USD proxy return")
         return self
 
 
@@ -259,24 +270,32 @@ def macro_event_evidence(
 
     bullish = state.semantic_state == "DOVISH_SHOCK"
     btc_aligned = market.btc_return_pct > 0 if bullish else market.btc_return_pct < 0
-    alignments = []
+    alignments: list[bool] = []
     if market.nasdaq_return_pct is not None:
         alignments.append(market.nasdaq_return_pct > 0 if bullish else market.nasdaq_return_pct < 0)
+
+    usd_dimension_source = None
     if market.broad_usd_return_pct is not None:
         alignments.append(market.broad_usd_return_pct < 0 if bullish else market.broad_usd_return_pct > 0)
+        usd_dimension_source = "BROAD_USD"
+    elif market.usd_strength_proxy_return_pct is not None:
+        alignments.append(market.usd_strength_proxy_return_pct < 0 if bullish else market.usd_strength_proxy_return_pct > 0)
+        usd_dimension_source = f"PROXY:{market.usd_strength_proxy_kind}"
+
     if market.real_yield_change_bps is not None:
         alignments.append(market.real_yield_change_bps < 0 if bullish else market.real_yield_change_bps > 0)
+
     cross_asset_aligned = sum(bool(value) for value in alignments)
     if not btc_aligned or cross_asset_aligned < 2:
-        return _unknown_evidence(state, market, decision, "Official macro shock lacks aligned BTC plus two-source cross-asset confirmation.")
+        return _unknown_evidence(state, market, decision, "Official macro shock lacks aligned BTC plus two cross-asset dimensions.")
 
     stance = "BULLISH" if bullish else "BEARISH"
     return Evidence(
         family="MACRO_CROSS_ASSET",
         causal_origin="GLOBAL_RISK_LIQUIDITY",
         stance=stance,
-        strength="HIGH" if cross_asset_aligned == 3 else "MEDIUM",
-        confidence=0.85 if cross_asset_aligned == 3 else 0.78,
+        strength="HIGH" if cross_asset_aligned >= 3 else "MEDIUM",
+        confidence=0.85 if cross_asset_aligned >= 3 else 0.78,
         observed_at=_utc_exact(market.first_seen_at, name="market first_seen_at"),
         reason=(
             "Prior-normalized dovish official macro shock is confirmed by BTC and cross-asset risk reaction."
@@ -296,6 +315,9 @@ def macro_event_evidence(
             "btc_abs_move_percentile": market.btc_abs_move_percentile,
             "btc_reaction_aligned": btc_aligned,
             "cross_asset_alignment_count": cross_asset_aligned,
+            "usd_confirmation_dimension_source": usd_dimension_source,
+            "usd_proxy_kind": market.usd_strength_proxy_kind,
+            "broad_usd_and_proxy_counted_separately": False,
             "reaction_lag_seconds": lag_seconds,
             "standalone_macro_surprise_direction_allowed": False,
             "market_confirmation_required": True,
@@ -331,6 +353,8 @@ def _unknown_evidence(
             "metric_percentiles": dict(state.metric_percentiles),
             "prior_sample_count": state.prior_sample_count,
             "btc_abs_move_percentile": market.btc_abs_move_percentile,
+            "usd_proxy_kind": market.usd_strength_proxy_kind,
+            "broad_usd_and_proxy_counted_separately": False,
             "standalone_macro_surprise_direction_allowed": False,
             "market_confirmation_required": True,
             "may_generate_options_trade": False,
@@ -341,7 +365,7 @@ def _unknown_evidence(
 
 def architecture_contract() -> dict:
     return {
-        "version": "CRYPTO_MACRO_EVENT_SEMANTICS_V2",
+        "version": "CRYPTO_MACRO_EVENT_SEMANTICS_V3",
         "supported_directional_events": ["CPI", "EMPLOYMENT_SITUATION"],
         "fixed_raw_surprise_thresholds_used": False,
         "strictly_prior_surprise_distribution_required": True,
@@ -352,6 +376,8 @@ def architecture_contract() -> dict:
         "btc_market_confirmation_required": True,
         "minimum_cross_asset_confirmations": 2,
         "btc_event_move_prior_percentile_required": True,
+        "verified_usd_strength_proxy_may_fill_usd_dimension": True,
+        "direct_and_proxy_usd_may_double_count": False,
         "macro_event_can_be_one_independent_causal_origin_vs_spot_or_derivatives": True,
         "shares_causal_origin_with_generic_macro_lane": True,
         "same_macro_cause_may_be_double_counted": False,
