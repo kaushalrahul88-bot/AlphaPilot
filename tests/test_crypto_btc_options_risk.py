@@ -162,10 +162,13 @@ class BtcOptionsRiskTests(unittest.TestCase):
 
     def test_quantity_is_limited_by_planned_loss_budget(self):
         # Entry 100, stop 80 => 20 planned risk per quantity.
-        # 2% of 100,000 = 2,000 => max 100 quantity.
+        # 2% of 100,000 = 2,000 => max 100 quantity; other caps are looser.
         result = build_btc_options_risk_plan(
             contract_selection=_selection(),
-            risk_policy=_policy(),
+            risk_policy=_policy(
+                max_premium_allocation_pct_of_equity=20.0,
+                max_tail_loss_pct_of_equity=20.0,
+            ),
             execution_spec=_spec(),
             scenario=_scenario(),
         )
@@ -181,7 +184,7 @@ class BtcOptionsRiskTests(unittest.TestCase):
             scenario=_scenario(),
         )
         self.assertEqual(result["risk_plan"]["quantity"], 10.0)
-        self.assertEqual(result["risk_plan"]["limiting_constraint"], "premium_allocation")
+        self.assertIn("premium_allocation", result["risk_plan"]["limiting_constraints"])
 
     def test_quantity_can_be_limited_by_full_premium_tail_risk(self):
         # Tail budget 1% = 1,000; full premium 100 each => 10 quantity.
@@ -196,7 +199,7 @@ class BtcOptionsRiskTests(unittest.TestCase):
             scenario=_scenario(),
         )
         self.assertEqual(result["risk_plan"]["quantity"], 10.0)
-        self.assertEqual(result["risk_plan"]["limiting_constraint"], "full_premium_tail_risk")
+        self.assertIn("full_premium_tail_risk", result["risk_plan"]["limiting_constraints"])
 
     def test_absolute_premium_cap_is_independent_of_commodity_15000_rule(self):
         result = build_btc_options_risk_plan(
@@ -227,6 +230,20 @@ class BtcOptionsRiskTests(unittest.TestCase):
         )
         self.assertAlmostEqual((result["risk_plan"]["quantity"] / 0.25) % 1, 0.0, places=9)
         self.assertLessEqual(result["risk_plan"]["premium_outlay"], result["risk_plan"]["premium_budget"])
+
+    def test_platform_minimum_quantity_is_rounded_up_to_valid_step(self):
+        result = build_btc_options_risk_plan(
+            contract_selection=_selection(),
+            risk_policy=_policy(
+                max_premium_allocation_pct_of_equity=100.0,
+                max_planned_loss_pct_of_equity=100.0,
+                max_tail_loss_pct_of_equity=100.0,
+            ),
+            execution_spec=_spec(quantity_step=0.25, min_quantity=0.30, max_quantity=1.0),
+            scenario=_scenario(),
+        )
+        self.assertEqual(result["risk_plan"]["minimum_quantity"], 0.5)
+        self.assertGreaterEqual(result["risk_plan"]["quantity"], 0.5)
 
     def test_platform_minimum_quantity_can_fail_closed(self):
         result = build_btc_options_risk_plan(
