@@ -3,6 +3,8 @@
 The system stores source metadata and extracted knowledge claims/provenance. It
 does not assume permission to persist complete copyrighted works. Community
 sources are discovery/context until corroborated and empirically validated.
+News is a first-class live-intelligence family rather than being hidden inside
+magazine/research coverage.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ Medium = Literal[
     "EXCHANGE_DOCUMENTATION",
     "REGULATORY_DOCUMENT",
     "INSTITUTIONAL_RESEARCH",
+    "NEWS",
     "NEWS_MAGAZINE",
     "SOCIAL_X",
     "REDDIT_FORUM",
@@ -50,14 +53,22 @@ SOURCE_CLASSES = (
                 "Primary mechanics/specification evidence; distinguish design claims from observed market behaviour."),
     SourceClass("PROTOCOL_DOCS", "OFFICIAL_DOCUMENTATION", "A_PRIMARY", "CLAIM_EXTRACTION", False, False, True, False,
                 "Version and timestamp documentation because protocol behaviour can change."),
+    SourceClass("OFFICIAL_ANNOUNCEMENTS", "OFFICIAL_DOCUMENTATION", "A_PRIMARY", "CLAIM_EXTRACTION", False, False, True, True,
+                "Issuer, protocol, exchange, regulator or company announcements are primary event evidence; retain exact publication and first-seen times."),
     SourceClass("EXCHANGE_DOCS", "EXCHANGE_DOCUMENTATION", "A_PRIMARY", "CLAIM_EXTRACTION", False, False, True, False,
                 "Contract, fee, settlement, margin and API semantics; platform-specific and versioned."),
     SourceClass("REGULATORY_PRIMARY", "REGULATORY_DOCUMENT", "A_PRIMARY", "CLAIM_EXTRACTION", False, False, True, False,
                 "Primary legal/regulatory text; jurisdiction and effective date required."),
     SourceClass("INSTITUTIONAL_RESEARCH", "INSTITUTIONAL_RESEARCH", "B_INSTITUTIONAL_RESEARCH", "CLAIM_EXTRACTION", False, False, True, True,
                 "Research context/hypotheses; retain methodology and historical period."),
+    SourceClass("BREAKING_NEWS", "NEWS", "C_PROFESSIONAL", "CLAIM_EXTRACTION", False, True, True, True,
+                "Time-sensitive reporting. Preserve publication/first-seen timestamps, distinguish confirmed facts from claims, and prioritize primary corroboration."),
+    SourceClass("FINANCIAL_NEWS", "NEWS", "C_PROFESSIONAL", "CLAIM_EXTRACTION", False, True, True, True,
+                "Mainstream financial reporting and market-moving macro/company coverage; separate original reporting from opinion/commentary."),
+    SourceClass("CRYPTO_NATIVE_NEWS", "NEWS", "C_PROFESSIONAL", "CLAIM_EXTRACTION", False, True, True, True,
+                "Crypto-specialist reporting can surface exchange, protocol, regulatory and ecosystem developments quickly; material claims require provenance/corroboration."),
     SourceClass("NEWS_AND_MAGAZINES", "NEWS_MAGAZINE", "C_PROFESSIONAL", "CLAIM_EXTRACTION", False, True, True, True,
-                "Separate original reporting from commentary and verify material claims against primary evidence."),
+                "Long-form reporting, interviews and magazines; separate original reporting from commentary and verify material claims against primary evidence."),
     SourceClass("X_SOCIAL", "SOCIAL_X", "D_COMMUNITY", "CLAIM_EXTRACTION", False, True, True, True,
                 "Track truth confidence and market-impact confidence separately; never standalone hard evidence by default."),
     SourceClass("REDDIT_AND_FORUMS", "REDDIT_FORUM", "D_COMMUNITY", "CLAIM_EXTRACTION", False, True, True, True,
@@ -80,6 +91,9 @@ def source_inventory_v1() -> dict:
         "full_text_persistence_requires_explicit_rights": True,
         "default_book_ingestion": "extract concepts/hypotheses/provenance rather than persisting full copyrighted text",
         "community_source_standalone_trade_signal": False,
+        "news_is_first_class_live_intelligence": True,
+        "news_truth_and_market_impact_scored_separately": True,
+        "news_primary_corroboration_preferred": True,
         "first_seen_timestamp_required_for_live_information": True,
         "cross_source_corroboration_supported": True,
         "source_historical_reliability_tracking": True,
