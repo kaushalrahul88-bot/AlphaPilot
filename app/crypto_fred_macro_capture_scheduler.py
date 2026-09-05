@@ -4,17 +4,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from app.crypto_fred_macro_pit import DATASET, fred_macro_live_archive_record
 from app.fred_btc_macro_regime_provider import FredBtcMacroRegimeProvider
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 async def _insert(store: Any, record) -> dict:
@@ -53,8 +46,7 @@ class FredMacroPitCaptureScheduler:
         self.idempotent_duplicates = 0
         self.failures = 0
 
-    async def run_cycle(self, *, now: datetime | None = None) -> dict:
-        stamp = _utc(now or datetime.now(timezone.utc))
+    async def run_cycle(self) -> dict:
         if not self.policy.enabled:
             return {
                 "status": "FRED_MACRO_CAPTURE_DISABLED",
@@ -68,8 +60,6 @@ class FredMacroPitCaptureScheduler:
         self.cycles += 1
         try:
             capture = await asyncio.to_thread(self.provider.capture_regime)
-            if _utc(capture.first_seen_at) > stamp:
-                raise ValueError("FRED capture first_seen_at cannot be after scheduler cycle time")
             record = fred_macro_live_archive_record(capture)
             stored = await _insert(self.store, record)
             storage_status = stored.get("status")
@@ -82,7 +72,7 @@ class FredMacroPitCaptureScheduler:
             captured = [{
                 "dataset": DATASET,
                 "vintage_date": capture.vintage_date.isoformat(),
-                "first_seen_at": _utc(capture.first_seen_at).isoformat(),
+                "first_seen_at": capture.first_seen_at.isoformat(),
                 "storage_status": storage_status,
                 "historical_vintage_reconstruction": False,
                 "daily_regime_context_only": True,
@@ -132,6 +122,7 @@ def architecture_contract() -> dict:
         "collection_enabled_by_default": False,
         "scheduler_starts_at_import": False,
         "minimum_poll_seconds": 900,
+        "provider_first_seen_controls_visibility": True,
         "historical_reconstruction_performed_by_live_scheduler": False,
         "same_day_first_seen_archive_only": True,
         "missing_macro_treated_as_neutral": False,
