@@ -2,8 +2,9 @@
 
 This module implements the storage contract from ``crypto_btc_pit_archive``
 without changing its semantics. Merely importing or initializing this module
-never starts collection. First-seen records are insert-only: exact stored
-fingerprints are idempotent and conflicting later observations are rejected.
+never starts collection. First-seen records are insert-only: rediscovery of the
+same provider observation is idempotent even if it is polled later, while changed
+content for the same natural key is rejected.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from app.crypto_btc_pit_archive import BtcPitArchiveRecord
+from app.crypto_btc_pit_archive import BtcPitArchiveRecord, same_immutable_observation
 
 TABLE_NAME = "crypto_btc_pit_archive_v1"
 PROVENANCE_ID = "BTC_PIT_POSTGRES_FIRST_SEEN_V1"
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     point_in_time_proven BOOLEAN NOT NULL CHECK (point_in_time_proven = TRUE),
     provenance_id TEXT NOT NULL DEFAULT '{PROVENANCE_ID}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (natural_key),
     UNIQUE (dataset, provider, source_key)
 );
 CREATE INDEX IF NOT EXISTS crypto_btc_pit_dataset_seen_idx
@@ -143,6 +145,18 @@ def postgres_record_params(record: BtcPitArchiveRecord) -> dict:
     }
 
 
+def _candidate_identity_from_params(params: dict) -> dict:
+    event_at = params.get("event_at")
+    return {
+        "dataset": params.get("dataset"),
+        "provider": params.get("provider"),
+        "source_key": params.get("source_key"),
+        "event_at": None if event_at is None else _utc(event_at).isoformat(),
+        "source_version": params.get("source_version"),
+        "payload_hash": params.get("payload_hash"),
+    }
+
+
 class PostgresBtcPitArchiveStore:
     """Insert-only Postgres implementation of the BTC PIT archive contract."""
 
@@ -185,11 +199,13 @@ class PostgresBtcPitArchiveStore:
                 existing = _row_dict(cur.fetchone())
             conn.commit()
 
-        if existing["record_fingerprint"] == params["record_fingerprint"]:
+        candidate = _candidate_identity_from_params(params)
+        if same_immutable_observation(existing, candidate):
             return {
                 "status": "IDEMPOTENT_DUPLICATE",
                 "natural_key": params["natural_key"],
                 "record_fingerprint": existing["record_fingerprint"],
+                "first_seen_at": existing["first_seen_at"],
             }
         raise ValueError("conflicting later observation cannot overwrite immutable Postgres first-seen record")
 
@@ -225,7 +241,7 @@ class PostgresBtcPitArchiveStore:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_PIT_POSTGRES_CONTRACT_V1",
+        "version": "BTC_PIT_POSTGRES_CONTRACT_V2",
         "backend": "POSTGRES",
         "backend_is_automatically_selected": False,
         "database_url_required": True,
@@ -235,6 +251,8 @@ def architecture_contract() -> dict:
         "delete_existing_record_via_this_module_allowed": False,
         "first_seen_wins": True,
         "exact_duplicate_is_idempotent": True,
+        "same_provider_observation_seen_later_is_idempotent": True,
+        "earliest_first_seen_is_preserved": True,
         "conflicting_duplicate_is_rejected": True,
         "visible_before_first_seen": False,
         "outcome_fields_allowed": False,
