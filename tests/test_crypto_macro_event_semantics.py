@@ -159,7 +159,9 @@ class CryptoMacroEventSemanticsTests(unittest.TestCase):
         )
         self.assertEqual(evidence.stance, "BEARISH")
         self.assertFalse(evidence.context_only)
-        self.assertEqual(evidence.causal_origin, "MACRO_EVENT_SHOCK")
+        self.assertEqual(evidence.causal_origin, "GLOBAL_RISK_LIQUIDITY")
+        self.assertEqual(evidence.metadata["macro_event_suborigin"], "OFFICIAL_MACRO_EVENT_SHOCK")
+        self.assertEqual(evidence.metadata["causal_origin_dedup_group"], "GLOBAL_RISK_LIQUIDITY")
         self.assertEqual(evidence.metadata["cross_asset_alignment_count"], 3)
         self.assertFalse(evidence.metadata["standalone_macro_surprise_direction_allowed"])
         self.assertFalse(evidence.metadata["may_generate_options_trade"])
@@ -215,6 +217,23 @@ class CryptoMacroEventSemanticsTests(unittest.TestCase):
                 decision_at=reaction.observed_at,
             )
 
+    def test_non_finite_market_reaction_is_rejected(self):
+        reaction = _reaction("BLS:CPI:CURRENT", bullish=False)
+        with self.assertRaises(ValueError):
+            MacroMarketReaction(
+                event_key=reaction.event_key,
+                release_at=reaction.release_at,
+                observed_at=reaction.observed_at,
+                first_seen_at=reaction.first_seen_at,
+                btc_return_pct=float("nan"),
+                nasdaq_return_pct=reaction.nasdaq_return_pct,
+                broad_usd_return_pct=reaction.broad_usd_return_pct,
+                real_yield_change_bps=reaction.real_yield_change_bps,
+                btc_abs_move_percentile=reaction.btc_abs_move_percentile,
+                source=reaction.source,
+                source_verified=True,
+            ).validated()
+
     def test_fomc_stays_unsupported_until_separate_semantic_classifier_exists(self):
         current = _surprise(
             "FED:FOMC:CURRENT",
@@ -226,7 +245,7 @@ class CryptoMacroEventSemanticsTests(unittest.TestCase):
         self.assertEqual(normalized.semantic_state, "UNSUPPORTED_EVENT_TYPE")
         self.assertEqual(normalized.direction, "UNKNOWN")
 
-    def test_architecture_is_prior_normalized_and_trade_separated(self):
+    def test_architecture_is_prior_normalized_trade_separated_and_macro_deduplicated(self):
         contract = architecture_contract()
         self.assertEqual(contract["supported_directional_events"], ["CPI", "EMPLOYMENT_SITUATION"])
         self.assertFalse(contract["fixed_raw_surprise_thresholds_used"])
@@ -238,7 +257,9 @@ class CryptoMacroEventSemanticsTests(unittest.TestCase):
         self.assertTrue(contract["btc_market_confirmation_required"])
         self.assertEqual(contract["minimum_cross_asset_confirmations"], 2)
         self.assertTrue(contract["btc_event_move_prior_percentile_required"])
-        self.assertTrue(contract["macro_event_can_be_one_independent_causal_origin"])
+        self.assertTrue(contract["macro_event_can_be_one_independent_causal_origin_vs_spot_or_derivatives"])
+        self.assertTrue(contract["shares_causal_origin_with_generic_macro_lane"])
+        self.assertFalse(contract["same_macro_cause_may_be_double_counted"])
         self.assertFalse(contract["macro_event_directly_generates_options_trade"])
         self.assertFalse(contract["macro_event_directly_generates_futures_trade"])
 
