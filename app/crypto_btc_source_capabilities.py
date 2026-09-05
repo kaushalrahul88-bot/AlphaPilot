@@ -228,6 +228,30 @@ BTC_SOURCE_CAPABILITIES: tuple[SourceCapability, ...] = (
     ),
     SourceCapability(
         lane="MACRO_CROSS_ASSET",
+        dataset="FRED_MACRO_REGIME_VINTAGE_HISTORY",
+        provider="FRED_ALFRED",
+        historical_mode="RECONSTRUCTIBLE_PUBLIC_HISTORY",
+        point_in_time_requirement="Use an ALFRED real-time/vintage date strictly before an intraday replay click's calendar date. Same-day historical reconstruction does not prove exact intraday availability.",
+        can_reconstruct_later=True,
+        live_capture_priority="LOW",
+        decision_role="CONTEXT_ONLY",
+        documented_endpoint="GET https://api.stlouisfed.org/fred/series/observations",
+        notes="Reconstructible prior-day daily regime context only. FRED release dates do not by themselves prove exact intraday FRED/ALFRED availability and this lane cannot supply a directional BTC causal origin.",
+    ),
+    SourceCapability(
+        lane="MACRO_CROSS_ASSET",
+        dataset="FRED_MACRO_REGIME_LIVE_SNAPSHOT",
+        provider="FRED_ALFRED",
+        historical_mode="FIRST_SEEN_ARCHIVE_REQUIRED",
+        point_in_time_requirement="For same-day prospective use, archive the current FRED/ALFRED vintage with AlphaPilot first_seen_at. A snapshot fetched later must never be backdated into an earlier click.",
+        can_reconstruct_later=False,
+        live_capture_priority="MEDIUM",
+        decision_role="CONTEXT_ONLY",
+        documented_endpoint="GET https://api.stlouisfed.org/fred/series/observations",
+        notes="First-seen same-day daily macro regime context only. It is not a timestamped CPI/NFP/FOMC surprise feed and cannot supply the second intraday BTC directional origin.",
+    ),
+    SourceCapability(
+        lane="MACRO_CROSS_ASSET",
         dataset="SCHEDULED_MACRO_RELEASES",
         provider="OFFICIAL_OR_VERIFIED_RELEASE_SOURCE",
         historical_mode="OFFICIAL_RELEASE_ARCHIVE",
@@ -286,11 +310,12 @@ def live_capture_plan() -> dict:
     high = [row for row in rows if row["live_capture_priority"] == "HIGH"]
     reconstructible = [row for row in rows if row["can_reconstruct_later"]]
     return {
-        "version": "BTC_LIVE_CAPTURE_PLAN_V6",
+        "version": "BTC_LIVE_CAPTURE_PLAN_V7",
         "capture_first": [row["dataset"] for row in critical],
         "capture_high_priority": [row["dataset"] for row in high],
+        "capture_medium_priority": [row["dataset"] for row in rows if row["live_capture_priority"] == "MEDIUM"],
         "do_not_duplicate_by_default": [row["dataset"] for row in reconstructible],
-        "rule": "STORE_IRREPLACEABLE_PIT_STATE_FIRST; RECONSTRUCT_PUBLIC_CANDLES_LATER",
+        "rule": "STORE_IRREPLACEABLE_PIT_STATE_FIRST; RECONSTRUCT_PUBLIC_CANDLES_AND_VINTAGES_LATER",
         "options_archive_required_before_economic_backtest": True,
         "global_options_context_is_not_coindcx_execution_data": True,
         "global_options_greeks_is_separate_first_seen_state": True,
@@ -300,12 +325,15 @@ def live_capture_plan() -> dict:
         "social_raw_and_enrichment_have_separate_first_seen_state": True,
         "social_provider_requires_verified_rights": True,
         "stablecoin_supply_is_separate_from_exchange_flows": True,
+        "fred_vintage_history_is_reconstructible": True,
+        "fred_same_day_live_snapshot_requires_first_seen_archive": True,
+        "fred_daily_regime_is_not_exact_macro_event_surprise": True,
     }
 
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V6",
+        "version": "BTC_SOURCE_CAPABILITY_CONTRACT_V7",
         "undocumented_equals_historical_support": False,
         "current_endpoint_equals_historical_archive": False,
         "future_reconstruction_of_first_seen_state_allowed": False,
@@ -317,6 +345,9 @@ def architecture_contract() -> dict:
         "global_options_delta_may_be_inferred_from_strike": False,
         "provider_entity_label_revision_may_rewrite_old_click": False,
         "scheduled_macro_revision_may_replace_first_release": False,
+        "fred_historical_same_day_vintage_proves_intraday_visibility": False,
+        "fred_live_first_seen_may_be_backdated": False,
+        "fred_daily_regime_may_supply_second_intraday_origin": False,
         "news_verification_learned_later_may_be_backdated": False,
         "raw_news_may_be_rewritten_by_enrichment": False,
         "social_public_visibility_equals_retention_permission": False,
