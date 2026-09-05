@@ -2,8 +2,9 @@
 
 The scheduler archives verified research data only. It never creates an
 Options/Futures trade and never starts automatically. CoinDCX funding/mark is the
-default implemented job; optional CoinGlass OI/liquidation jobs require an
-explicitly configured provider/API key.
+default implemented context job; optional CoinGlass OI/liquidation jobs require
+an explicitly configured provider/API key. AlphaPilot's primary trade instrument
+remains Options; Futures snapshots cannot substitute for Options contract quotes.
 """
 from __future__ import annotations
 
@@ -20,6 +21,12 @@ from app.crypto_btc_derivatives_capture import (
     BTC_OPEN_INTEREST_DATASET,
     coinglass_liquidation_archive_record,
     coinglass_open_interest_archive_record,
+)
+from app.crypto_btc_options_primary_policy import (
+    CoinDcxOptionsCaptureReadiness,
+    FUTURES_CONTEXT_ROLE,
+    PRIMARY_TRADE_INSTRUMENT,
+    tag_futures_context_payload,
 )
 from app.crypto_btc_pit_archive import BtcPitArchiveRecord, archive_record_from_capture
 from app.crypto_btc_source_capabilities import live_capture_plan
@@ -85,7 +92,7 @@ class BtcCaptureSchedulerState:
 
     def snapshot(self, *, policy: BtcCaptureSchedulerPolicy) -> dict:
         return {
-            "version": "BTC_CAPTURE_SCHEDULER_STATE_V2",
+            "version": "BTC_CAPTURE_SCHEDULER_STATE_V3",
             "enabled": policy.enabled,
             "poll_seconds": policy.poll_seconds,
             "coinglass_poll_seconds": policy.coinglass_poll_seconds,
@@ -99,6 +106,8 @@ class BtcCaptureSchedulerState:
             "idempotent_duplicates": self.idempotent_duplicates,
             "failures": self.failures,
             "job_last_attempt_at": {key: _iso(value) for key, value in sorted(self.job_last_attempt_at.items())},
+            "primary_trade_instrument": PRIMARY_TRADE_INSTRUMENT,
+            "futures_context_role": FUTURES_CONTEXT_ROLE,
             "options_trade_generated": False,
             "futures_trade_generated": False,
         }
@@ -112,7 +121,7 @@ def coindcx_futures_rt_archive_record(capture: CoinDcxFuturesRtCapture) -> BtcPi
         if stamp is not None and _utc(stamp) <= first_seen
     ]
     event_at = max((_utc(stamp) for stamp in provider_event_candidates), default=None)
-    payload = {
+    payload = tag_futures_context_payload({
         "pair": capture.raw_pair,
         "market": capture.market,
         "provider_snapshot_at": _iso(capture.provider_snapshot_at),
@@ -128,7 +137,7 @@ def coindcx_futures_rt_archive_record(capture: CoinDcxFuturesRtCapture) -> BtcPi
         "liquidations": None,
         "open_interest_inferred": False,
         "liquidations_inferred": False,
-    }
+    })
     source_key = f"{capture.raw_pair}:{int(first_seen.timestamp() * 1000)}"
     return archive_record_from_capture(
         dataset=COINDCX_FUTURES_RT_DATASET,
@@ -136,7 +145,7 @@ def coindcx_futures_rt_archive_record(capture: CoinDcxFuturesRtCapture) -> BtcPi
         source_key=source_key,
         first_seen_at=first_seen,
         event_at=event_at,
-        source_version="COINDCX_FUTURES_RT_V1",
+        source_version="COINDCX_FUTURES_RT_OPTIONS_CONTEXT_V2",
         payload=payload,
     )
 
@@ -209,6 +218,9 @@ class BtcPitCaptureScheduler:
             "record_fingerprint": stored.get("record_fingerprint") or record.record_fingerprint,
             "first_seen_at": _iso(record.first_seen_at),
             "event_at": _iso(record.event_at),
+            "primary_trade_instrument": PRIMARY_TRADE_INSTRUMENT,
+            "instrument_role": record.payload.get("instrument_role"),
+            "may_satisfy_options_contract_quote": bool(record.payload.get("may_satisfy_options_contract_quote", False)),
             "options_trade_generated": False,
             "futures_trade_generated": False,
         }
@@ -267,6 +279,7 @@ class BtcPitCaptureScheduler:
             "state": self.state.snapshot(policy=self.policy),
             "provider_called": bool(captured or errors),
             "store_written": any(item.get("storage_status") == "INSERTED_FIRST_SEEN" for item in captured),
+            "primary_trade_instrument": PRIMARY_TRADE_INSTRUMENT,
             "options_trade_generated": False,
             "futures_trade_generated": False,
         }
@@ -289,13 +302,17 @@ def capture_gap_report() -> dict:
     desired = list(dict.fromkeys(plan["capture_first"] + plan["capture_high_priority"]))
     missing = [dataset for dataset in desired if dataset not in IMPLEMENTED_DATASETS]
     return {
-        "version": "BTC_CAPTURE_GAP_REPORT_V2",
+        "version": "BTC_CAPTURE_GAP_REPORT_V3",
+        "primary_trade_instrument": PRIMARY_TRADE_INSTRUMENT,
         "implemented_datasets": sorted(IMPLEMENTED_DATASETS),
         "desired_critical_and_high_datasets": desired,
         "missing_collectors": missing,
         "missing_collectors_are_treated_as_neutral": False,
         "missing_collectors_are_reported_unavailable": True,
         "historical_options_fabricated": False,
+        "futures_context_role": FUTURES_CONTEXT_ROLE,
+        "futures_may_satisfy_options_contract_quote": False,
+        "coindcx_options_capture_readiness": CoinDcxOptionsCaptureReadiness().status(),
         "collection_enabled": False,
         "optional_provider_configuration_required": {
             BTC_OPEN_INTEREST_DATASET: "COINGLASS_API_KEY_OR_OTHER_VERIFIED_PROVIDER",
@@ -306,7 +323,8 @@ def capture_gap_report() -> dict:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_CAPTURE_SCHEDULER_CONTRACT_V2",
+        "version": "BTC_CAPTURE_SCHEDULER_CONTRACT_V3",
+        "primary_trade_instrument": PRIMARY_TRADE_INSTRUMENT,
         "collection_enabled_by_default": False,
         "scheduler_starts_at_import": False,
         "caller_must_explicitly_invoke_service_loop": True,
@@ -317,7 +335,10 @@ def architecture_contract() -> dict:
         "provider_history_is_not_assumed_immutable": True,
         "unimplemented_sources_may_be_fabricated": False,
         "missing_source_treated_as_neutral": False,
+        "futures_context_role": FUTURES_CONTEXT_ROLE,
         "futures_context_capture_enables_futures_execution": False,
+        "futures_context_may_satisfy_options_quote": False,
+        "undocumented_options_endpoint_reverse_engineering_allowed": False,
         "options_trade_generation_allowed": False,
         "futures_trade_generation_allowed": False,
         "broker_execution_enabled": False,
