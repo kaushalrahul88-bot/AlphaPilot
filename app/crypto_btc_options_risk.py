@@ -55,9 +55,14 @@ def _floor_to_step(value: float, step: float) -> float:
     if value <= 0:
         return 0.0
     units = floor((value + 1e-12) / step)
-    result = units * step
-    # Avoid binary float noise in externally visible plans.
-    return float(round(result, 12))
+    return float(round(units * step, 12))
+
+
+def _ceil_to_step(value: float, step: float) -> float:
+    if value <= 0:
+        return 0.0
+    units = floor((value - 1e-12) / step) + 1
+    return float(round(units * step, 12))
 
 
 @dataclass(frozen=True)
@@ -182,13 +187,7 @@ def build_btc_options_risk_plan(
     execution_spec: BtcOptionsExecutionSpec,
     scenario: BtcOptionsRiskScenario,
 ) -> dict:
-    """Build a conservative, non-executable long BTC option risk plan.
-
-    Quantity is the minimum permitted by premium allocation, planned-stop risk,
-    full-premium tail risk, and platform max quantity. The function fails closed
-    if no valid minimum quantity fits or if net reward/risk after explicit costs
-    is below policy.
-    """
+    """Build a conservative, non-executable long BTC option risk plan."""
     if str(contract_selection.get("instrument_type", "")).upper() != "OPTIONS":
         raise ValueError("BTC Options risk brain accepts OPTIONS contract selection only")
     if contract_selection.get("futures_route_invoked") is True or contract_selection.get("futures_trade_generated") is True:
@@ -293,24 +292,20 @@ def build_btc_options_risk_plan(
     if spec.max_quantity is not None:
         quantity_caps["platform_max_quantity"] = _floor_to_step(float(spec.max_quantity), spec.quantity_step)
 
-    quantity = min(quantity_caps.values())
-    quantity = _floor_to_step(quantity, spec.quantity_step)
-    min_quantity = _floor_to_step(float(spec.min_quantity), spec.quantity_step)
-    if min_quantity <= 0:
-        # min_quantity may not be an exact step multiple; round it up safely.
-        min_quantity = spec.quantity_step
-        while min_quantity + 1e-12 < spec.min_quantity:
-            min_quantity = round(min_quantity + spec.quantity_step, 12)
+    quantity = _floor_to_step(min(quantity_caps.values()), spec.quantity_step)
+    min_quantity = _ceil_to_step(float(spec.min_quantity), spec.quantity_step)
+    limiting_constraints = sorted(
+        key for key, value in quantity_caps.items() if abs(value - quantity) <= 1e-12
+    )
 
     if quantity + 1e-12 < min_quantity:
-        limiting = min(quantity_caps, key=quantity_caps.get)
         return _no_plan(
             side=side,
             status="NO_OPTIONS_RISK_PLAN",
             reason="Configured budgets cannot support the platform minimum quantity.",
             diagnostics={
                 "quantity_caps": quantity_caps,
-                "limiting_constraint": limiting,
+                "limiting_constraints": limiting_constraints,
                 "minimum_quantity": min_quantity,
             },
         )
@@ -343,8 +338,6 @@ def build_btc_options_risk_plan(
             },
         )
 
-    # Defensive post-sizing assertions: the final rounded quantity may never
-    # exceed any configured budget.
     tolerance = 1e-8
     if total_premium_outlay > premium_budget + tolerance:
         raise AssertionError("rounded quantity exceeded premium allocation budget")
@@ -353,7 +346,6 @@ def build_btc_options_risk_plan(
     if total_tail_loss > tail_risk_budget + tolerance:
         raise AssertionError("rounded quantity exceeded tail risk budget")
 
-    limiting_constraint = min(quantity_caps, key=quantity_caps.get)
     risk_plan = {
         "contract_symbol": selected.get("symbol"),
         "option_type": expected_option_type,
@@ -369,7 +361,8 @@ def build_btc_options_risk_plan(
         "quantity": quantity,
         "quantity_step": spec.quantity_step,
         "minimum_quantity": min_quantity,
-        "limiting_constraint": limiting_constraint,
+        "limiting_constraint": limiting_constraints[0] if limiting_constraints else None,
+        "limiting_constraints": limiting_constraints,
         "quantity_caps": quantity_caps,
         "premium_budget": premium_budget,
         "planned_risk_budget": planned_risk_budget,
