@@ -5,14 +5,12 @@ CoinDCX execution substitute: its contracts, quotes and marks cannot select or
 fill a CoinDCX option. The provider consumes documented public endpoints for the
 active option instrument list and periodic chain summaries.
 
-The instrument list is seeded lazily once per provider lifetime and then cached;
-metadata refresh is explicit rather than timer-polled, matching Deribit's own
-options-data collection guidance. The chain summary may be sampled periodically.
-
 The full-chain summary exposes mark IV and open interest, while instrument
-metadata exposes expiry, strike and call/put type. V1 deliberately does not
-approximate 25-delta skew from strike; skew remains unknown until a documented
-delta/ticker streaming capture is implemented.
+metadata exposes expiry, strike and call/put type. Instrument metadata is seeded
+lazily and cached; ordinary context polling does not repeatedly call
+``get_instruments``. V1 deliberately does not approximate 25-delta skew from
+strike; skew is supplied separately by the documented Deribit ticker-Greeks PIT
+pipeline.
 """
 from __future__ import annotations
 
@@ -117,7 +115,7 @@ class DeribitBtcOptionsContextCapture:
         if int(self.valid_expiry_count) <= 0:
             raise ValueError("at least one valid paired ATM expiry is required")
         if self.skew_25d is not None:
-            raise ValueError("V1 does not infer 25-delta skew")
+            raise ValueError("periodic chain context does not infer 25-delta skew")
         return self
 
 
@@ -165,6 +163,19 @@ class DeribitBtcOptionsContextProvider:
             raise ValueError("Deribit returned an empty BTC option instrument list")
         self._instrument_rows_cache = rows
         return len(rows)
+
+    def instrument_rows(self, *, refresh: bool = False) -> list[dict]:
+        """Return a defensive copy of the authoritative cached instrument seed.
+
+        Calling this method may perform exactly one lazy ``get_instruments``
+        request when the cache is empty. Subsequent calls are cache-only unless
+        the caller explicitly requests ``refresh=True``. It performs no trade or
+        ticker subscription.
+        """
+        self._require_enabled()
+        if refresh:
+            self.refresh_instruments()
+        return list(self._seed_instruments_if_needed())
 
     def _seed_instruments_if_needed(self) -> list[dict]:
         if self._instrument_rows_cache is None:
@@ -314,14 +325,15 @@ def architecture_contract() -> dict:
         "documented_book_summary_endpoint": BOOK_SUMMARY_URL,
         "instrument_kind": "option",
         "currency": "BTC",
-        "instrument_list_seeded_lazily": True,
-        "instrument_list_polled_each_snapshot": False,
+        "instrument_seed_cached": True,
+        "instrument_rows_public_seed_method": True,
         "instrument_refresh_explicit": True,
+        "instrument_metadata_polled_each_context_cycle": False,
         "mark_iv_captured": True,
         "open_interest_captured": True,
         "expiry_strike_option_type_captured": True,
         "skew_25d_inferred_from_strike": False,
-        "skew_25d_captured": False,
+        "skew_25d_captured_by_periodic_context": False,
         "coindcx_contract_selection_allowed": False,
         "coindcx_quote_fill_allowed": False,
         "coindcx_pnl_replay_allowed": False,
