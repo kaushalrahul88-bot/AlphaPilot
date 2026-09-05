@@ -22,7 +22,7 @@ class CryptoMacroEventSourceCapabilityTests(unittest.TestCase):
 
     def test_capture_plan_prioritizes_both_consensus_and_official_release(self):
         plan = live_capture_plan()
-        self.assertEqual(plan["version"], "BTC_LIVE_CAPTURE_PLAN_V9")
+        self.assertEqual(plan["version"], "BTC_LIVE_CAPTURE_PLAN_V10")
         self.assertIn("MACRO_CONSENSUS_SNAPSHOTS", plan["capture_medium_priority"])
         self.assertIn("SCHEDULED_MACRO_RELEASES", plan["capture_medium_priority"])
         self.assertTrue(plan["macro_consensus_requires_pre_release_first_seen_archive"])
@@ -33,7 +33,7 @@ class CryptoMacroEventSourceCapabilityTests(unittest.TestCase):
 
     def test_architecture_forbids_hindsight_consensus_and_revision_overwrite(self):
         contract = architecture_contract()
-        self.assertEqual(contract["version"], "BTC_SOURCE_CAPABILITY_CONTRACT_V9")
+        self.assertEqual(contract["version"], "BTC_SOURCE_CAPABILITY_CONTRACT_V10")
         self.assertFalse(contract["macro_consensus_learned_after_release_may_be_backdated"])
         self.assertFalse(contract["macro_consensus_may_assign_btc_direction"])
         self.assertFalse(contract["tradingeconomics_teforecast_may_substitute_consensus"])
