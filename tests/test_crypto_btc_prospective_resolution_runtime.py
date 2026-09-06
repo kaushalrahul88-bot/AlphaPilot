@@ -73,10 +73,16 @@ class BtcProspectiveResolutionRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "outcome": {"status": "OUTCOME_RESOLVED", "classification": "ABSTENTION_RESOLVED"},
         }
         now = datetime(2026, 9, 6, 7, 51, tzinfo=timezone.utc)
-        with patch(
-            "app.crypto_btc_prospective_resolution_runtime.resolve_prospective_btc_thesis_from_coindcx",
-            new=AsyncMock(return_value=resolved),
-        ) as resolver:
+        with (
+            patch(
+                "app.crypto_btc_prospective_resolution_runtime.resolve_prospective_btc_thesis_from_coindcx",
+                new=AsyncMock(return_value=resolved),
+            ) as resolver,
+            patch(
+                "app.crypto_btc_prospective_resolution_runtime._resolution_for_persistence",
+                side_effect=lambda value: value,
+            ) as canonicalizer,
+        ):
             result = await resolve_due_btc_prospective_decisions_once(
                 proof_config=BtcProspectiveProofRuntimeConfig(
                     postgres_enabled=True,
@@ -97,6 +103,7 @@ class BtcProspectiveResolutionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_count"], 0)
         self.assertEqual(result["resolved_click_ids"], ["btc-click-1"])
         resolver.assert_awaited_once()
+        canonicalizer.assert_called_once_with(resolved)
 
     async def test_horizon_unresolved_row_remains_pending_for_retry(self):
         frozen = {"decision": {"click_id": "btc-click-2"}}
