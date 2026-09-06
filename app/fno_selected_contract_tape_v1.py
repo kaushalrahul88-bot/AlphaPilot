@@ -62,6 +62,9 @@ def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
 async def _probe_direct_quote(provider, trading_symbol: str) -> dict:
     """Optional live quote probe. Failure is diagnostic and never fabricated."""
     try:
+        throttle = getattr(provider, "_throttle", None)
+        if callable(throttle):
+            await throttle()
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(
                 f"{provider.BASE_URL}/v1/live-data/quote",
@@ -118,7 +121,19 @@ def build_selected_observation(
     if ltp is None:
         ltp = _number(leg.get("ltp"))
     bid = _number(_first(quote_payload, "best_bid", "bid", "bid_price", "best_bid_price"))
-    ask = _number(_first(quote_payload, "best_ask", "ask", "ask_price", "best_ask_price"))
+    ask = _number(_first(
+        quote_payload, "best_ask", "ask", "ask_price", "best_ask_price", "offer_price"
+    ))
+    depth = quote_payload.get("depth") or {}
+    if isinstance(depth, Mapping):
+        if bid is None:
+            buys = depth.get("buy") or []
+            if isinstance(buys, list) and buys and isinstance(buys[0], Mapping):
+                bid = _number(buys[0].get("price"))
+        if ask is None:
+            sells = depth.get("sell") or []
+            if isinstance(sells, list) and sells and isinstance(sells[0], Mapping):
+                ask = _number(sells[0].get("price"))
 
     observed_at = collected_at.astimezone(timezone.utc)
     source_identity = {
@@ -241,6 +256,8 @@ def architecture_contract() -> dict:
         "first_seen_live_only": True,
         "historical_backfill": False,
         "bid_ask_fabricated": False,
+        "groww_quote_keys_supported": ["bid_price", "offer_price", "depth.buy", "depth.sell"],
+        "provider_throttle_respected_before_direct_quote": True,
         "decision_effect": "NONE",
         "options_research_only": True,
         "futures_trade_generation": False,
