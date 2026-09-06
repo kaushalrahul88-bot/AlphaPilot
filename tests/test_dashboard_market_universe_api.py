@@ -16,8 +16,10 @@ from app.dashboard_market_universe_api import (
 CSV = """exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,expiry_date,strike_price,lot_size,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed
 NSE,1,NIFTY,NSE-NIFTY,Nifty 50,IDX,CASH,,,,,,,,,,0,1,1
 NSE,2,RELIANCE,NSE-RELIANCE,Reliance Industries,EQ,CASH,EQ,INE002A01018,,,,1,,,,0,1,1
+NSE,12,UNMAPPED,NSE-UNMAPPED,Unmapped Active FNO,EQ,CASH,EQ,INE000A01000,,,,1,,,,0,1,1
 NSE,3,NIFTY26SEP25000CE,NSE-NIFTY-24Sep26-25000-CE,,CE,FNO,,,NIFTY,1,2026-09-24,25000,75,0.05,1000,0,1,1
 NSE,4,RELIANCE26SEP3000CE,NSE-RELIANCE-24Sep26-3000-CE,,CE,FNO,,,RELIANCE,2,2026-09-24,3000,250,0.05,1000,0,1,1
+NSE,12,UNMAPPED26SEP100CE,NSE-UNMAPPED-24Sep26-100-CE,,CE,FNO,,,UNMAPPED,12,2026-09-24,100,100,0.05,1000,0,1,1
 NSE,5,OLD26AUG100CE,NSE-OLD-27Aug26-100-CE,,CE,FNO,,,OLD,5,2026-08-27,100,100,0.05,1000,0,1,1
 NSE,6,LOCKED26SEP100CE,NSE-LOCKED-24Sep26-100-CE,,CE,FNO,,,LOCKED,6,2026-09-24,100,100,0.05,1000,0,0,1
 BSE,7,SENSEX26SEP80000CE,BSE-SENSEX-24Sep26-80000-CE,,CE,FNO,,,SENSEX,7,2026-09-24,80000,20,0.05,1000,0,1,1
@@ -38,12 +40,18 @@ DELTA_PRODUCTS = [
 
 
 class DashboardMarketUniverseTests(unittest.TestCase):
-    def test_parses_only_active_buyable_nse_fno_underlyings(self):
+    def test_parses_active_buyable_nse_fno_and_marks_existing_live_scan_support(self):
         rows = parse_groww_fno_underlyings(CSV, as_of=date(2026, 9, 6))
-        self.assertEqual([row["symbol"] for row in rows], ["NIFTY", "RELIANCE"])
-        self.assertEqual(rows[0]["name"], "Nifty 50")
-        self.assertEqual(rows[1]["name"], "Reliance Industries")
-        self.assertTrue(all(row["state"] == "AVAILABLE" for row in rows))
+        self.assertEqual([row["symbol"] for row in rows], ["NIFTY", "RELIANCE", "UNMAPPED"])
+        by_symbol = {row["symbol"]: row for row in rows}
+        self.assertEqual(by_symbol["NIFTY"]["name"], "Nifty 50")
+        self.assertEqual(by_symbol["RELIANCE"]["name"], "Reliance Industries")
+        self.assertEqual(by_symbol["NIFTY"]["state"], "CONNECTED")
+        self.assertEqual(by_symbol["RELIANCE"]["state"], "CONNECTED")
+        self.assertTrue(by_symbol["NIFTY"]["live_scan_connected"])
+        self.assertTrue(by_symbol["RELIANCE"]["live_scan_connected"])
+        self.assertEqual(by_symbol["UNMAPPED"]["state"], "AVAILABLE")
+        self.assertFalse(by_symbol["UNMAPPED"]["live_scan_connected"])
         self.assertTrue(all(row["exchange"] == "NSE" and row["segment"] == "FNO" for row in rows))
 
     def test_parses_active_buyable_mcx_commodity_underlyings_and_marks_connected_pipelines(self):
@@ -67,6 +75,7 @@ class DashboardMarketUniverseTests(unittest.TestCase):
     def test_architecture_is_public_read_only_and_no_trading(self):
         contract = architecture_contract()
         self.assertEqual(contract["fno_source"], "GROWW_DOCUMENTED_PUBLIC_INSTRUMENT_MASTER")
+        self.assertEqual(contract["fno_connected_state_basis"], "EXISTING_GROWW_LIVE_SCAN_MAPPING")
         self.assertEqual(contract["commodity_source"], "GROWW_DOCUMENTED_PUBLIC_INSTRUMENT_MASTER")
         self.assertEqual(contract["crypto_source"], "DELTA_INDIA_DOCUMENTED_PUBLIC_PRODUCTS")
         self.assertFalse(contract["authentication_required"])
