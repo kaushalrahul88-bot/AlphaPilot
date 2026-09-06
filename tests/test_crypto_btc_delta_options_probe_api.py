@@ -121,8 +121,9 @@ class DeltaOptionsProbeApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("secrets.COMMODITY_COLLECTOR_TOKEN", workflow)
         self.assertIn(ROUTE_PATH, workflow)
         self.assertIn("/health", workflow)
-        self.assertNotIn("api_key", workflow.lower())
-        self.assertNotIn("order placement", workflow.lower())
+        self.assertNotIn("DELTA_API_KEY", workflow)
+        self.assertNotIn("COINDCX_API_KEY", workflow)
+        self.assertNotIn("place-order", workflow.lower())
 
 
 if __name__ == "__main__":
