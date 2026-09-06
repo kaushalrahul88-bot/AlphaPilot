@@ -14,13 +14,14 @@ from app.delta_india_btc_options_public_provider import (
 )
 
 
-def ticker(symbol, contract_type, strike, *, expiry_spot=80010, mark=230, bid=225, ask=235, oi=1000, ts=1788634200):
+def ticker(symbol, contract_type, strike, *, expiry_spot=80010, mark=230, mark_iv=0.46, bid=225, ask=235, oi=1000, ts=1788634200):
     return {
         "symbol": symbol,
         "contract_type": contract_type,
         "strike_price": str(strike),
         "spot_price": str(expiry_spot),
         "mark_price": str(mark),
+        "mark_vol": str(mark_iv),
         "product_id": abs(hash(symbol)) % 100000,
         "timestamp": ts,
         "oi": str(oi),
@@ -85,7 +86,10 @@ class DeltaIndiaOptionsProbeTests(unittest.TestCase):
         self.assertEqual({row.option_type for row in snapshot.quotes}, {"CALL", "PUT"})
         self.assertTrue(all(row.best_bid is not None and row.best_ask is not None for row in snapshot.quotes))
         self.assertTrue(all(row.open_interest == 1000 for row in snapshot.quotes))
+        self.assertTrue(all(row.mark_iv == 0.46 for row in snapshot.quotes))
         self.assertTrue(all(row.delta is not None for row in snapshot.quotes))
+        frozen_quotes = snapshot.frozen_dict()["quotes"]
+        self.assertTrue(all(row["mark_iv"] == 0.46 for row in frozen_quotes))
         self.assertEqual(snapshot.frozen_dict()["candidate_only"], True)
         self.assertEqual(snapshot.frozen_dict()["execution_enabled"], False)
 
@@ -137,13 +141,16 @@ class DeltaIndiaOptionsProbeTests(unittest.TestCase):
         self.assertIn("BEFORE UPDATE OR DELETE", SCHEMA_SQL)
         self.assertIn("BEFORE TRUNCATE", SCHEMA_SQL)
 
-    def test_architecture_has_no_trading_path(self):
+    def test_architecture_has_no_trading_path_and_ui_parity_is_verified(self):
         contract = architecture_contract()
         self.assertFalse(contract["authentication_required"])
         self.assertFalse(contract["trading_permission_required"])
         self.assertFalse(contract["order_placement_enabled"])
         self.assertFalse(contract["live_execution_enabled"])
-        self.assertTrue(contract["candidate_only_until_ui_cross_check"])
+        self.assertTrue(contract["ui_cross_check_completed"])
+        self.assertFalse(contract["candidate_only_until_ui_cross_check"])
+        self.assertTrue(contract["candidate_only_until_explicit_user_adoption"])
+        self.assertTrue(contract["mark_iv_persisted"])
 
 
 if __name__ == "__main__":
