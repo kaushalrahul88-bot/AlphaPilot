@@ -75,6 +75,10 @@ async def _probe_direct_quote(provider, trading_symbol: str) -> dict:
                     "trading_symbol": trading_symbol,
                 },
             )
+        if response.status_code == 429:
+            register_rate_limit = getattr(provider, "_register_rate_limit", None)
+            if callable(register_rate_limit):
+                await register_rate_limit()
         if response.status_code != 200:
             return {"status": "UNAVAILABLE", "http_status": response.status_code}
         body = response.json()
@@ -258,6 +262,7 @@ def architecture_contract() -> dict:
         "bid_ask_fabricated": False,
         "groww_quote_keys_supported": ["bid_price", "offer_price", "depth.buy", "depth.sell"],
         "provider_throttle_respected_before_direct_quote": True,
+        "provider_429_cooldown_registered": True,
         "decision_effect": "NONE",
         "options_research_only": True,
         "futures_trade_generation": False,
