@@ -18,11 +18,23 @@ from app.coindcx_btc_public_provider import CoinDcxBtcProviderPolicy, CoinDcxBtc
 from app.crypto_btc_prospective_proof_bridge import resolve_prospective_btc_thesis_from_coindcx
 from app.crypto_btc_prospective_proof_runtime import BtcProspectiveProofRuntimeConfig
 from app.crypto_btc_prospective_thesis_postgres import PostgresProspectiveBtcThesisTapeStore
+from app.crypto_btc_prospective_thesis_tape import verify_prospective_btc_thesis_resolution
 
 logger = logging.getLogger("alphapilot.crypto.btc.prospective-resolution")
 
 ENV_RESOLUTION_ENABLED = "ALPHAPILOT_CRYPTO_BTC_PROSPECTIVE_RESOLUTION_ENABLED"
 ENV_RESOLUTION_POLL_SECONDS = "ALPHAPILOT_CRYPTO_BTC_PROSPECTIVE_RESOLUTION_POLL_SECONDS"
+
+# The proof bridge enriches its return value with transport/source diagnostics after
+# the canonical thesis resolution fingerprint has already been frozen. Those fields
+# are useful to the caller but are intentionally not part of the persisted immutable
+# thesis-resolution identity.
+_BRIDGE_RESOLUTION_DIAGNOSTIC_FIELDS = frozenset({
+    "provider_called",
+    "completed_btc_candle_count",
+    "outcome_source",
+    "trade_generated",
+})
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
@@ -49,6 +61,18 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _resolution_for_persistence(result: dict) -> dict:
+    """Return the canonical fingerprinted thesis resolution for immutable storage."""
+    canonical = {
+        key: value
+        for key, value in result.items()
+        if key not in _BRIDGE_RESOLUTION_DIAGNOSTIC_FIELDS
+    }
+    if not verify_prospective_btc_thesis_resolution(canonical):
+        raise ValueError("BTC prospective resolver produced a non-canonical resolution fingerprint")
+    return canonical
 
 
 @dataclass(frozen=True)
@@ -118,7 +142,7 @@ async def resolve_due_btc_prospective_decisions_once(
                 provider=market_provider,
             )
             if result.get("status") == "THESIS_OUTCOME_RESOLVED":
-                await tape_store.attach_resolution(result)
+                await tape_store.attach_resolution(_resolution_for_persistence(result))
                 resolved_count += 1
                 resolved_click_ids.append(click_id)
             else:
@@ -190,6 +214,8 @@ def architecture_contract() -> dict:
         "resolves_only_due_unresolved_decisions": True,
         "outcome_source": "COINDCX_PUBLIC_COMPLETED_SPOT_CANDLES",
         "unresolved_outcomes_are_imputed": False,
+        "resolution_fingerprint_verified_before_persistence": True,
+        "bridge_diagnostics_are_resolution_identity": False,
         "options_pnl_measured": False,
         "futures_trade_generated": False,
         "live_execution": False,
