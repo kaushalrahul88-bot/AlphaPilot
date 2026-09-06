@@ -2,10 +2,10 @@
 
 The trading methodology is unchanged. This module only makes reconstructible
 historical-candle acquisition safe against an expired static Groww access token.
-Groww access tokens expire daily; when a historical request returns 401 and API
-key/secret credentials are configured, the replay switches this provider
-instance to the key/secret token flow and retries once. Authentication failures
-are never accepted as an empty technical history.
+When a historical request returns 401, the replay may switch this provider to an
+already-configured unattended dynamic credential path (TOTP first, then the
+API-key/secret approval flow) and retry once. Authentication failures are never
+accepted as an empty technical history.
 """
 from __future__ import annotations
 
@@ -35,37 +35,66 @@ def _is_auth_error(exc: BaseException | str | None) -> bool:
         "401 unauthorized" in text
         or "historical http 401" in text
         or "status_code=401" in text
+        or "status code 401" in text
     )
 
 
-async def _refresh_after_401(provider) -> None:
+def _dynamic_auth_mode(provider) -> str | None:
+    totp_token = str(getattr(provider, "totp_token", "") or "").strip()
+    totp_secret = str(getattr(provider, "totp_secret", "") or "").strip()
+    if totp_token and totp_secret:
+        return "TOTP"
+
     api_key = str(getattr(provider, "api_key", "") or "").strip()
     api_secret = str(getattr(provider, "api_secret", "") or "").strip()
-    if not api_key or not api_secret:
+    if api_key and api_secret:
+        return "API_KEY_SECRET"
+    return None
+
+
+def _clear_stale_auth_state(provider) -> None:
+    """Drop only process-local stale session state before dynamic regeneration."""
+    provider.access_token = ""
+    if hasattr(provider, "_cached_token"):
+        provider._cached_token = None
+    if hasattr(provider, "_cached_auth_session"):
+        provider._cached_auth_session = None
+
+    # _get_access_token() can otherwise reuse an inherited process-shared token
+    # for the current Groww session. Clearing the concrete provider class ensures
+    # the retry actually regenerates credentials instead of replaying the 401.
+    cls = provider.__class__
+    if hasattr(cls, "_shared_token"):
+        cls._shared_token = None
+    if hasattr(cls, "_shared_auth_session"):
+        cls._shared_auth_session = None
+
+
+async def _refresh_after_401(provider) -> str:
+    auth_mode = _dynamic_auth_mode(provider)
+    if auth_mode is None:
         raise HistoricalAuthenticationError(
-            "GROWW_HISTORICAL_AUTH_401: static access token is no longer "
-            "authorised and GROWW_API_KEY/GROWW_API_SECRET are not both "
-            "configured for automatic token regeneration"
+            "GROWW_HISTORICAL_AUTH_401: configured static access token is no "
+            "longer authorised and no complete dynamic Groww credential pair "
+            "is available (GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET or "
+            "GROWW_API_KEY + GROWW_API_SECRET)"
         )
 
-    # Limit the change to this provider instance. Other AlphaPilot workers keep
-    # their own auth objects. Clearing access_token lets the existing provider
-    # use its documented API-key/secret approval flow.
-    provider.access_token = ""
-    provider._cached_token = None
+    _clear_stale_auth_state(provider)
     try:
         token = await provider._get_access_token()
     except Exception as exc:
         raise HistoricalAuthenticationError(
-            "GROWW_HISTORICAL_AUTH_REFRESH_FAILED: API-key/secret token "
-            f"generation was not authorised ({exc.__class__.__name__}: "
-            f"{str(exc)[:320]})"
+            "GROWW_HISTORICAL_AUTH_REFRESH_FAILED: "
+            f"{auth_mode} token generation was not authorised "
+            f"({exc.__class__.__name__}: {str(exc)[:320]})"
         ) from exc
     if not str(token or "").strip():
         raise HistoricalAuthenticationError(
             "GROWW_HISTORICAL_AUTH_REFRESH_FAILED: token generation returned "
             "an empty token"
         )
+    return auth_mode
 
 
 async def _fetch_one_history(
@@ -165,8 +194,8 @@ async def fetch_all_histories_checkpointed_v2(
                         latest,
                     )
                 except HistoricalAuthenticationError:
-                    # Do not overwrite the durable run with a fake empty history.
-                    # The worker will persist this explicit blocker as FAILED.
+                    # Never overwrite an authentication blocker with an empty
+                    # history. The durable run worker records the explicit error.
                     raise
                 except Exception as exc:
                     candles = []
@@ -207,8 +236,10 @@ def architecture_contract() -> dict[str, Any]:
         "version": "FNO_15M_CANDLE_CHECKPOINT_V2_AUTH_SAFE",
         "successful_cache_entries_reused": True,
         "cached_errors_retried": True,
-        "historical_401_may_trigger_key_secret_refresh": True,
+        "historical_401_dynamic_refresh_modes": ["TOTP", "API_KEY_SECRET"],
+        "stale_process_shared_auth_state_cleared_before_refresh": True,
         "historical_401_never_becomes_empty_valid_history": True,
+        "auth_failure_is_fatal_to_replay": True,
         "strategy_logic_changed": False,
         "live_execution": False,
         "capital_committed": 0,
