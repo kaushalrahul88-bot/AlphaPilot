@@ -1,0 +1,82 @@
+name: F&O Current Expiry History Probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fno-current-expiry-history-probe.yml"
+      - "app/fno_current_expiry_history_probe.py"
+      - "app/fno_current_expiry_history_probe_api.py"
+      - "app/__init__.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fno-current-expiry-history-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed probe endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys; paths=json.load(open("openapi.json")).get("paths",{}); sys.exit(0 if "/v1/internal/fno/current-expiry-history/probe" in paths else 1)'; then
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render deployment"
+          exit 1
+
+      - name: Probe current expiries
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess, urllib.parse
+
+          api=os.environ["API_BASE"]
+          token=os.environ["COLLECTOR_TOKEN"]
+          requests=[
+              ("NIFTY","2026-09-08"),
+              ("NIFTY","2026-09-29"),
+              ("BANKNIFTY","2026-09-29"),
+              ("RELIANCE","2026-09-29"),
+          ]
+          results=[]
+          for underlying, expiry in requests:
+              query=urllib.parse.urlencode({"underlying":underlying,"expiry_date":expiry})
+              out=f"probe-{underlying}-{expiry}.json"
+              subprocess.run([
+                  "curl","-fsS","--max-time","180",
+                  "-H",f"X-Collector-Token: {token}",
+                  f"{api}/v1/internal/fno/current-expiry-history/probe?{query}",
+                  "-o",out,
+              ],check=True)
+              data=json.load(open(out))
+              assert data.get("status")=="COMPLETED", data
+              assert data.get("live_execution") is False, data
+              results.append(data)
+              print(json.dumps(data,indent=2,sort_keys=True))
+          json.dump({"probes":results},open("current-expiry-history-probe.json","w"),indent=2,sort_keys=True)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fno-current-expiry-history-probe
+          path: current-expiry-history-probe.json
