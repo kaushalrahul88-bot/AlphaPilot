@@ -1,0 +1,122 @@
+name: F&O Underlying Random Edge Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fno-underlying-random-edge-backtest.yml"
+      - "app/fno_underlying_random_replay_v1.py"
+      - "app/fno_underlying_random_backtest_api.py"
+      - "app/__init__.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fno-underlying-random-edge-backtest
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed underlying replay endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys; paths=json.load(open("openapi.json")).get("paths",{}); sys.exit(0 if "/v1/internal/fno/underlying-random-backtest/start" in paths else 1)'; then
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render deployment"
+          exit 1
+
+      - name: Start replay
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/underlying-random-backtest/start" \
+            -o start.json
+          cat start.json
+          python -c 'import json; d=json.load(open("start.json")); assert d.get("status") in {"RUNNING","COMPLETED"},d; assert d.get("underlying_only") is True,d; assert d.get("live_execution") is False,d'
+
+      - name: Poll replay
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..120}; do
+            if curl -fsS --max-time 30 \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/underlying-random-backtest/status" \
+              -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json; d=json.load(open("status.json")); print("Replay state:",d.get("status"),"attempt:",d.get("attempt_count"))'
+              if [ "$STATE" = "COMPLETED" ]; then
+                break
+              fi
+              if [ "$STATE" = "FAILED" ]; then
+                cat status.json
+                exit 1
+              fi
+            else
+              echo "Transient status request failure; durable run remains authoritative"
+            fi
+            sleep 10
+          done
+          test -s status.json
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and summarize results
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/underlying-random-backtest/result" \
+            -o result.json
+          python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d["protocol_id"]=="FNO_UNDERLYING_RANDOM_EDGE_REPLAY_V1_2026-09-06", d.get("protocol_id")
+          assert d["status"]=="COMPLETED", d
+          assert d["scheduled_clicks"]==100, d["scheduled_clicks"]
+          assert d["methodology"]["options_used_for_decision"] is False
+          assert d["methodology"]["options_used_for_outcome"] is False
+          assert d["safety"]["live_execution"] is False
+          summary={
+              "protocol_id":d["protocol_id"],
+              "source_window":d["source_window"],
+              "universe":d["universe"],
+              "universe_size":d["universe_size"],
+              "scheduled_clicks":d["scheduled_clicks"],
+              "symbol_slots":d["symbol_slots"],
+              "click_schedule_ist":d["click_schedule_ist"],
+              "summary":d["summary"],
+              "daily":d["daily"],
+              "methodology":d["methodology"],
+              "safety":d["safety"],
+          }
+          json.dump(summary,open("summary.json","w"),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fno-underlying-random-edge-backtest
+          path: |
+            result.json
+            summary.json
