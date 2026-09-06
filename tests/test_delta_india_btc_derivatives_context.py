@@ -9,8 +9,12 @@ from app.delta_india_btc_derivatives_context import (
     DeltaIndiaBtcDerivativesPublicProvider,
     DeltaIndiaBtcOiCandle,
     architecture_contract,
+    combine_delta_btc_live_positioning,
+    derive_delta_live_positioning_evidence,
     derive_delta_oi_positioning_evidence,
     normalize_delta_btc_oi_candles,
+    normalize_delta_btc_rest_ticker,
+    normalize_delta_btc_ws_ticker,
 )
 
 UTC = timezone.utc
@@ -32,8 +36,13 @@ class _Client:
         self.payload = payload
         self.calls = []
 
-    def get(self, url, *, params, timeout, headers):
-        self.calls.append({"url": url, "params": dict(params), "timeout": timeout, "headers": dict(headers)})
+    def get(self, url, *, params=None, timeout=None, headers=None):
+        self.calls.append({
+            "url": url,
+            "params": None if params is None else dict(params),
+            "timeout": timeout,
+            "headers": dict(headers or {}),
+        })
         return _Response(self.payload)
 
 
@@ -59,6 +68,39 @@ def _candle(open_at: datetime, oi: float) -> DeltaIndiaBtcOiCandle:
         close=oi,
         volume=0,
     ).validated()
+
+
+def _rest_payload(at: datetime, *, oi_contracts: float = 100.0, oi_value_usd: float = 1_000_000.0) -> dict:
+    return {
+        "success": True,
+        "result": {
+            "symbol": "BTCUSD",
+            "oi": oi_contracts,
+            "oi_value_usd": oi_value_usd,
+            "spot_price": 80_000.0,
+            "timestamp": int(at.timestamp()),
+        },
+    }
+
+
+def _ws_payload(at: datetime, *, oi_contracts: float = 100.5, oi_change_usd_6h: float = 10_000.0) -> dict:
+    return {
+        "type": "ticker",
+        "ts": int(at.timestamp()),
+        "sp": 80_000.0,
+        "d": [{"s": "BTCUSD", "oi": [oi_contracts, oi_change_usd_6h]}],
+    }
+
+
+def _live_snapshot(*, oi_change_usd_6h: float = 10_000.0):
+    rest_seen = datetime(2026, 9, 6, 10, 0, 1, tzinfo=UTC)
+    ws_seen = datetime(2026, 9, 6, 10, 0, 2, tzinfo=UTC)
+    rest = normalize_delta_btc_rest_ticker(_rest_payload(rest_seen), received_at=rest_seen)
+    ws = normalize_delta_btc_ws_ticker(
+        _ws_payload(ws_seen, oi_change_usd_6h=oi_change_usd_6h),
+        received_at=ws_seen,
+    )
+    return combine_delta_btc_live_positioning(rest, ws)
 
 
 class DeltaIndiaBtcDerivativesContextTests(unittest.TestCase):
@@ -127,10 +169,54 @@ class DeltaIndiaBtcDerivativesContextTests(unittest.TestCase):
         self.assertEqual(evidence.metadata["latest_oi"], 101.0)
         self.assertEqual(evidence.metadata["latest_available_at"], "2026-09-06T10:10:00+00:00")
 
+    def test_rest_and_websocket_normalizers_preserve_first_seen_semantics(self):
+        rest_seen = datetime(2026, 9, 6, 10, 0, 1, tzinfo=UTC)
+        ws_seen = datetime(2026, 9, 6, 10, 0, 2, tzinfo=UTC)
+        rest = normalize_delta_btc_rest_ticker(_rest_payload(rest_seen), received_at=rest_seen)
+        ws = normalize_delta_btc_ws_ticker(_ws_payload(ws_seen), received_at=ws_seen)
+        snapshot = combine_delta_btc_live_positioning(rest, ws)
+        self.assertEqual(snapshot.first_seen_at, ws_seen)
+        self.assertEqual(snapshot.current_oi_value_usd, 1_000_000.0)
+        self.assertEqual(snapshot.oi_change_usd_6h, 10_000.0)
+        self.assertAlmostEqual(snapshot.oi_change_pct_6h, 10_000.0 / 990_000.0 * 100.0)
+        self.assertEqual(snapshot.frozen_dict()["rolling_window_hours"], 6)
+
+    def test_live_oi_expansion_and_positive_price_is_bullish(self):
+        snapshot = _live_snapshot(oi_change_usd_6h=10_000.0)
+        decision = snapshot.first_seen_at + timedelta(seconds=1)
+        evidence = derive_delta_live_positioning_evidence(snapshot, decision_at=decision, price_change_pct_6h=1.0)
+        self.assertEqual(evidence.stance, "BULLISH")
+        self.assertFalse(evidence.context_only)
+        self.assertEqual(evidence.causal_origin, "LEVERAGED_POSITIONING")
+
+    def test_live_oi_expansion_and_negative_price_is_bearish(self):
+        snapshot = _live_snapshot(oi_change_usd_6h=10_000.0)
+        decision = snapshot.first_seen_at + timedelta(seconds=1)
+        evidence = derive_delta_live_positioning_evidence(snapshot, decision_at=decision, price_change_pct_6h=-1.0)
+        self.assertEqual(evidence.stance, "BEARISH")
+        self.assertFalse(evidence.context_only)
+
+    def test_live_oi_contraction_is_unknown_without_liquidation_side(self):
+        snapshot = _live_snapshot(oi_change_usd_6h=-10_000.0)
+        decision = snapshot.first_seen_at + timedelta(seconds=1)
+        evidence = derive_delta_live_positioning_evidence(snapshot, decision_at=decision, price_change_pct_6h=-1.0)
+        self.assertEqual(evidence.stance, "UNKNOWN")
+        self.assertTrue(evidence.context_only)
+
+    def test_live_positioning_snapshot_after_decision_is_rejected(self):
+        snapshot = _live_snapshot()
+        with self.assertRaisesRegex(ValueError, "after decision_at"):
+            derive_delta_live_positioning_evidence(
+                snapshot,
+                decision_at=snapshot.first_seen_at - timedelta(microseconds=1),
+                price_change_pct_6h=1.0,
+            )
+
     def test_contract_keeps_futures_context_separate_from_trading(self):
         contract = architecture_contract()
-        self.assertTrue(contract["historical_oi_supported"])
-        self.assertTrue(contract["candle_available_only_after_completion"])
+        self.assertTrue(contract["historical_oi_supported_by_documentation"])
+        self.assertEqual(contract["live_ticker_oi_change_window_hours"], 6)
+        self.assertTrue(contract["live_snapshot_first_seen_required"])
         self.assertFalse(contract["oi_contraction_may_be_directional_without_liquidations"])
         self.assertTrue(contract["futures_context_may_inform_options"])
         self.assertFalse(contract["futures_trade_generation_allowed"])
