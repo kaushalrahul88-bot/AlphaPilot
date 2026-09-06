@@ -33,15 +33,10 @@ jobs:
             if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
               DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
               echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
-              if [ "$DEPLOYED" = "$GITHUB_SHA" ] && \
-                 curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && \
-                 python - <<'PY'
-import json, sys
-paths=json.load(open("openapi.json")).get("paths",{})
-sys.exit(0 if "/v1/internal/fno/backtest-15m/start" in paths else 1)
-PY
-              then
-                exit 0
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys; paths=json.load(open("openapi.json")).get("paths",{}); sys.exit(0 if "/v1/internal/fno/backtest-15m/start" in paths else 1)'; then
+                  exit 0
+                fi
               fi
             fi
             sleep 10
@@ -57,12 +52,7 @@ PY
             -X POST "$API_BASE/v1/internal/fno/backtest-15m/start" \
             -o start.json
           cat start.json
-          python - <<'PY'
-import json
-d=json.load(open("start.json"))
-assert d.get("status") in {"RUNNING","COMPLETED"}, d
-assert d.get("live_execution") in (False, None), d
-PY
+          python -c 'import json; d=json.load(open("start.json")); assert d.get("status") in {"RUNNING","COMPLETED"}, d; assert d.get("live_execution") in (False,None), d'
 
       - name: Poll replay
         run: |
@@ -93,25 +83,7 @@ PY
             -H "X-Collector-Token: $COLLECTOR_TOKEN" \
             "$API_BASE/v1/internal/fno/backtest-15m/result" \
             -o result.json
-          python - <<'PY'
-import json
-d=json.load(open("result.json"))
-assert d["mode"] == "FNO_15M_FULL_WINDOW_HISTORICAL_REPLAY_V1"
-assert d["status"] == "COMPLETED"
-assert d["coverage"]["scheduled_clicks"] == 115, d["coverage"]
-assert d["safety"]["live_execution"] is False
-summary={
-  "coverage": d["coverage"],
-  "strict": d["results"]["STRICT_V2"]["summary"],
-  "strict_daily": d["results"]["STRICT_V2"]["daily"],
-  "diagnostic_30m": d["results"]["COVERAGE_30M"]["summary"],
-  "diagnostic_30m_daily": d["results"]["COVERAGE_30M"]["daily"],
-  "methodology": d["methodology"],
-  "safety": d["safety"],
-}
-json.dump(summary, open("summary.json","w"), indent=2, sort_keys=True)
-print(json.dumps(summary, indent=2, sort_keys=True))
-PY
+          python -c 'import json; d=json.load(open("result.json")); assert d["mode"]=="FNO_15M_FULL_WINDOW_HISTORICAL_REPLAY_V1"; assert d["status"]=="COMPLETED"; assert d["coverage"]["scheduled_clicks"]==115,d["coverage"]; assert d["safety"]["live_execution"] is False; summary={"coverage":d["coverage"],"strict":d["results"]["STRICT_V2"]["summary"],"strict_daily":d["results"]["STRICT_V2"]["daily"],"diagnostic_30m":d["results"]["COVERAGE_30M"]["summary"],"diagnostic_30m_daily":d["results"]["COVERAGE_30M"]["daily"],"methodology":d["methodology"],"safety":d["safety"]}; json.dump(summary,open("summary.json","w"),indent=2,sort_keys=True); print(json.dumps(summary,indent=2,sort_keys=True))'
 
       - uses: actions/upload-artifact@v4
         if: always()
