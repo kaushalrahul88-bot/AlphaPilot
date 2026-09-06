@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from . import fno_15m_historical_replay_v1 as core
-from .fno_15m_restart_safe_replay import fetch_all_histories_checkpointed
+from .fno_15m_candle_checkpoint_v2 import fetch_all_histories_checkpointed_v2
 from .fno_market_brain_v2 import build_experience_memory, build_perception, decide_shadow
 from .fno_prospective_protocol_v1 import PRIMARY_HORIZON_MINUTES
 
@@ -151,7 +151,7 @@ async def run_fno_15m_historical_replay_restart_safe_v2(
             "capital_committed": 0,
         }
 
-    histories, history_failures, cache_key = await fetch_all_histories_checkpointed(
+    histories, history_failures, cache_key = await fetch_all_histories_checkpointed_v2(
         provider,
         replayable_symbols,
         trade_dates,
@@ -355,6 +355,8 @@ async def run_fno_15m_historical_replay_restart_safe_v2(
             "option_chain_memory_scope": "one trading day at a time",
             "technical_source": "Groww reconstructible historical candles fetched after the fact",
             "technical_no_lookahead": "only fully completed bars; current candle excluded conservatively",
+            "historical_candle_auth_safe": True,
+            "cached_history_errors_retried": True,
             "timeframes": list(core.TIMEFRAMES),
             "memory": f"strictly prior/descriptive only; in-memory case window capped at {core.MAX_MEMORY_CASES}",
             "strict_snapshot_freshness_seconds": core.STRICT_MAX_SNAPSHOT_AGE_SECONDS,
@@ -400,13 +402,15 @@ async def run_fno_15m_historical_replay_restart_safe_v2(
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "FNO_15M_RESTART_SAFE_REPLAY_V2_DAY_BOUNDED",
+        "version": "FNO_15M_RESTART_SAFE_REPLAY_V2_DAY_BOUNDED_AUTH_SAFE",
         "frozen_strategy_logic": True,
         "trading_dates_market_hours_only": True,
         "point_in_time_option_chain_read_only": True,
         "option_chain_payload_scope": "ONE_TRADING_DAY",
         "memory_case_window": core.MAX_MEMORY_CASES,
         "reconstructible_candle_cache_writes": True,
+        "cached_candle_errors_retried": True,
+        "historical_auth_401_fail_closed": True,
         "live_execution": False,
         "capital_committed": 0,
         "futures_trade_generation": False,

@@ -9,6 +9,7 @@ on:
       - "app/fno_15m_historical_replay_v1.py"
       - "app/fno_15m_restart_safe_replay.py"
       - "app/fno_15m_restart_safe_replay_v2.py"
+      - "app/fno_15m_candle_checkpoint_v2.py"
       - "app/fno_15m_backtest_api.py"
       - "app/__init__.py"
 
@@ -94,7 +95,7 @@ jobs:
             -H "X-Collector-Token: $COLLECTOR_TOKEN" \
             "$API_BASE/v1/internal/fno/backtest-15m/result" \
             -o result.json
-          python -c 'import json; d=json.load(open("result.json")); assert d["mode"]=="FNO_15M_FULL_WINDOW_HISTORICAL_REPLAY_V1"; assert d["status"]=="COMPLETED"; assert d["coverage"]["scheduled_clicks"]==115,d["coverage"]; assert d["safety"]["live_execution"] is False; summary={"coverage":d["coverage"],"strict":d["results"]["STRICT_V2"]["summary"],"strict_daily":d["results"]["STRICT_V2"]["daily"],"diagnostic_30m":d["results"]["COVERAGE_30M"]["summary"],"diagnostic_30m_daily":d["results"]["COVERAGE_30M"]["daily"],"methodology":d["methodology"],"safety":d["safety"]}; json.dump(summary,open("summary.json","w"),indent=2,sort_keys=True); print(json.dumps(summary,indent=2,sort_keys=True))'
+          python -c 'import json; d=json.load(open("result.json")); assert d["mode"]=="FNO_15M_FULL_WINDOW_HISTORICAL_REPLAY_V1"; assert d["status"]=="COMPLETED"; assert d["coverage"]["scheduled_clicks"]==115,d["coverage"]; assert d["methodology"].get("historical_candle_auth_safe") is True,d["methodology"]; assert d["methodology"].get("cached_history_errors_retried") is True,d["methodology"]; assert d["safety"]["live_execution"] is False; summary={"coverage":d["coverage"],"strict":d["results"]["STRICT_V2"]["summary"],"strict_daily":d["results"]["STRICT_V2"]["daily"],"diagnostic_30m":d["results"]["COVERAGE_30M"]["summary"],"diagnostic_30m_daily":d["results"]["COVERAGE_30M"]["daily"],"methodology":d["methodology"],"safety":d["safety"]}; json.dump(summary,open("summary.json","w"),indent=2,sort_keys=True); print(json.dumps(summary,indent=2,sort_keys=True))'
 
       - uses: actions/upload-artifact@v4
         if: always()
