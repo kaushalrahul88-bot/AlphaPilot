@@ -1,15 +1,15 @@
 """Read-only Groww F&O history coverage probe for currently active expiries.
 
-The probe is diagnostic only.  It discovers the contracts that Groww exposes for
-one exact expiry and samples the near-ATM CE/PE (plus FUT when present) to find
-when daily and 5-minute candles actually begin.  It never places orders, changes
-strategy policy, or treats today's contract list as historically point-in-time.
+The probe is diagnostic only. It discovers contracts Groww exposes for one exact
+expiry and samples near-ATM CE/PE (plus FUT when present) to find when daily and
+5-minute candles actually begin. It never places orders, changes strategy policy,
+or treats today's contract list as historically point-in-time.
 """
 from __future__ import annotations
 
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ import httpx
 from .fno_15m_candle_checkpoint_v2 import _is_auth_error, _refresh_after_401
 
 IST = ZoneInfo("Asia/Kolkata")
+UTC = timezone.utc
 _CONTRACT_RE = re.compile(r"-(?P<strike>[0-9]+(?:\.[0-9]+)?)-(?P<type>CE|PE)$", re.I)
 
 
@@ -38,8 +39,15 @@ def _number(value: Any) -> float | None:
 
 
 def _stamp(value: Any) -> datetime | None:
+    """Accept Groww's documented string timestamps and defensive epoch variants."""
     try:
-        result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        text = str(value).strip()
+        if isinstance(value, (int, float)) or text.replace(".", "", 1).isdigit():
+            number = float(value)
+            if number > 1e12:
+                number /= 1000.0
+            return datetime.fromtimestamp(number, tz=UTC).astimezone(IST)
+        result = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if result.tzinfo is None or result.utcoffset() is None:
             result = result.replace(tzinfo=IST)
         return result.astimezone(IST)
@@ -256,8 +264,17 @@ async def probe_current_expiry_history(
             "intraday_error": intraday_error,
         })
 
+    proven_samples = [
+        item for item in sample_results
+        if item.get("daily_first") and item.get("first_5m")
+        and not item.get("daily_error") and not item.get("intraday_error")
+    ]
+    coverage_proven = bool(contracts and sampled and proven_samples)
+    status = "COMPLETED" if coverage_proven else "COVERAGE_UNPROVEN"
+
     return {
-        "status": "COMPLETED",
+        "status": status,
+        "coverage_proven": coverage_proven,
         "underlying": underlying,
         "expiry_date": expiry_date,
         "spot_reference": spot,
@@ -269,6 +286,7 @@ async def probe_current_expiry_history(
         },
         "sample_basis": "near-ATM CE/PE at latest quote plus one FUT when exposed",
         "sampled_contracts": sample_results,
+        "proven_sample_count": len(proven_samples),
         "important_limit": (
             "Current contract repository is not historical point-in-time chain state. "
             "A rolling-expiry backtest must admit a contract at a historical click only "
@@ -282,12 +300,13 @@ async def probe_current_expiry_history(
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "FNO_CURRENT_EXPIRY_HISTORY_PROBE_V1",
+        "version": "FNO_CURRENT_EXPIRY_HISTORY_PROBE_V1_HARDENED",
         "read_only": True,
         "groww_contract_repository": True,
         "historical_daily_probe": True,
         "historical_5m_first_window_probe": True,
         "historical_fno_oi_available_in_candle_rows": True,
+        "coverage_must_be_proven_non_empty": True,
         "point_in_time_chain_reconstructed": False,
         "live_execution": False,
         "capital_committed": 0,

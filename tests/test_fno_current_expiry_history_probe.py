@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.fno_current_expiry_history_probe import _contract_rows, representative_contracts, architecture_contract
+from app.fno_current_expiry_history_probe import (
+    _contract_rows,
+    _stamp,
+    architecture_contract,
+    representative_contracts,
+)
 
 
 class CurrentExpiryHistoryProbeTests(unittest.TestCase):
@@ -33,9 +38,18 @@ class CurrentExpiryHistoryProbeTests(unittest.TestCase):
         selected = representative_contracts(rows, None)
         self.assertEqual({row["strike"] for row in selected}, {100.0})
 
+    def test_timestamp_parser_accepts_documented_and_epoch_forms(self):
+        documented = _stamp("2026-08-31 09:15:00")
+        epoch_seconds = _stamp(1788147900)
+        epoch_millis = _stamp(1788147900000)
+        self.assertIsNotNone(documented)
+        self.assertIsNotNone(epoch_seconds)
+        self.assertEqual(epoch_seconds, epoch_millis)
+
     def test_safety_contract(self):
         contract = architecture_contract()
         self.assertTrue(contract["read_only"])
+        self.assertTrue(contract["coverage_must_be_proven_non_empty"])
         self.assertFalse(contract["point_in_time_chain_reconstructed"])
         self.assertFalse(contract["live_execution"])
         self.assertEqual(contract["capital_committed"], 0)
