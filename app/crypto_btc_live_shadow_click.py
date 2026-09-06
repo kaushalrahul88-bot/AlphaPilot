@@ -4,14 +4,20 @@ One invocation captures a fresh Delta India public option-chain snapshot first,
 then freezes a BTC underlying thesis using only information available by the
 server-side decision time. A real Options shadow entry is admitted only when the
 underlying thesis is BULLISH/BEARISH and an exact fresh Delta bid/ask quote
-passes the frozen deterministic selection policy. UNKNOWN is NO TRADE.
+passes a frozen deterministic candidate-validation policy. UNKNOWN is NO TRADE.
+
+Delta remains a candidate venue in this module. The policy intentionally mirrors
+the mature BTC contract-selector safeguards (freshness, spread, delta, Greeks,
+OI, volume and holding-horizon/expiry fit) without changing the default CoinDCX
+selector before Delta is explicitly promoted.
 
 Research/shadow only. No account access, order placement, execution, or capital.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from math import isfinite
 from typing import Any, Callable
 
@@ -23,6 +29,10 @@ from app.crypto_btc_prospective_proof_bridge import freeze_prospective_btc_thesi
 from app.crypto_btc_prospective_proof_runtime import BtcProspectiveProofRuntimeConfig
 from app.crypto_btc_prospective_thesis_postgres import PostgresProspectiveBtcThesisTapeStore
 from app.delta_india_btc_options_public_provider import DeltaIndiaBtcOptionsPublicProvider, DeltaIndiaOptionsProbePolicy
+
+# Delta India documents BTC/ETH Options expiry at 5:30 PM IST. IST is UTC+05:30,
+# therefore the exchange expiry instant is 12:00 UTC on the encoded expiry date.
+DELTA_BTC_OPTIONS_EXPIRY_UTC = time(hour=12, minute=0, tzinfo=timezone.utc)
 
 
 def _utc(value: datetime) -> datetime:
@@ -37,18 +47,48 @@ def _stamp(value: Any) -> datetime:
     return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
 
 
+def _expiry_at(value: Any) -> datetime:
+    parsed = value if isinstance(value, date) else date.fromisoformat(str(value))
+    return datetime.combine(parsed, DELTA_BTC_OPTIONS_EXPIRY_UTC)
+
+
+def _finite_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) else None
+
+
 @dataclass(frozen=True)
 class LiveShadowOptionSelectionPolicy:
+    """Frozen candidate-only policy; thresholds are outcome-blind."""
+
     max_quote_age_seconds: int = 120
     target_abs_delta: float = 0.50
-    min_abs_delta: float = 0.35
-    max_abs_delta: float = 0.65
-    max_relative_spread_pct: float = 5.0
+    min_abs_delta: float = 0.20
+    max_abs_delta: float = 0.85
+    max_relative_spread_pct: float = 8.0
+    min_open_interest: float = 1.0
+    min_volume: float = 1.0
+    min_expiry_buffer_hours: float = 2.0
+    min_expiry_holding_multiple: float = 1.50
 
     def validated(self) -> "LiveShadowOptionSelectionPolicy":
         if int(self.max_quote_age_seconds) < 0:
             raise ValueError("max_quote_age_seconds must be >= 0")
-        for name in ("target_abs_delta", "min_abs_delta", "max_abs_delta", "max_relative_spread_pct"):
+        for name in (
+            "target_abs_delta",
+            "min_abs_delta",
+            "max_abs_delta",
+            "max_relative_spread_pct",
+            "min_open_interest",
+            "min_volume",
+            "min_expiry_buffer_hours",
+            "min_expiry_holding_multiple",
+        ):
             value = float(getattr(self, name))
             if not isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -56,13 +96,16 @@ class LiveShadowOptionSelectionPolicy:
             raise ValueError("delta selection range must satisfy 0 < min <= target <= max <= 1")
         if self.max_relative_spread_pct <= 0:
             raise ValueError("max_relative_spread_pct must be > 0")
+        if self.min_expiry_holding_multiple <= 0:
+            raise ValueError("min_expiry_holding_multiple must be > 0")
         return self
 
     def frozen_dict(self) -> dict:
         self.validated()
         return {
-            "version": "BTC_LIVE_SHADOW_OPTION_SELECTION_V1",
-            "expiry_rule": "NEAREST_EXPIRY_FROM_FRESH_DELTA_SNAPSHOT",
+            "version": "BTC_LIVE_SHADOW_OPTION_SELECTION_V2",
+            "venue_state": "DELTA_CANDIDATE_ONLY",
+            "expiry_rule": "DELTA_BTC_OPTIONS_EXPIRE_17_30_IST_AND_MUST_COVER_HOLDING_HORIZON",
             "side_rule": "BULLISH_BUY_CALL_BEARISH_BUY_PUT_UNKNOWN_NO_TRADE",
             "fill_rule": "OBSERVED_BEST_ASK",
             "exit_rule": "OBSERVED_EXACT_CONTRACT_BEST_BID_ONLY",
@@ -71,6 +114,11 @@ class LiveShadowOptionSelectionPolicy:
             "min_abs_delta": float(self.min_abs_delta),
             "max_abs_delta": float(self.max_abs_delta),
             "max_relative_spread_pct": float(self.max_relative_spread_pct),
+            "min_open_interest": float(self.min_open_interest),
+            "min_volume": float(self.min_volume),
+            "min_expiry_buffer_hours": float(self.min_expiry_buffer_hours),
+            "min_expiry_holding_multiple": float(self.min_expiry_holding_multiple),
+            "greeks_required": ["delta", "gamma", "theta", "vega"],
             "model_price_substitution": False,
             "mark_price_as_fill": False,
             "futures_quote_substitution": False,
@@ -82,11 +130,15 @@ def select_delta_option_for_shadow_entry(
     *,
     market_direction: str,
     decision_at: datetime,
+    expected_holding_hours: float,
     policy: LiveShadowOptionSelectionPolicy | None = None,
 ) -> dict:
     policy = (policy or LiveShadowOptionSelectionPolicy()).validated()
     direction = str(market_direction or "UNKNOWN").upper()
     decision = _utc(decision_at)
+    holding_hours = float(expected_holding_hours)
+    if not isfinite(holding_hours) or holding_hours <= 0:
+        raise ValueError("expected_holding_hours must be finite and > 0")
     if direction == "UNKNOWN":
         return {"status": "NO_TRADE", "reason": "UNDERLYING_THESIS_UNKNOWN", "option_entry": None}
     if direction not in {"BULLISH", "BEARISH"}:
@@ -95,6 +147,7 @@ def select_delta_option_for_shadow_entry(
         raise ValueError("live shadow entry requires candidate-only Delta India snapshot")
     if snapshot.get("execution_enabled") is not False or snapshot.get("trading_auth_used") is not False:
         raise ValueError("Delta shadow entry snapshot must be public market data with execution disabled")
+
     seen = _stamp(snapshot.get("first_seen_at"))
     age = (decision - seen).total_seconds()
     if age < 0:
@@ -102,24 +155,64 @@ def select_delta_option_for_shadow_entry(
     if age > int(policy.max_quote_age_seconds):
         return {"status": "NO_TRADE", "reason": "DELTA_OPTION_SNAPSHOT_STALE", "option_entry": None}
 
+    expiry_at = _expiry_at(snapshot.get("nearest_expiry"))
+    expiry_hours = (expiry_at - decision).total_seconds() / 3600.0
+    required_expiry_hours = max(
+        float(policy.min_expiry_buffer_hours),
+        holding_hours * float(policy.min_expiry_holding_multiple),
+    )
+    if expiry_hours <= required_expiry_hours:
+        return {
+            "status": "NO_TRADE",
+            "reason": "DELTA_NEAREST_EXPIRY_TOO_CLOSE_FOR_FROZEN_HORIZON",
+            "option_entry": None,
+            "expiry_at": expiry_at.isoformat(),
+            "expiry_hours": expiry_hours,
+            "required_expiry_hours": required_expiry_hours,
+        }
+
     required_type = "CALL" if direction == "BULLISH" else "PUT"
-    eligible: list[tuple[tuple[float, float, float, str], dict]] = []
     reference_spot = float(snapshot.get("reference_spot_price"))
+    if not isfinite(reference_spot) or reference_spot <= 0:
+        raise ValueError("Delta snapshot reference_spot_price must be finite and > 0")
+
+    eligible: list[tuple[tuple[float, float, float, float, str], dict]] = []
     for raw in snapshot.get("quotes") or []:
         if not isinstance(raw, dict) or str(raw.get("option_type") or "") != required_type:
             continue
-        try:
-            bid = float(raw.get("best_bid"))
-            ask = float(raw.get("best_ask"))
-            strike = float(raw.get("strike_price"))
-            delta = float((raw.get("greeks") or {}).get("delta"))
-        except (TypeError, ValueError):
+        bid = _finite_number(raw.get("best_bid"))
+        ask = _finite_number(raw.get("best_ask"))
+        strike = _finite_number(raw.get("strike_price"))
+        greeks = raw.get("greeks") if isinstance(raw.get("greeks"), dict) else {}
+        delta = _finite_number(greeks.get("delta"))
+        gamma = _finite_number(greeks.get("gamma"))
+        theta = _finite_number(greeks.get("theta"))
+        vega = _finite_number(greeks.get("vega"))
+        oi = _finite_number(raw.get("open_interest"))
+        volume = _finite_number(raw.get("volume"))
+        bid_iv = _finite_number(raw.get("bid_iv"))
+        ask_iv = _finite_number(raw.get("ask_iv"))
+
+        if bid is None or ask is None or strike is None or delta is None:
             continue
-        if not all(isfinite(v) for v in (bid, ask, strike, delta)) or bid <= 0 or ask <= 0 or ask < bid or strike <= 0:
+        if bid <= 0 or ask <= 0 or ask < bid or strike <= 0:
+            continue
+        if required_type == "CALL" and delta <= 0:
+            continue
+        if required_type == "PUT" and delta >= 0:
             continue
         abs_delta = abs(delta)
         if not policy.min_abs_delta <= abs_delta <= policy.max_abs_delta:
             continue
+        if gamma is None or gamma < 0 or theta is None or vega is None or vega < 0:
+            continue
+        if oi is None or oi < policy.min_open_interest:
+            continue
+        if volume is None or volume < policy.min_volume:
+            continue
+        if bid_iv is None or ask_iv is None or bid_iv <= 0 or ask_iv <= 0:
+            continue
+
         mid = (bid + ask) / 2.0
         spread_pct = (ask - bid) / mid * 100.0
         if spread_pct > policy.max_relative_spread_pct:
@@ -127,6 +220,7 @@ def select_delta_option_for_shadow_entry(
         rank = (
             abs(abs_delta - policy.target_abs_delta),
             spread_pct,
+            -oi,
             abs(strike - reference_spot),
             str(raw.get("symbol") or ""),
         )
@@ -134,6 +228,7 @@ def select_delta_option_for_shadow_entry(
 
     if not eligible:
         return {"status": "NO_TRADE", "reason": "NO_ADMISSIBLE_FRESH_DELTA_OPTION_QUOTE", "option_entry": None}
+
     eligible.sort(key=lambda item: item[0])
     raw = eligible[0][1]
     bid = float(raw["best_bid"])
@@ -148,6 +243,10 @@ def select_delta_option_for_shadow_entry(
         "symbol": str(raw["symbol"]),
         "product_id": raw.get("product_id"),
         "expiry_date": str(raw["expiry_date"]),
+        "expiry_at": expiry_at.isoformat(),
+        "expiry_hours_at_decision": expiry_hours,
+        "required_expiry_hours": required_expiry_hours,
+        "expected_holding_hours": holding_hours,
         "strike_price": float(raw["strike_price"]),
         "entry_bid": bid,
         "entry_ask": ask,
@@ -209,7 +308,7 @@ async def run_explicit_live_shadow_click(
         policy=DeltaIndiaOptionsProbePolicy(enabled=True, atm_strikes=7),
         client=delta_http_client,
     )
-    snapshot = await __import__("asyncio").to_thread(delta_provider.capture_btc_options_snapshot)
+    snapshot = await asyncio.to_thread(delta_provider.capture_btc_options_snapshot)
     await delta_store.insert_first_seen(snapshot)
     frozen_snapshot = snapshot.frozen_dict()
 
@@ -232,9 +331,11 @@ async def run_explicit_live_shadow_click(
         tape_policy=proof_config.tape_policy(),
     )
     frozen_thesis = proof.get("frozen_thesis") if isinstance(proof, dict) else None
+    frozen_policy = proof_config.tape_policy().validated()
+    selected_policy = (selection_policy or LiveShadowOptionSelectionPolicy()).validated()
     if not isinstance(frozen_thesis, dict):
         record = {
-            "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V1",
+            "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V2",
             "request_id": request,
             "click_id": click_id,
             "decision_at": decision_at.isoformat(),
@@ -243,7 +344,7 @@ async def run_explicit_live_shadow_click(
             "shadow_status": "PROOF_INPUT_UNRESOLVED",
             "reason": str(proof.get("reason") or "BTC_PROOF_INPUT_UNRESOLVED"),
             "proof_bridge": proof,
-            "option_selection_policy": (selection_policy or LiveShadowOptionSelectionPolicy()).frozen_dict(),
+            "option_selection_policy": selected_policy.frozen_dict(),
             "delta_snapshot_first_seen_at": frozen_snapshot["first_seen_at"],
             "option_entry": None,
             "order_placed": False,
@@ -259,12 +360,13 @@ async def run_explicit_live_shadow_click(
         frozen_snapshot,
         market_direction=direction,
         decision_at=decision_at,
-        policy=selection_policy,
+        expected_holding_hours=float(frozen_policy.evaluation_horizon_hours),
+        policy=selected_policy,
     )
     option_entry = selected.get("option_entry")
     shadow_status = "OPTIONS_SHADOW_ENTRY_FROZEN" if option_entry is not None else "NO_TRADE_FROZEN"
     record = {
-        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V1",
+        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V2",
         "request_id": request,
         "click_id": click_id,
         "decision_at": decision_at.isoformat(),
@@ -283,7 +385,8 @@ async def run_explicit_live_shadow_click(
             "derivatives_price_change_pct": proof.get("derivatives_price_change_pct"),
             "derivatives_evidence_status": proof.get("derivatives_evidence_status"),
         },
-        "option_selection_policy": (selection_policy or LiveShadowOptionSelectionPolicy()).frozen_dict(),
+        "frozen_underlying_policy": frozen_policy.frozen_dict(),
+        "option_selection_policy": selected_policy.frozen_dict(),
         "delta_snapshot_first_seen_at": frozen_snapshot["first_seen_at"],
         "delta_reference_spot_price": frozen_snapshot["reference_spot_price"],
         "option_entry": option_entry,
@@ -300,11 +403,17 @@ async def run_explicit_live_shadow_click(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_CONTRACT_V1",
+        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_CONTRACT_V2",
         "decision_time_source": "SERVER_CLOCK_ONLY",
         "caller_backdating_allowed": False,
         "delta_snapshot_captured_before_decision": True,
+        "delta_candidate_venue_only": True,
         "underlying_unknown_means_no_trade": True,
+        "holding_horizon_must_fit_before_exchange_expiry": True,
+        "delta_btc_options_expiry": "17:30_IST",
+        "fresh_bid_ask_required": True,
+        "greeks_required": True,
+        "oi_and_volume_required": True,
         "exact_observed_ask_required_for_entry": True,
         "exact_observed_bid_required_for_exit": True,
         "mark_price_fill_allowed": False,
