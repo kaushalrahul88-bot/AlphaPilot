@@ -1,0 +1,79 @@
+name: Scheduled BTC Options Snapshot Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    # External five-minute wake/capture cadence for Render Free. Shift away from
+    # top-of-hour congestion. GitHub scheduled runs can be delayed, so this is a
+    # research continuity aid rather than a guaranteed 24x7 SLA.
+    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btc-options-snapshot-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wake AlphaPilot and capture one Delta BTC Options snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          SUCCESS=0
+          for attempt in {1..8}; do
+            # Health is deliberately unauthenticated and can wake a sleeping free service.
+            curl --silent --show-error --max-time 20 "$API_BASE/health" >/dev/null || true
+            CODE=$(curl --silent --show-error --max-time 90 -w "%{http_code}" \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+              "$API_BASE/v1/internal/crypto/btc/delta-options/snapshot-collect" \
+              -o result.json || echo 000)
+            echo "Delta BTC Options capture attempt=$attempt HTTP=$CODE"
+            if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+            sleep $((attempt*10))
+          done
+          [ "$SUCCESS" = "1" ] || { cat result.json 2>/dev/null || true; exit 1; }
+
+          python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d.get("status")=="DELTA_OPTIONS_SNAPSHOT_CAPTURED", d
+          assert d.get("venue")=="DELTA_EXCHANGE_INDIA", d
+          assert d.get("underlying")=="BTC", d
+          assert d.get("candidate_only") is True, d
+          assert d.get("point_in_time_proven") is True, d
+          assert d.get("public_market_data_only") is True, d
+          assert d.get("api_key_used") is False, d
+          assert d.get("account_accessed") is False, d
+          assert d.get("venue_promoted") is False, d
+          assert d.get("options_trade_generated") is False, d
+          assert d.get("futures_trade_generated") is False, d
+          assert d.get("live_execution") is False, d
+          assert d.get("capital_committed")==0, d
+          assert int(d.get("quote_count") or 0)>0, d
+          print(json.dumps({
+            "status": d.get("status"),
+            "persistence_status": d.get("persistence_status"),
+            "first_seen_at": d.get("first_seen_at"),
+            "nearest_expiry": d.get("nearest_expiry"),
+            "reference_spot_price": d.get("reference_spot_price"),
+            "quote_count": d.get("quote_count"),
+            "candidate_only": d.get("candidate_only"),
+            "research_only": d.get("research_only"),
+          }, indent=2))
+          PY
+
+      - name: Upload capture result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btc-options-snapshot-result
+          path: result.json
