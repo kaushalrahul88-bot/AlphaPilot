@@ -5,6 +5,7 @@ from app.crypto_btc_pit_archive import archive_record_from_capture
 from app.crypto_btc_pit_postgres import (
     INSERT_SQL,
     SCHEMA_SQL,
+    VISIBLE_AS_OF_SQL,
     PostgresBtcPitArchiveStore,
     architecture_contract,
     postgres_record_params,
@@ -49,6 +50,14 @@ class CryptoBtcPitPostgresTests(unittest.TestCase):
         self.assertIn("ON CONFLICT", normalized_insert)
         self.assertIn("DO NOTHING", normalized_insert)
         self.assertNotIn("DO UPDATE", normalized_insert)
+
+    def test_visible_all_query_types_nullable_dataset_parameters(self):
+        # PostgreSQL cannot infer the type of a bare NULL bind used in
+        # ``%s IS NULL``. Explicit text casts prevent IndeterminateDatatype when
+        # visible_as_of(..., dataset=None) requests all PIT datasets.
+        normalized = VISIBLE_AS_OF_SQL.lower()
+        self.assertIn("%s::text is null", normalized)
+        self.assertIn("dataset = %s::text", normalized)
 
     def test_architecture_contract_does_not_auto_select_or_start_backend(self):
         contract = architecture_contract()
