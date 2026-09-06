@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from .external_context import external_market_context
@@ -23,6 +23,8 @@ from .providers.groww import GrowwProvider
 
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_UNIVERSE = tuple(sorted(set(GrowwProvider.NSE_CASH_SYMBOLS) | {"NIFTY", "BANKNIFTY"}))
+MARKET_LIVENESS_SYMBOL = "NIFTY"
+MARKET_LIVENESS_MAX_AGE_SECONDS = 180
 
 
 def _utc(value: datetime) -> datetime:
@@ -41,6 +43,62 @@ def _continuous_session(at: datetime) -> bool:
     local = _utc(at).astimezone(IST)
     minutes = local.hour * 60 + local.minute
     return local.weekday() < 5 and 9 * 60 + 15 <= minutes < 15 * 60 + 15
+
+
+def _quote_payload(raw: Any) -> dict:
+    current = raw if isinstance(raw, Mapping) else {}
+    for key in ("data", "payload"):
+        child = current.get(key) if isinstance(current, Mapping) else None
+        if isinstance(child, Mapping):
+            current = child
+    return dict(current) if isinstance(current, Mapping) else {}
+
+
+def _trade_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().replace(".", "", 1).isdigit()):
+            number = float(value)
+            if number > 10_000_000_000:
+                number /= 1000.0
+            return datetime.fromtimestamp(number, tz=timezone.utc)
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return None
+        return stamp.astimezone(timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def assess_market_liveness(
+    quote: Mapping[str, Any],
+    *,
+    now: datetime,
+    max_age_seconds: int = MARKET_LIVENESS_MAX_AGE_SECONDS,
+) -> dict:
+    """Fail closed unless an official Groww NIFTY quote proves a recent trade."""
+    payload = _quote_payload(quote)
+    last_trade_at = _trade_timestamp(payload.get("last_trade_time"))
+    if last_trade_at is None:
+        return {
+            "status": "UNPROVEN",
+            "symbol": MARKET_LIVENESS_SYMBOL,
+            "reason": "MISSING_LAST_TRADE_TIME",
+            "live": False,
+            "max_age_seconds": max_age_seconds,
+        }
+    age_seconds = (_utc(now) - last_trade_at).total_seconds()
+    live = -30 <= age_seconds <= max_age_seconds
+    return {
+        "status": "LIVE" if live else "STALE",
+        "symbol": MARKET_LIVENESS_SYMBOL,
+        "live": live,
+        "last_trade_at": last_trade_at.isoformat(),
+        "age_seconds": round(age_seconds, 3),
+        "max_age_seconds": max_age_seconds,
+        "source": "GROWW_LIVE_QUOTE_LAST_TRADE_TIME",
+    }
 
 
 def deterministic_batch(
@@ -88,12 +146,36 @@ async def capture_prospective_batch(
             "capital_committed": 0,
         }
 
+    # Weekday+clock is insufficient because exchange holidays exist. A recent
+    # market-wide NIFTY trade timestamp is required before any episode can freeze.
+    try:
+        liveness_quote = await provider.quote(MARKET_LIVENESS_SYMBOL)
+        market_liveness = assess_market_liveness(liveness_quote, now=now)
+    except Exception as exc:
+        market_liveness = {
+            "status": "UNPROVEN",
+            "symbol": MARKET_LIVENESS_SYMBOL,
+            "reason": f"QUOTE_ERROR:{exc.__class__.__name__}",
+            "live": False,
+        }
+    if not market_liveness.get("live"):
+        return {
+            "status": "SKIPPED_MARKET_LIVENESS_UNPROVEN",
+            "captured_at": now.isoformat(),
+            "symbols": [],
+            "market_liveness": market_liveness,
+            "live_execution": False,
+            "capital_committed": 0,
+            "futures_trade_generated": False,
+        }
+
     selected = deterministic_batch(now, batch_size=batch_size, universe=symbols)
     if not selected:
         return {
             "status": "NO_SYMBOLS",
             "captured_at": now.isoformat(),
             "symbols": [],
+            "market_liveness": market_liveness,
             "live_execution": False,
             "capital_committed": 0,
         }
@@ -131,7 +213,11 @@ async def capture_prospective_batch(
                 snapshot,
                 decision_at=decision_at,
                 technical=technical,
-                external_context={"market_context": market, "external": external},
+                external_context={
+                    "market_liveness": market_liveness,
+                    "market_context": market,
+                    "external": external,
+                },
             )
             prior = await store.prior_cases(
                 datetime.fromisoformat(perception["observed_at"].replace("Z", "+00:00")),
@@ -199,6 +285,7 @@ async def capture_prospective_batch(
         "status": "CAPTURED" if not failures else "PARTIAL" if captured else "FAILED",
         "protocol_id": PROTOCOL_ID,
         "capture_slot_at": slot_at.isoformat(),
+        "market_liveness": market_liveness,
         "selected_symbols": selected,
         "captured": captured,
         "failed": failures,
@@ -215,6 +302,9 @@ def architecture_contract() -> dict:
         "bounded_batch": True,
         "deterministic_sampling": True,
         "captures_no_trade_episodes": True,
+        "market_liveness_required": True,
+        "market_liveness_basis": "GROWW_NIFTY_LIVE_QUOTE_LAST_TRADE_TIME",
+        "weekday_clock_alone_sufficient": False,
         "decision_frozen_before_outcome": True,
         "strictly_prior_memory": True,
         "memory_decision_effect": "DESCRIPTIVE_ONLY",
