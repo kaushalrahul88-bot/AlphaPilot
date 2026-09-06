@@ -44,11 +44,20 @@ def main():
         leg,
         cadence,
         market_hours_days=market_days,
-        fno_decision_ledger_present="fno_prospective_decisions_v2" in tables,
-        fno_outcome_ledger_present="fno_prospective_outcomes_v2" in tables,
+        fno_decision_ledger_present="fno_prospective_episodes_v1" in tables,
+        fno_outcome_ledger_present="fno_prospective_outcomes_v1" in tables,
+        selected_contract_tape_present="fno_selected_contract_observations_v1" in tables,
         historical_option_candle_probe_reliable=False,
     )
     result["daily_market_coverage"] = daily
+    result["prospective_tables_present"] = sorted(
+        tables
+        & {
+            "fno_prospective_episodes_v1",
+            "fno_selected_contract_observations_v1",
+            "fno_prospective_outcomes_v1",
+        }
+    )
     print(json.dumps(result, indent=2, default=str, sort_keys=True))
 
 
