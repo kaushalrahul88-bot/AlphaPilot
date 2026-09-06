@@ -1,9 +1,13 @@
-"""Read-only Groww F&O history coverage probe for currently active expiries.
+"""Read-only Groww history coverage probe for currently active OPTION expiries.
 
-The probe is diagnostic only. It discovers contracts Groww exposes for one exact
-expiry and samples near-ATM CE/PE (plus FUT when present) to find when daily and
-5-minute candles actually begin. It never places orders, changes strategy policy,
-or treats today's contract list as historically point-in-time.
+This diagnostic is intentionally options-only. It discovers exact CE/PE contracts
+Groww exposes for one underlying/expiry, selects the current near-ATM CE and PE,
+and proves their available daily and 5-minute historical tape. Futures are never
+sampled or mixed into this workflow.
+
+The current contract repository is NOT treated as historical point-in-time chain
+state. A later backtest may admit an exact contract at a historical click only if
+that contract's own tape already existed at that timestamp.
 """
 from __future__ import annotations
 
@@ -19,8 +23,8 @@ from .fno_15m_candle_checkpoint_v2 import _is_auth_error, _refresh_after_401
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = timezone.utc
+SEARCH_DAYS = 179  # strictly below Groww's documented 180-day 1-day limit
 _CONTRACT_RE = re.compile(r"-(?P<strike>[0-9]+(?:\.[0-9]+)?)-(?P<type>CE|PE)$", re.I)
-DAILY_MAX_REQUEST_DAYS = 179  # Groww documents 180-day max for 1-day candles.
 
 
 def _payload(body: Any) -> dict[str, Any]:
@@ -40,7 +44,6 @@ def _number(value: Any) -> float | None:
 
 
 def _stamp(value: Any) -> datetime | None:
-    """Accept Groww's documented string timestamps and defensive epoch variants."""
     try:
         text = str(value).strip()
         if isinstance(value, (int, float)) or text.replace(".", "", 1).isdigit():
@@ -57,7 +60,7 @@ def _stamp(value: Any) -> datetime | None:
 
 
 async def _request(provider, path: str, params: Mapping[str, Any]) -> dict[str, Any]:
-    """One throttled Groww GET with the same fail-closed 401 refresh used by replay."""
+    """One throttled Groww GET with fail-closed 401 refresh semantics."""
     async def call() -> httpx.Response:
         throttle = getattr(provider, "_throttle", None)
         if callable(throttle):
@@ -100,21 +103,15 @@ async def _spot(provider, underlying: str) -> float | None:
         body = await _request(
             provider,
             "/v1/live-data/quote",
-            {
-                "exchange": exchange,
-                "segment": segment,
-                "trading_symbol": trading_symbol,
-            },
+            {"exchange": exchange, "segment": segment, "trading_symbol": trading_symbol},
         )
-        p = _payload(body)
-        for key in ("ltp", "last_price", "last_traded_price", "close"):
-            value = _number(p.get(key))
-            if value and value > 0:
-                return value
-        data = p.get("data")
-        if isinstance(data, Mapping):
+        payload = _payload(body)
+        candidates = [payload]
+        if isinstance(payload.get("data"), Mapping):
+            candidates.append(payload["data"])
+        for row in candidates:
             for key in ("ltp", "last_price", "last_traded_price", "close"):
-                value = _number(data.get(key))
+                value = _number(row.get(key))
                 if value and value > 0:
                     return value
     except Exception:
@@ -126,39 +123,29 @@ def _contract_rows(contracts: list[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for symbol in contracts:
         text = str(symbol or "").strip()
-        if not text:
+        match = _CONTRACT_RE.search(text.upper()) if text else None
+        if not match:
             continue
-        upper = text.upper()
-        if upper.endswith("-FUT"):
-            rows.append({"groww_symbol": text, "type": "FUT", "strike": None})
-            continue
-        match = _CONTRACT_RE.search(upper)
-        if match:
-            rows.append({
-                "groww_symbol": text,
-                "type": match.group("type").upper(),
-                "strike": float(match.group("strike")),
-            })
+        rows.append({
+            "groww_symbol": text,
+            "type": match.group("type").upper(),
+            "strike": float(match.group("strike")),
+        })
     return rows
 
 
 def representative_contracts(rows: list[dict[str, Any]], spot: float | None) -> list[dict[str, Any]]:
-    """Choose exact near-ATM CE/PE and FUT without pretending this is a full chain."""
-    options = [row for row in rows if row["type"] in {"CE", "PE"} and row.get("strike") is not None]
-    strikes = sorted({float(row["strike"]) for row in options})
+    """Return exact near-ATM CE and PE only; Futures are intentionally excluded."""
+    strikes = sorted({float(row["strike"]) for row in rows if row.get("strike") is not None})
     if not strikes:
-        selected: list[dict[str, Any]] = []
-    else:
-        reference = spot if spot and spot > 0 else strikes[len(strikes) // 2]
-        atm = min(strikes, key=lambda value: (abs(value - reference), value))
-        selected = [row for row in options if float(row["strike"]) == atm and row["type"] in {"CE", "PE"}]
-        selected.sort(key=lambda row: row["type"])
-    futures = sorted(
-        [row for row in rows if row["type"] == "FUT"],
-        key=lambda row: row["groww_symbol"],
-    )
-    if futures:
-        selected.append(futures[0])
+        return []
+    reference = spot if spot and spot > 0 else strikes[len(strikes) // 2]
+    atm = min(strikes, key=lambda value: (abs(value - reference), value))
+    selected = [
+        row for row in rows
+        if float(row["strike"]) == atm and row.get("type") in {"CE", "PE"}
+    ]
+    selected.sort(key=lambda row: row["type"])
     return selected
 
 
@@ -185,52 +172,6 @@ async def _candles(
     return list(_payload(body).get("candles") or [])
 
 
-def _merge_candles(chunks: list[list[list]]) -> list[list]:
-    """Merge overlapping chunks by timestamp while preserving chronological order."""
-    by_stamp: dict[str, list] = {}
-    unparsed: list[list] = []
-    for chunk in chunks:
-        for row in chunk:
-            if not isinstance(row, (list, tuple)) or not row:
-                continue
-            stamp = _stamp(row[0])
-            if stamp is None:
-                unparsed.append(list(row))
-                continue
-            by_stamp[stamp.astimezone(UTC).isoformat()] = list(row)
-    merged = [by_stamp[key] for key in sorted(by_stamp)]
-    merged.extend(unparsed)
-    return merged
-
-
-async def _daily_candles_chunked(
-    provider,
-    groww_symbol: str,
-    *,
-    start: datetime,
-    end: datetime,
-) -> tuple[list[list], int]:
-    chunks: list[list[list]] = []
-    requests = 0
-    current = start
-    while current <= end:
-        chunk_end = min(end, current + timedelta(days=DAILY_MAX_REQUEST_DAYS))
-        chunks.append(
-            await _candles(
-                provider,
-                groww_symbol,
-                start=current,
-                end=chunk_end,
-                interval="1day",
-            )
-        )
-        requests += 1
-        if chunk_end >= end:
-            break
-        current = chunk_end + timedelta(seconds=1)
-    return _merge_candles(chunks), requests
-
-
 def _bounds(candles: list[list]) -> tuple[str | None, str | None]:
     stamps = []
     for row in candles:
@@ -248,7 +189,6 @@ async def probe_current_expiry_history(
     *,
     underlying: str,
     expiry_date: str,
-    daily_search_start: str = "2025-01-01",
 ) -> dict[str, Any]:
     underlying = str(underlying or "").upper().strip()
     expiry_date = str(expiry_date or "").strip()
@@ -258,31 +198,32 @@ async def probe_current_expiry_history(
     contracts_body = await _request(
         provider,
         "/v1/historical/contracts",
-        {
-            "exchange": "NSE",
-            "underlying_symbol": underlying,
-            "expiry_date": expiry_date,
-        },
+        {"exchange": "NSE", "underlying_symbol": underlying, "expiry_date": expiry_date},
     )
-    contracts = [str(item) for item in (_payload(contracts_body).get("contracts") or []) if str(item).strip()]
+    contracts = [
+        str(item) for item in (_payload(contracts_body).get("contracts") or [])
+        if str(item).strip()
+    ]
     rows = _contract_rows(contracts)
     spot = await _spot(provider, underlying)
     sampled = representative_contracts(rows, spot)
 
-    search_start = datetime.fromisoformat(daily_search_start).replace(tzinfo=IST)
     now = datetime.now(IST)
-    end = min(now, datetime.fromisoformat(expiry_date).replace(hour=23, minute=59, tzinfo=IST))
+    expiry_end = datetime.fromisoformat(expiry_date).replace(hour=23, minute=59, tzinfo=IST)
+    end = min(now, expiry_end)
+    search_start = end - timedelta(days=SEARCH_DAYS)
+
     sample_results: list[dict[str, Any]] = []
     for item in sampled:
         symbol = str(item["groww_symbol"])
         daily_error = None
-        daily_requests = 0
         try:
-            daily, daily_requests = await _daily_candles_chunked(
+            daily = await _candles(
                 provider,
                 symbol,
                 start=search_start,
                 end=end,
+                interval="1day",
             )
         except Exception as exc:
             daily = []
@@ -292,7 +233,9 @@ async def probe_current_expiry_history(
         intraday: list[list] = []
         intraday_error = None
         if daily_first:
-            first_day = datetime.fromisoformat(daily_first).astimezone(IST).replace(hour=9, minute=15, second=0, microsecond=0)
+            first_day = datetime.fromisoformat(daily_first).astimezone(IST).replace(
+                hour=9, minute=15, second=0, microsecond=0
+            )
             first_window_end = min(end, first_day + timedelta(days=10))
             try:
                 intraday = await _candles(
@@ -305,13 +248,21 @@ async def probe_current_expiry_history(
             except Exception as exc:
                 intraday_error = f"{exc.__class__.__name__}: {str(exc)[:320]}"
         intraday_first, intraday_last = _bounds(intraday)
+
+        boundary_hit = False
+        if daily_first:
+            first_stamp = datetime.fromisoformat(daily_first).astimezone(IST)
+            boundary_hit = first_stamp <= search_start + timedelta(days=1)
+
         sample_results.append({
             **item,
+            "search_start": search_start.isoformat(),
+            "search_end": end.isoformat(),
             "daily_candles": len(daily),
             "daily_first": daily_first,
             "daily_last": daily_last,
-            "daily_request_chunks": daily_requests,
             "daily_error": daily_error,
+            "earliest_may_predate_search_window": boundary_hit,
             "first_window_5m_candles": len(intraday),
             "first_5m": intraday_first,
             "first_window_5m_last": intraday_last,
@@ -324,32 +275,34 @@ async def probe_current_expiry_history(
         and not item.get("daily_error") and not item.get("intraday_error")
     ]
     coverage_proven = bool(contracts and sampled and proven_samples)
-    status = "COMPLETED" if coverage_proven else "COVERAGE_UNPROVEN"
 
     return {
-        "status": status,
+        "status": "COMPLETED" if coverage_proven else "COVERAGE_UNPROVEN",
         "coverage_proven": coverage_proven,
         "underlying": underlying,
         "expiry_date": expiry_date,
         "spot_reference": spot,
         "contract_counts": {
-            "total": len(contracts),
+            "raw_total": len(contracts),
+            "option_contracts": len(rows),
             "CE": sum(row["type"] == "CE" for row in rows),
             "PE": sum(row["type"] == "PE" for row in rows),
-            "FUT": sum(row["type"] == "FUT" for row in rows),
         },
-        "sample_basis": "near-ATM CE/PE at latest quote plus one FUT when exposed",
+        "sample_basis": "current near-ATM CE and PE only",
         "sampled_contracts": sample_results,
         "proven_sample_count": len(proven_samples),
         "groww_request_limits_respected": {
-            "daily_max_duration_days": 180,
-            "five_minute_max_duration_days": 30,
+            "daily_search_days": SEARCH_DAYS,
+            "daily_documented_max_days": 180,
+            "five_minute_first_window_days": 10,
+            "five_minute_documented_max_days": 30,
         },
         "important_limit": (
             "Current contract repository is not historical point-in-time chain state. "
-            "A rolling-expiry backtest must admit a contract at a historical click only "
-            "if its own candle/OI tape already exists by that click."
+            "A historical replay may admit an exact option only when its own tape "
+            "already existed by the simulated click."
         ),
+        "futures_sampled": False,
         "live_execution": False,
         "capital_committed": 0,
         "strategy_policy_changed": False,
@@ -358,14 +311,16 @@ async def probe_current_expiry_history(
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "FNO_CURRENT_EXPIRY_HISTORY_PROBE_V1_CHUNKED",
+        "version": "FNO_CURRENT_EXPIRY_OPTION_HISTORY_PROBE_V2",
         "read_only": True,
+        "options_only": True,
+        "futures_sampled": False,
         "groww_contract_repository": True,
         "historical_daily_probe": True,
         "historical_5m_first_window_probe": True,
         "historical_fno_oi_available_in_candle_rows": True,
-        "groww_1day_request_chunked_below_180_day_limit": True,
-        "groww_5m_request_within_30_day_limit": True,
+        "daily_search_below_180_day_limit": True,
+        "five_minute_search_below_30_day_limit": True,
         "coverage_must_be_proven_non_empty": True,
         "point_in_time_chain_reconstructed": False,
         "live_execution": False,
