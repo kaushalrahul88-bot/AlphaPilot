@@ -35,6 +35,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .dashboard_market_universe_api import register_dashboard_market_universe_routes  # noqa: E402
     from .fno_15m_backtest_api import register_fno_15m_backtest_routes  # noqa: E402
     from .fno_prospective_api_v1 import register_fno_prospective_routes, register_fno_prospective_startup  # noqa: E402
+    from .fno_underlying_random_backtest_api import register_fno_underlying_random_backtest_routes  # noqa: E402
     from .shared_commodity_brain_dashboard_api import register_shared_commodity_brain_dashboard_routes  # noqa: E402
     from .main import _collector_store as _collector_auth, app as _app, settings as _settings  # noqa: E402
 
@@ -55,6 +56,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_btc_prospective_proof_routes(_app, _settings, _collector_auth)
     register_fno_prospective_routes(_app, _settings, _collector_auth)
     register_fno_15m_backtest_routes(_app, _settings, _collector_auth)
+    register_fno_underlying_random_backtest_routes(_app, _settings, _collector_auth)
     register_crypto_btc_dashboard_routes(_app, _settings)
     register_crypto_macro_live_availability_routes(_app, _settings, _collector_auth)
     register_dashboard_market_universe_routes(_app)
