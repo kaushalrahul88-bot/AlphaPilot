@@ -1,0 +1,40 @@
+name: Scheduled F&O Underlying Prospective Resolver
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Covers intraday horizons and continues after the 15:30 IST close so EOD
+    # paths can be frozen from completed 5-minute candles.
+    - cron: "*/15 4-10 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-fno-underlying-prospective-resolver
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Resolve due underlying outcomes
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl -fsS --max-time 300 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/underlying-prospective/resolve" \
+            -o resolve.json
+          cat resolve.json
+          python - <<'PY'
+          import json
+          d=json.load(open("resolve.json"))
+          assert d.get("live_execution") is False,d
+          assert float(d.get("capital_committed") or 0)==0,d
+          assert d.get("status") in {"NOTHING_DUE","RESOLVED","PENDING_EXACT_PATH"},d
+          PY
