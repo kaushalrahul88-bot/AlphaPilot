@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.fno_current_expiry_history_probe import (
-    DAILY_MAX_REQUEST_DAYS,
+    SEARCH_DAYS,
     _contract_rows,
     _stamp,
     architecture_contract,
@@ -12,7 +12,7 @@ from app.fno_current_expiry_history_probe import (
 
 
 class CurrentExpiryHistoryProbeTests(unittest.TestCase):
-    def test_contract_parser_and_near_atm_selection(self):
+    def test_contract_parser_ignores_futures_and_selects_near_atm_options(self):
         rows = _contract_rows([
             "NSE-NIFTY-29Sep26-24900-CE",
             "NSE-NIFTY-29Sep26-24900-PE",
@@ -22,12 +22,12 @@ class CurrentExpiryHistoryProbeTests(unittest.TestCase):
             "NSE-NIFTY-29Sep26-25100-PE",
             "NSE-NIFTY-29Sep26-FUT",
         ])
+        self.assertEqual(len(rows), 6)
         selected = representative_contracts(rows, 25020.0)
-        self.assertEqual([row["type"] for row in selected], ["CE", "PE", "FUT"])
-        self.assertEqual(selected[0]["strike"], 25000.0)
-        self.assertEqual(selected[1]["strike"], 25000.0)
+        self.assertEqual([row["type"] for row in selected], ["CE", "PE"])
+        self.assertEqual({row["strike"] for row in selected}, {25000.0})
 
-    def test_no_spot_uses_middle_strike_without_future_data(self):
+    def test_no_spot_uses_middle_strike(self):
         rows = _contract_rows([
             "NSE-ABC-29Sep26-90-CE",
             "NSE-ABC-29Sep26-90-PE",
@@ -48,14 +48,16 @@ class CurrentExpiryHistoryProbeTests(unittest.TestCase):
         self.assertEqual(epoch_seconds, epoch_millis)
 
     def test_probe_stays_inside_documented_request_limits(self):
-        self.assertLess(DAILY_MAX_REQUEST_DAYS, 180)
+        self.assertLess(SEARCH_DAYS, 180)
         contract = architecture_contract()
-        self.assertTrue(contract["groww_1day_request_chunked_below_180_day_limit"])
-        self.assertTrue(contract["groww_5m_request_within_30_day_limit"])
+        self.assertTrue(contract["daily_search_below_180_day_limit"])
+        self.assertTrue(contract["five_minute_search_below_30_day_limit"])
 
     def test_safety_contract(self):
         contract = architecture_contract()
         self.assertTrue(contract["read_only"])
+        self.assertTrue(contract["options_only"])
+        self.assertFalse(contract["futures_sampled"])
         self.assertTrue(contract["coverage_must_be_proven_non_empty"])
         self.assertFalse(contract["point_in_time_chain_reconstructed"])
         self.assertFalse(contract["live_execution"])
