@@ -1,0 +1,46 @@
+name: Scheduled F&O Prospective Capture
+
+on:
+  schedule:
+    # 09:15 IST, then every 15 minutes through the regular NSE session.
+    - cron: "45 3 * * 1-5"
+    - cron: "0,15,30,45 4-9 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fno-prospective-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Freeze bounded F&O prospective episodes
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --silent --max-time 20 "$API_BASE/health" >/dev/null || true
+          CODE=$(curl --silent --show-error --max-time 600 -w "%{http_code}" \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+            "$API_BASE/v1/internal/fno/prospective/capture?batch_size=4" \
+            -o result.json || echo 000)
+          echo "HTTP=$CODE"
+          cat result.json 2>/dev/null || true
+          [ "$CODE" = "200" ] || exit 1
+          python - <<'PY'
+          import json
+          d=json.load(open("result.json"))
+          assert d.get("status") in {
+              "CAPTURED","PARTIAL","SKIPPED_OUTSIDE_CONTINUOUS_SESSION","NO_SYMBOLS"
+          }, d
+          assert d.get("live_execution") is False, d
+          assert float(d.get("capital_committed") or 0) == 0, d
+          assert d.get("futures_trade_generated") in (False, None), d
+          PY

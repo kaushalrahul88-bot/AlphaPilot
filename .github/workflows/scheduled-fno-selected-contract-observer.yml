@@ -1,0 +1,63 @@
+name: Scheduled F&O Selected Contract Observer
+
+on:
+  schedule:
+    # Every 5 minutes from 09:15 through 15:30 IST on weekdays.
+    - cron: "45,50,55 3 * * 1-5"
+    - cron: "*/5 4-9 * * 1-5"
+    - cron: "0 10 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fno-selected-contract-observer
+  cancel-in-progress: false
+
+jobs:
+  observe-and-resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Capture exact selected contracts
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --silent --max-time 20 "$API_BASE/health" >/dev/null || true
+          CODE=$(curl --silent --show-error --max-time 480 -w "%{http_code}" \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+            "$API_BASE/v1/internal/fno/selected-contracts/collect?limit=24" \
+            -o selected.json || echo 000)
+          echo "selected HTTP=$CODE"
+          cat selected.json 2>/dev/null || true
+          [ "$CODE" = "200" ] || exit 1
+          python - <<'PY'
+          import json
+          d=json.load(open("selected.json"))
+          assert d.get("status") in {"COLLECTED","PARTIAL"}, d
+          assert d.get("live_execution") is False, d
+          assert float(d.get("capital_committed") or 0) == 0, d
+          PY
+
+      - name: Resolve due prospective episodes
+        run: |
+          set -euo pipefail
+          CODE=$(curl --silent --show-error --max-time 480 -w "%{http_code}" \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+            "$API_BASE/v1/internal/fno/prospective/resolve?limit=50" \
+            -o resolved.json || echo 000)
+          echo "resolve HTTP=$CODE"
+          cat resolved.json 2>/dev/null || true
+          [ "$CODE" = "200" ] || exit 1
+          python - <<'PY'
+          import json
+          d=json.load(open("resolved.json"))
+          assert d.get("status") in {"RESOLVED","PARTIAL"}, d
+          assert d.get("live_execution") is False, d
+          assert float(d.get("capital_committed") or 0) == 0, d
+          assert d.get("decision_rewritten") is False, d
+          PY

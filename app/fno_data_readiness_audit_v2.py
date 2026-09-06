@@ -1,6 +1,6 @@
 """Read-only F&O data-readiness audit.
 
-All SQL is SELECT-only.  The audit describes replay capability and missing data;
+All SQL is SELECT-only. The audit describes replay capability and missing data;
 it does not create decisions, modify strategy policy, or write to the database.
 """
 from __future__ import annotations
@@ -88,8 +88,9 @@ WHERE table_schema='public'
   AND table_name IN (
     'fno_option_chain_snapshots',
     'universe_candles',
-    'fno_prospective_decisions_v2',
-    'fno_prospective_outcomes_v2'
+    'fno_prospective_episodes_v1',
+    'fno_selected_contract_observations_v1',
+    'fno_prospective_outcomes_v1'
   )
 ORDER BY table_name;
 """
@@ -111,6 +112,7 @@ def assess_readiness(
     market_hours_days: int,
     fno_decision_ledger_present: bool,
     fno_outcome_ledger_present: bool,
+    selected_contract_tape_present: bool = False,
     historical_option_candle_probe_reliable: bool = False,
 ) -> dict[str, Any]:
     legs = int(leg_completeness.get("legs") or 0)
@@ -135,7 +137,7 @@ def assess_readiness(
 
     experience = "NOT_READY_NO_PROSPECTIVE_DECISION_OUTCOME_LEDGER"
     if fno_decision_ledger_present and fno_outcome_ledger_present:
-        experience = "LEDGER_AVAILABLE_NEEDS_SAMPLE_AUDIT"
+        experience = "LEDGER_AVAILABLE_NEEDS_PROSPECTIVE_SAMPLE"
 
     return {
         "audit_id": "FNO_DATA_READINESS_AUDIT_V2",
@@ -150,6 +152,7 @@ def assess_readiness(
             "underlying_candles": "FETCH_ON_DEMAND_NOT_WAREHOUSED",
             "historical_option_premium_candles": "PROVIDER_DEPENDENT" if historical_option_candle_probe_reliable else "NOT_RELIABLY_PROVEN",
             "spread_slippage_replay": execution_replay,
+            "selected_contract_first_seen_tape": "AVAILABLE_NEEDS_SAMPLE_AUDIT" if selected_contract_tape_present else "NOT_AVAILABLE",
             "experience_outcome_memory": experience,
             "strategy_validation": "NOT_READY" if market_hours_days < 20 or not fno_outcome_ledger_present else "NEEDS_FORMAL_HOLDOUT_AUDIT",
         },
@@ -157,12 +160,15 @@ def assess_readiness(
             "store_non_reconstructible_point_in_time_state": True,
             "warehouse_reconstructible_underlying_candles": False,
             "no_lookahead_required": True,
+            "selected_contract_tape_must_be_first_seen": True,
+            "bid_ask_must_not_be_fabricated": True,
         },
         "blocking_gaps": [
             gap for gap, blocked in (
                 ("SHORT_POINT_IN_TIME_WINDOW", market_hours_days < 20),
                 ("NO_FNO_PROSPECTIVE_DECISION_LEDGER", not fno_decision_ledger_present),
                 ("NO_FNO_PROSPECTIVE_OUTCOME_LEDGER", not fno_outcome_ledger_present),
+                ("NO_SELECTED_CONTRACT_FIRST_SEEN_TAPE", not selected_contract_tape_present),
                 ("NO_BID_ASK_SPREAD_HISTORY", fields["bid_present"] < 1.0 or fields["ask_present"] < 1.0),
                 ("HISTORICAL_OPTION_CANDLE_REPLAY_NOT_RELIABLY_PROVEN", not historical_option_candle_probe_reliable),
             ) if blocked
@@ -183,7 +189,7 @@ def architecture_contract() -> dict[str, Any]:
         TABLE_CAPABILITY_SQL,
     )
     return {
-        "version": "FNO_DATA_READINESS_AUDIT_V2_CONTRACT_V1",
+        "version": "FNO_DATA_READINESS_AUDIT_V2_CONTRACT_V2",
         "read_only": True,
         "database_writes": False,
         "select_only_sql": all(sql.lstrip().lower().startswith(("select", "with")) for sql in sql_statements),
