@@ -38,7 +38,8 @@ jobs:
           import json
           d=json.load(open("result.json"))
           assert d.get("status") in {
-              "CAPTURED","PARTIAL","SKIPPED_OUTSIDE_CONTINUOUS_SESSION","NO_SYMBOLS"
+              "CAPTURED","PARTIAL","SKIPPED_OUTSIDE_CONTINUOUS_SESSION",
+              "SKIPPED_MARKET_LIVENESS_UNPROVEN","NO_SYMBOLS"
           }, d
           assert d.get("live_execution") is False, d
           assert float(d.get("capital_committed") or 0) == 0, d
