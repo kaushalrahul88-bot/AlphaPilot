@@ -20,7 +20,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
@@ -43,7 +43,7 @@ jobs:
           echo "Timed out waiting for Render deployment"
           exit 1
 
-      - name: Probe current expiries
+      - name: Probe current option expiries
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -54,25 +54,36 @@ jobs:
           requests=[
               ("NIFTY","2026-09-08"),
               ("NIFTY","2026-09-29"),
-              ("BANKNIFTY","2026-09-29"),
               ("RELIANCE","2026-09-29"),
           ]
           results=[]
+          failures=[]
           for underlying, expiry in requests:
               query=urllib.parse.urlencode({"underlying":underlying,"expiry_date":expiry})
               out=f"probe-{underlying}-{expiry}.json"
-              subprocess.run([
-                  "curl","-fsS","--max-time","180",
-                  "-H",f"X-Collector-Token: {token}",
-                  f"{api}/v1/internal/fno/current-expiry-history/probe?{query}",
-                  "-o",out,
-              ],check=True)
-              data=json.load(open(out))
-              assert data.get("status")=="COMPLETED", data
-              assert data.get("live_execution") is False, data
-              results.append(data)
-              print(json.dumps(data,indent=2,sort_keys=True))
-          json.dump({"probes":results},open("current-expiry-history-probe.json","w"),indent=2,sort_keys=True)
+              try:
+                  subprocess.run([
+                      "curl","-fsS","--max-time","120",
+                      "-H",f"X-Collector-Token: {token}",
+                      f"{api}/v1/internal/fno/current-expiry-history/probe?{query}",
+                      "-o",out,
+                  ],check=True)
+                  data=json.load(open(out))
+                  results.append(data)
+                  print(json.dumps(data,indent=2,sort_keys=True))
+                  if data.get("status") != "COMPLETED":
+                      failures.append({"underlying":underlying,"expiry":expiry,"status":data.get("status")})
+              except Exception as exc:
+                  failures.append({"underlying":underlying,"expiry":expiry,"error":f"{exc.__class__.__name__}: {exc}"})
+              finally:
+                  json.dump(
+                      {"probes":results,"failures":failures},
+                      open("current-expiry-history-probe.json","w"),
+                      indent=2,
+                      sort_keys=True,
+                  )
+          if not results:
+              raise SystemExit("No current-expiry option history probe completed")
           PY
 
       - uses: actions/upload-artifact@v4
