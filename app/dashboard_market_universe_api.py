@@ -20,9 +20,11 @@ from typing import Any
 
 import httpx
 
+from app.providers.groww import GrowwProvider
+
 GROWW_INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 DELTA_INDIA_PRODUCTS_URL = "https://api.india.delta.exchange/v2/products"
-MODE = "ALPHAPILOT_DASHBOARD_MARKET_UNIVERSE_V2"
+MODE = "ALPHAPILOT_DASHBOARD_MARKET_UNIVERSE_V3"
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _CACHE_LOCK = Lock()
 _CACHE: dict[str, object] = {"loaded_at": 0.0, "payload": None}
@@ -54,6 +56,7 @@ _COMMODITY_NAMES = {
     "ZINC": "Zinc",
 }
 _CRYPTO_NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum", "XAUT": "Tether Gold", "SOL": "Solana"}
+_CONNECTED_FNO = set(GrowwProvider.NSE_CASH_SYMBOLS) | {"NIFTY", "BANKNIFTY"}
 _CONNECTED_COMMODITIES = {"COPPER", "CRUDEOILM"}
 _CONNECTED_CRYPTO = {"BTC"}
 
@@ -119,7 +122,8 @@ def parse_groww_fno_underlyings(csv_text: str, *, as_of: date) -> list[dict]:
     result = [{
         "symbol": symbol,
         "name": _INDEX_NAMES.get(symbol) or cash_names.get(symbol) or symbol,
-        "state": "AVAILABLE",
+        "state": "CONNECTED" if symbol in _CONNECTED_FNO else "AVAILABLE",
+        "live_scan_connected": symbol in _CONNECTED_FNO,
         "exchange": "NSE",
         "segment": "FNO",
     } for symbol in sorted(active, key=lambda item: (item not in _INDEX_NAMES, item))]
@@ -139,7 +143,6 @@ def parse_groww_commodity_underlyings(csv_text: str, *, as_of: date) -> list[dic
             continue
         underlying = str(row.get("underlying_symbol") or "").strip().upper()
         if not underlying or underlying.lower() == "nan":
-            # Some commodity rows can identify the underlying directly in name.
             underlying = str(row.get("name") or "").strip().upper().replace(" ", "")
         if underlying and underlying.lower() != "nan":
             active.add(underlying)
@@ -298,8 +301,9 @@ def register_dashboard_market_universe_routes(app) -> None:
 
 def architecture_contract() -> dict:
     return {
-        "version": "DASHBOARD_MARKET_UNIVERSE_CONTRACT_V2",
+        "version": "DASHBOARD_MARKET_UNIVERSE_CONTRACT_V3",
         "fno_source": "GROWW_DOCUMENTED_PUBLIC_INSTRUMENT_MASTER",
+        "fno_connected_state_basis": "EXISTING_GROWW_LIVE_SCAN_MAPPING",
         "commodity_source": "GROWW_DOCUMENTED_PUBLIC_INSTRUMENT_MASTER",
         "crypto_source": "DELTA_INDIA_DOCUMENTED_PUBLIC_PRODUCTS",
         "authentication_required": False,
