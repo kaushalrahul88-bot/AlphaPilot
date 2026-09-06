@@ -2,9 +2,9 @@
 
 This module uses only the documented public Delta India REST ticker endpoint.
 It performs no authentication, account access, order placement, or execution.
-The feed is a venue-candidate probe until AlphaPilot cross-checks live values
-against the Delta India UI and the user explicitly adopts Delta as the Crypto
-Options reference/execution venue.
+Live Price, OI/Vol and Greeks values were synchronously cross-checked against the
+Delta India UI on 2026-09-06. The feed remains a venue candidate until the user
+explicitly adopts Delta as the Crypto Options reference/execution venue.
 """
 from __future__ import annotations
 
@@ -89,6 +89,7 @@ class DeltaIndiaBtcOptionQuote:
     strike_price: float
     spot_price: float | None
     mark_price: float | None
+    mark_iv: float | None
     best_bid: float | None
     best_ask: float | None
     bid_size: float | None
@@ -121,7 +122,7 @@ class DeltaIndiaBtcOptionQuote:
             value = getattr(self, name)
             if value is not None and (not isfinite(value) or value < 0):
                 raise ValueError(f"{name} must be finite and >= 0 when present")
-        for name in ("bid_iv", "ask_iv"):
+        for name in ("mark_iv", "bid_iv", "ask_iv"):
             value = getattr(self, name)
             if value is not None and (not isfinite(value) or value < 0):
                 raise ValueError(f"{name} must be finite and >= 0 when present")
@@ -143,6 +144,7 @@ class DeltaIndiaBtcOptionQuote:
             "strike_price": self.strike_price,
             "spot_price": self.spot_price,
             "mark_price": self.mark_price,
+            "mark_iv": self.mark_iv,
             "best_bid": self.best_bid,
             "best_ask": self.best_ask,
             "bid_size": self.bid_size,
@@ -281,6 +283,7 @@ def normalize_delta_btc_options_snapshot(
                 strike_price=strike,
                 spot_price=_positive_optional(raw.get("spot_price")),
                 mark_price=_positive_optional(raw.get("mark_price")),
+                mark_iv=_nonnegative_optional(raw.get("mark_vol")),
                 best_bid=_positive_optional(quotes.get("best_bid")),
                 best_ask=_positive_optional(quotes.get("best_ask")),
                 bid_size=_nonnegative_optional(quotes.get("bid_size")),
@@ -380,7 +383,10 @@ def architecture_contract() -> dict[str, Any]:
         "trading_permission_required": False,
         "order_placement_enabled": False,
         "live_execution_enabled": False,
-        "candidate_only_until_ui_cross_check": True,
+        "ui_cross_check_completed": True,
+        "candidate_only_until_ui_cross_check": False,
+        "candidate_only_until_explicit_user_adoption": True,
+        "mark_iv_persisted": True,
         "full_chain_fetched": True,
         "nearest_expiry_atm_slice_persisted": True,
         "historical_backfill_claimed": False,
