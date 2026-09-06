@@ -1,24 +1,26 @@
 """Explicit prospective BTC proof bridge using already-implemented data sources.
 
-This module does not add a provider, scheduler, database schema, or startup hook.
-It only composes existing components when a caller explicitly invokes it:
+This module composes point-in-time-safe inputs when a caller explicitly invokes
+it:
 
 1. reconstruct completed CoinDCX BTC spot candles by bar-completion time;
 2. read derivatives rows already visible in the immutable BTC PIT store;
-3. derive Spot Structure + causally gated derivatives evidence;
-4. freeze a ``Prospective BTC Thesis Tape`` decision;
-5. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
+3. optionally admit caller-supplied completed Delta India BTC OI history;
+4. derive Spot Structure + one reconciled leveraged-positioning origin;
+5. freeze a ``Prospective BTC Thesis Tape`` decision;
+6. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
    resolve the BTC-only outcome.
 
-Missing OI/liquidations remain UNKNOWN context. Nothing is fabricated into a
-second causal origin. No Options contract, premium, P&L, Futures trade, order, or
-live capital is created.
+Missing positioning data remains UNKNOWN context. Multiple providers sharing the
+same leveraged-positioning causal origin are never double-counted; disagreement
+within that origin cancels it to UNKNOWN. No Options contract, premium, P&L,
+Futures trade, order, or live capital is created.
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from math import ceil, isfinite
 from typing import Any
@@ -36,6 +38,11 @@ from app.crypto_btc_prospective_thesis_tape import (
     resolve_prospective_btc_thesis,
 )
 from app.crypto_btc_random_click_experience import BtcForwardPriceObservation
+from app.crypto_market_intelligence import Evidence
+from app.delta_india_btc_derivatives_context import (
+    DeltaIndiaBtcOiCandle,
+    derive_delta_oi_positioning_evidence,
+)
 
 
 def _utc(value: datetime) -> datetime:
@@ -116,6 +123,53 @@ def _price_change_pct(
     return (float(decision_price) - anchor) / anchor * 100.0
 
 
+def _reconcile_positioning_evidence(*rows: Evidence | None) -> Evidence | None:
+    """Collapse same-origin positioning providers into exactly one causal vote."""
+    candidates = [row for row in rows if row is not None]
+    if not candidates:
+        return None
+    for row in candidates:
+        if row.family != "DERIVATIVES_POSITIONING" or row.causal_origin != "LEVERAGED_POSITIONING":
+            raise ValueError("positioning reconciliation accepts LEVERAGED_POSITIONING evidence only")
+
+    directional = [row for row in candidates if not row.context_only and row.stance in {"BULLISH", "BEARISH"}]
+    stances = {row.stance for row in directional}
+    if len(stances) > 1:
+        observed_at = max((_utc(row.observed_at) for row in directional))
+        return Evidence(
+            family="DERIVATIVES_POSITIONING",
+            causal_origin="LEVERAGED_POSITIONING",
+            stance="UNKNOWN",
+            strength="LOW",
+            confidence=0.5,
+            observed_at=observed_at,
+            reason="Leveraged-positioning providers disagree on direction, so the shared causal origin is cancelled.",
+            context_only=True,
+            source="MULTI_PROVIDER_POSITIONING_RECONCILIATION",
+            metadata={
+                "provider_stances": {row.source: row.stance for row in directional},
+                "double_counted": False,
+                "conflict_cancels_origin": True,
+                "may_generate_futures_trade": False,
+            },
+        )
+    if directional:
+        chosen = max(
+            directional,
+            key=lambda row: (float(row.confidence), _utc(row.observed_at), str(row.source)),
+        )
+        if len(directional) == 1:
+            return chosen
+        metadata = dict(chosen.metadata)
+        metadata.update({
+            "same_origin_corroborating_sources": sorted({row.source for row in directional}),
+            "double_counted": False,
+        })
+        return replace(chosen, metadata=metadata)
+
+    return max(candidates, key=lambda row: (_utc(row.observed_at), float(row.confidence), str(row.source)))
+
+
 async def _visible_pit_rows(store: Any, *, decision_at: datetime) -> list[dict]:
     result = store.visible_as_of(_utc(decision_at))
     if inspect.isawaitable(result):
@@ -136,6 +190,7 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     pit_store: Any,
     tape_policy: ProspectiveBtcThesisTapePolicy,
     bridge_policy: ProspectiveBtcProofBridgePolicy | None = None,
+    delta_oi_rows: list[DeltaIndiaBtcOiCandle] | None = None,
 ) -> dict:
     """Explicitly reconstruct visible BTC inputs and freeze one proof decision."""
     bridge = (bridge_policy or ProspectiveBtcProofBridgePolicy()).validated()
@@ -176,7 +231,7 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     )
     if latest is None:
         return {
-            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V1",
+            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
             "status": "PROOF_INPUT_UNRESOLVED",
             "reason": "BTC_DECISION_PRICE_MISSING_OR_STALE",
             "decision_at": decision.isoformat(),
@@ -195,7 +250,7 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     )
     if spot_evidence is None:
         return {
-            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V1",
+            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
             "status": "PROOF_INPUT_UNRESOLVED",
             "reason": "BTC_SPOT_STRUCTURE_UNAVAILABLE",
             "decision_at": decision.isoformat(),
@@ -212,15 +267,25 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
         decision_price=float(latest.close),
         lookback_hours=float(bridge.derivatives_price_lookback_hours),
     )
-    if price_change is None:
-        derivatives_evidence = None
-    else:
-        derivatives_evidence = derivatives_evidence_from_full_pit_context(
+    pit_derivatives_evidence = None
+    delta_oi_evidence = None
+    if price_change is not None:
+        pit_derivatives_evidence = derivatives_evidence_from_full_pit_context(
             pit_rows,
             decision_at=decision,
             price_change_pct=price_change,
             max_event_misalignment_seconds=int(bridge.max_event_misalignment_seconds),
         )
+        if delta_oi_rows is not None:
+            delta_oi_evidence = derive_delta_oi_positioning_evidence(
+                delta_oi_rows,
+                decision_at=decision,
+                price_change_pct=price_change,
+            )
+    derivatives_evidence = _reconcile_positioning_evidence(
+        pit_derivatives_evidence,
+        delta_oi_evidence,
+    )
 
     evidence = [spot_evidence]
     if derivatives_evidence is not None:
@@ -238,14 +303,17 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
         dataset = str(row.get("dataset") or "UNKNOWN")
         dataset_counts[dataset] = dataset_counts.get(dataset, 0) + 1
     return {
-        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V1",
+        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
         "status": "PROSPECTIVE_PROOF_DECISION_FROZEN",
         "decision_at": decision.isoformat(),
         "decision_btc_price": float(latest.close),
         "structure_candle_count": len(visible_structure),
         "pit_record_count": len(pit_rows),
         "pit_dataset_counts": dict(sorted(dataset_counts.items())),
+        "delta_oi_candle_count": 0 if delta_oi_rows is None else len(delta_oi_rows),
         "derivatives_price_change_pct": price_change,
+        "pit_derivatives_evidence_status": None if pit_derivatives_evidence is None else pit_derivatives_evidence.stance,
+        "delta_oi_evidence_status": None if delta_oi_evidence is None else delta_oi_evidence.stance,
         "derivatives_evidence_status": None if derivatives_evidence is None else derivatives_evidence.stance,
         "frozen_thesis": frozen,
         "provider_called": True,
@@ -319,14 +387,17 @@ async def resolve_prospective_btc_thesis_from_coindcx(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_CONTRACT_V1",
+        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_CONTRACT_V2",
         "new_provider_added": False,
         "new_scheduler_added": False,
         "new_database_schema_added": False,
         "automatic_startup_added": False,
         "explicit_invocation_required": True,
         "spot_source": "COINDCX_PUBLIC_COMPLETED_CANDLES",
-        "derivatives_source": "EXISTING_IMMUTABLE_BTC_PIT_STORE",
+        "derivatives_source": "EXISTING_IMMUTABLE_BTC_PIT_STORE_PLUS_OPTIONAL_COMPLETED_DELTA_OI",
+        "optional_completed_delta_oi_context": True,
+        "same_positioning_origin_double_counted": False,
+        "same_origin_provider_conflict_cancels_direction": True,
         "derivatives_missing_equals_neutral_vote": False,
         "oi_liquidations_may_be_fabricated": False,
         "decision_uses_only_pit_visible_rows": True,
