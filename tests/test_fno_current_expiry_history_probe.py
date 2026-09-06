@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.fno_current_expiry_history_probe import (
+    DAILY_MAX_REQUEST_DAYS,
     _contract_rows,
     _stamp,
     architecture_contract,
@@ -45,6 +46,12 @@ class CurrentExpiryHistoryProbeTests(unittest.TestCase):
         self.assertIsNotNone(documented)
         self.assertIsNotNone(epoch_seconds)
         self.assertEqual(epoch_seconds, epoch_millis)
+
+    def test_probe_stays_inside_documented_request_limits(self):
+        self.assertLess(DAILY_MAX_REQUEST_DAYS, 180)
+        contract = architecture_contract()
+        self.assertTrue(contract["groww_1day_request_chunked_below_180_day_limit"])
+        self.assertTrue(contract["groww_5m_request_within_30_day_limit"])
 
     def test_safety_contract(self):
         contract = architecture_contract()

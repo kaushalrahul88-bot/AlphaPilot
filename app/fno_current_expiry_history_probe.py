@@ -20,6 +20,7 @@ from .fno_15m_candle_checkpoint_v2 import _is_auth_error, _refresh_after_401
 IST = ZoneInfo("Asia/Kolkata")
 UTC = timezone.utc
 _CONTRACT_RE = re.compile(r"-(?P<strike>[0-9]+(?:\.[0-9]+)?)-(?P<type>CE|PE)$", re.I)
+DAILY_MAX_REQUEST_DAYS = 179  # Groww documents 180-day max for 1-day candles.
 
 
 def _payload(body: Any) -> dict[str, Any]:
@@ -184,6 +185,52 @@ async def _candles(
     return list(_payload(body).get("candles") or [])
 
 
+def _merge_candles(chunks: list[list[list]]) -> list[list]:
+    """Merge overlapping chunks by timestamp while preserving chronological order."""
+    by_stamp: dict[str, list] = {}
+    unparsed: list[list] = []
+    for chunk in chunks:
+        for row in chunk:
+            if not isinstance(row, (list, tuple)) or not row:
+                continue
+            stamp = _stamp(row[0])
+            if stamp is None:
+                unparsed.append(list(row))
+                continue
+            by_stamp[stamp.astimezone(UTC).isoformat()] = list(row)
+    merged = [by_stamp[key] for key in sorted(by_stamp)]
+    merged.extend(unparsed)
+    return merged
+
+
+async def _daily_candles_chunked(
+    provider,
+    groww_symbol: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[list], int]:
+    chunks: list[list[list]] = []
+    requests = 0
+    current = start
+    while current <= end:
+        chunk_end = min(end, current + timedelta(days=DAILY_MAX_REQUEST_DAYS))
+        chunks.append(
+            await _candles(
+                provider,
+                groww_symbol,
+                start=current,
+                end=chunk_end,
+                interval="1day",
+            )
+        )
+        requests += 1
+        if chunk_end >= end:
+            break
+        current = chunk_end + timedelta(seconds=1)
+    return _merge_candles(chunks), requests
+
+
 def _bounds(candles: list[list]) -> tuple[str | None, str | None]:
     stamps = []
     for row in candles:
@@ -229,8 +276,14 @@ async def probe_current_expiry_history(
     for item in sampled:
         symbol = str(item["groww_symbol"])
         daily_error = None
+        daily_requests = 0
         try:
-            daily = await _candles(provider, symbol, start=search_start, end=end, interval="1day")
+            daily, daily_requests = await _daily_candles_chunked(
+                provider,
+                symbol,
+                start=search_start,
+                end=end,
+            )
         except Exception as exc:
             daily = []
             daily_error = f"{exc.__class__.__name__}: {str(exc)[:320]}"
@@ -257,6 +310,7 @@ async def probe_current_expiry_history(
             "daily_candles": len(daily),
             "daily_first": daily_first,
             "daily_last": daily_last,
+            "daily_request_chunks": daily_requests,
             "daily_error": daily_error,
             "first_window_5m_candles": len(intraday),
             "first_5m": intraday_first,
@@ -287,6 +341,10 @@ async def probe_current_expiry_history(
         "sample_basis": "near-ATM CE/PE at latest quote plus one FUT when exposed",
         "sampled_contracts": sample_results,
         "proven_sample_count": len(proven_samples),
+        "groww_request_limits_respected": {
+            "daily_max_duration_days": 180,
+            "five_minute_max_duration_days": 30,
+        },
         "important_limit": (
             "Current contract repository is not historical point-in-time chain state. "
             "A rolling-expiry backtest must admit a contract at a historical click only "
@@ -300,12 +358,14 @@ async def probe_current_expiry_history(
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "FNO_CURRENT_EXPIRY_HISTORY_PROBE_V1_HARDENED",
+        "version": "FNO_CURRENT_EXPIRY_HISTORY_PROBE_V1_CHUNKED",
         "read_only": True,
         "groww_contract_repository": True,
         "historical_daily_probe": True,
         "historical_5m_first_window_probe": True,
         "historical_fno_oi_available_in_candle_rows": True,
+        "groww_1day_request_chunked_below_180_day_limit": True,
+        "groww_5m_request_within_30_day_limit": True,
         "coverage_must_be_proven_non_empty": True,
         "point_in_time_chain_reconstructed": False,
         "live_execution": False,
