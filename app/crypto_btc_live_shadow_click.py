@@ -1,15 +1,15 @@
 """Explicit server-time BTC Options live shadow click.
 
-One invocation captures a fresh Delta India public option-chain snapshot first,
-then freezes a BTC underlying thesis using only information available by the
-server-side decision time. A real Options shadow entry is admitted only when the
-underlying thesis is BULLISH/BEARISH and an exact fresh Delta bid/ask quote
-passes a frozen deterministic candidate-validation policy. UNKNOWN is NO TRADE.
+One invocation captures a fresh Delta India public option-chain snapshot and a
+completed Delta BTC perpetual OI context window before assigning the decision
+time. The BTC underlying thesis is then frozen using only information available
+by that server-side time. A real Options shadow entry is admitted only when the
+underlying thesis is BULLISH/BEARISH and an exact fresh Delta bid/ask quote passes
+a frozen deterministic candidate-validation policy. UNKNOWN is NO TRADE.
 
-Delta remains a candidate venue in this module. The policy intentionally mirrors
-the mature BTC contract-selector safeguards (freshness, spread, delta, Greeks,
-OI, volume and holding-horizon/expiry fit) without changing the default CoinDCX
-selector before Delta is explicitly promoted.
+Delta remains a candidate Options venue. Perpetual OI is context for the shared
+underlying thesis only; it can never generate a Futures trade or substitute for
+an Options quote/fill.
 
 Research/shadow only. No account access, order placement, execution, or capital.
 """
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from math import isfinite
 from typing import Any, Callable
 
@@ -28,6 +28,10 @@ from app.crypto_btc_pit_postgres import PostgresBtcPitArchiveStore
 from app.crypto_btc_prospective_proof_bridge import freeze_prospective_btc_thesis_from_existing_sources
 from app.crypto_btc_prospective_proof_runtime import BtcProspectiveProofRuntimeConfig
 from app.crypto_btc_prospective_thesis_postgres import PostgresProspectiveBtcThesisTapeStore
+from app.delta_india_btc_derivatives_context import (
+    DeltaIndiaBtcDerivativesContextPolicy,
+    DeltaIndiaBtcDerivativesPublicProvider,
+)
 from app.delta_india_btc_options_public_provider import DeltaIndiaBtcOptionsPublicProvider, DeltaIndiaOptionsProbePolicy
 
 # Delta India documents BTC/ETH Options expiry at 5:30 PM IST. IST is UTC+05:30,
@@ -278,6 +282,7 @@ async def run_explicit_live_shadow_click(
     clock: Callable[[], datetime] | None = None,
     coindcx_http_client=None,
     delta_http_client=None,
+    delta_derivatives_http_client=None,
     selection_policy: LiveShadowOptionSelectionPolicy | None = None,
 ) -> dict:
     """Freeze one genuine live research click using server time only."""
@@ -312,8 +317,51 @@ async def run_explicit_live_shadow_click(
     await delta_store.insert_first_seen(snapshot)
     frozen_snapshot = snapshot.frozen_dict()
 
-    # Critical ordering: decision_at is assigned only after the option quote has
-    # been received and first-seen captured. No caller-supplied decision time.
+    # Fetch reconstructible completed Delta OI before assigning decision_at. The
+    # preflight cutoff is taken before the HTTP request, and rows completing after
+    # that cutoff are discarded even if they appear in the response.
+    delta_oi_rows = None
+    oi_cutoff = _utc(now())
+    delta_oi_capture = {
+        "status": "UNAVAILABLE",
+        "cutoff_at": oi_cutoff.isoformat(),
+        "candle_count": 0,
+        "latest_available_at": None,
+        "error_type": None,
+        "message": None,
+    }
+    try:
+        oi_provider = DeltaIndiaBtcDerivativesPublicProvider(
+            policy=DeltaIndiaBtcDerivativesContextPolicy(enabled=True, resolution="5m"),
+            client=delta_derivatives_http_client,
+        )
+        fetched_oi = await asyncio.to_thread(
+            oi_provider.fetch_oi_candles,
+            start_at=oi_cutoff - timedelta(hours=2.5),
+            end_at=oi_cutoff,
+            resolution="5m",
+        )
+        delta_oi_rows = [row for row in fetched_oi if _utc(row.available_at) <= oi_cutoff]
+        delta_oi_capture = {
+            "status": "CAPTURED_COMPLETED_HISTORY",
+            "cutoff_at": oi_cutoff.isoformat(),
+            "candle_count": len(delta_oi_rows),
+            "latest_available_at": None if not delta_oi_rows else _utc(delta_oi_rows[-1].available_at).isoformat(),
+            "error_type": None,
+            "message": None,
+        }
+    except Exception as exc:
+        delta_oi_capture = {
+            "status": "UNAVAILABLE",
+            "cutoff_at": oi_cutoff.isoformat(),
+            "candle_count": 0,
+            "latest_available_at": None,
+            "error_type": exc.__class__.__name__,
+            "message": str(exc)[:300],
+        }
+
+    # Critical ordering: decision_at is assigned only after the option quote and
+    # the attempted derivatives-context fetch. No caller-supplied decision time.
     decision_at = _utc(now())
     if _stamp(frozen_snapshot["first_seen_at"]) > decision_at:
         raise ValueError("captured Delta snapshot cannot be after server decision time")
@@ -329,13 +377,14 @@ async def run_explicit_live_shadow_click(
         provider=coindcx_provider,
         pit_store=pit_store,
         tape_policy=proof_config.tape_policy(),
+        delta_oi_rows=delta_oi_rows,
     )
     frozen_thesis = proof.get("frozen_thesis") if isinstance(proof, dict) else None
     frozen_policy = proof_config.tape_policy().validated()
     selected_policy = (selection_policy or LiveShadowOptionSelectionPolicy()).validated()
     if not isinstance(frozen_thesis, dict):
         record = {
-            "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V2",
+            "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V3",
             "request_id": request,
             "click_id": click_id,
             "decision_at": decision_at.isoformat(),
@@ -344,6 +393,7 @@ async def run_explicit_live_shadow_click(
             "shadow_status": "PROOF_INPUT_UNRESOLVED",
             "reason": str(proof.get("reason") or "BTC_PROOF_INPUT_UNRESOLVED"),
             "proof_bridge": proof,
+            "delta_oi_context": delta_oi_capture,
             "option_selection_policy": selected_policy.frozen_dict(),
             "delta_snapshot_first_seen_at": frozen_snapshot["first_seen_at"],
             "option_entry": None,
@@ -366,7 +416,7 @@ async def run_explicit_live_shadow_click(
     option_entry = selected.get("option_entry")
     shadow_status = "OPTIONS_SHADOW_ENTRY_FROZEN" if option_entry is not None else "NO_TRADE_FROZEN"
     record = {
-        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V2",
+        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_V3",
         "request_id": request,
         "click_id": click_id,
         "decision_at": decision_at.isoformat(),
@@ -382,9 +432,13 @@ async def run_explicit_live_shadow_click(
             "structure_candle_count": proof.get("structure_candle_count"),
             "pit_record_count": proof.get("pit_record_count"),
             "pit_dataset_counts": proof.get("pit_dataset_counts"),
+            "delta_oi_candle_count": proof.get("delta_oi_candle_count"),
             "derivatives_price_change_pct": proof.get("derivatives_price_change_pct"),
+            "pit_derivatives_evidence_status": proof.get("pit_derivatives_evidence_status"),
+            "delta_oi_evidence_status": proof.get("delta_oi_evidence_status"),
             "derivatives_evidence_status": proof.get("derivatives_evidence_status"),
         },
+        "delta_oi_context": delta_oi_capture,
         "frozen_underlying_policy": frozen_policy.frozen_dict(),
         "option_selection_policy": selected_policy.frozen_dict(),
         "delta_snapshot_first_seen_at": frozen_snapshot["first_seen_at"],
@@ -403,10 +457,13 @@ async def run_explicit_live_shadow_click(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_CONTRACT_V2",
+        "version": "BTC_OPTIONS_LIVE_SHADOW_CLICK_CONTRACT_V3",
         "decision_time_source": "SERVER_CLOCK_ONLY",
         "caller_backdating_allowed": False,
         "delta_snapshot_captured_before_decision": True,
+        "completed_delta_oi_attempted_before_decision": True,
+        "delta_oi_completion_cutoff_precedes_http_fetch": True,
+        "delta_oi_futures_context_only": True,
         "delta_candidate_venue_only": True,
         "underlying_unknown_means_no_trade": True,
         "holding_horizon_must_fit_before_exchange_expiry": True,
