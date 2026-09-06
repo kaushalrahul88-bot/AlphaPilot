@@ -1,0 +1,45 @@
+name: Scheduled F&O Underlying Prospective Capture
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:30-14:25 IST, every five minutes on weekdays. The API itself only
+    # persists the 20 precommitted random slots and fails closed outside grace.
+    - cron: "*/5 4-8 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-fno-underlying-prospective-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Capture due underlying research batch
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl -fsS --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/underlying-prospective/capture" \
+            -o capture.json
+          cat capture.json
+          python - <<'PY'
+          import json
+          d=json.load(open("capture.json"))
+          assert d.get("live_execution") is False,d
+          assert float(d.get("capital_committed") or 0)==0,d
+          allowed={
+              "SKIPPED_NOT_A_PRECOMMITTED_CLICK",
+              "SKIPPED_MARKET_LIVENESS_UNPROVEN",
+              "CAPTURED","PARTIAL","FAILED",
+          }
+          assert d.get("status") in allowed,d
+          PY
