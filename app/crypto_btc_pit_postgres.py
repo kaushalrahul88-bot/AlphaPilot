@@ -64,13 +64,16 @@ FROM {TABLE_NAME}
 WHERE natural_key = %s;
 """
 
+# The optional dataset bind is explicitly typed. Without the cast, PostgreSQL
+# cannot infer the type of a NULL parameter used only in ``%s IS NULL`` and
+# psycopg raises IndeterminateDatatype when callers request all visible rows.
 VISIBLE_AS_OF_SQL = f"""
 SELECT natural_key, dataset, provider, source_key, event_at, first_seen_at,
        source_version, payload, payload_hash, record_fingerprint,
        point_in_time_proven, provenance_id
 FROM {TABLE_NAME}
 WHERE first_seen_at <= %s
-  AND (%s IS NULL OR dataset = %s)
+  AND (%s::text IS NULL OR dataset = %s::text)
 ORDER BY first_seen_at ASC, dataset ASC, source_key ASC;
 """
 
