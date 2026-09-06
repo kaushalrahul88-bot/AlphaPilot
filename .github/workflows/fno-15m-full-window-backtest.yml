@@ -1,0 +1,122 @@
+name: F&O 15m Full Window Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fno-15m-full-window-backtest.yml"
+      - "app/fno_15m_historical_replay_v1.py"
+      - "app/fno_15m_backtest_api.py"
+      - "app/__init__.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fno-15m-full-window-backtest
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed replay endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ] && \
+                 curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && \
+                 python - <<'PY'
+import json, sys
+paths=json.load(open("openapi.json")).get("paths",{})
+sys.exit(0 if "/v1/internal/fno/backtest-15m/start" in paths else 1)
+PY
+              then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render deployment"
+          exit 1
+
+      - name: Start replay
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/backtest-15m/start" \
+            -o start.json
+          cat start.json
+          python - <<'PY'
+import json
+d=json.load(open("start.json"))
+assert d.get("status") in {"RUNNING","COMPLETED"}, d
+assert d.get("live_execution") in (False, None), d
+PY
+
+      - name: Poll replay
+        run: |
+          set -euo pipefail
+          for i in {1..120}; do
+            if curl -fsS --max-time 30 \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/backtest-15m/status" \
+              -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              echo "Replay state: $STATE"
+              if [ "$STATE" = "COMPLETED" ]; then
+                break
+              fi
+              if [ "$STATE" = "FAILED" ]; then
+                cat status.json
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and summarize results
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/backtest-15m/result" \
+            -o result.json
+          python - <<'PY'
+import json
+d=json.load(open("result.json"))
+assert d["mode"] == "FNO_15M_FULL_WINDOW_HISTORICAL_REPLAY_V1"
+assert d["status"] == "COMPLETED"
+assert d["coverage"]["scheduled_clicks"] == 115, d["coverage"]
+assert d["safety"]["live_execution"] is False
+summary={
+  "coverage": d["coverage"],
+  "strict": d["results"]["STRICT_V2"]["summary"],
+  "strict_daily": d["results"]["STRICT_V2"]["daily"],
+  "diagnostic_30m": d["results"]["COVERAGE_30M"]["summary"],
+  "diagnostic_30m_daily": d["results"]["COVERAGE_30M"]["daily"],
+  "methodology": d["methodology"],
+  "safety": d["safety"],
+}
+json.dump(summary, open("summary.json","w"), indent=2, sort_keys=True)
+print(json.dumps(summary, indent=2, sort_keys=True))
+PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fno-15m-full-window-backtest
+          path: |
+            result.json
+            summary.json
