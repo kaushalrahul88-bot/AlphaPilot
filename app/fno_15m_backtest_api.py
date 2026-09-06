@@ -12,7 +12,7 @@ from fastapi import Header, HTTPException
 from psycopg.types.json import Jsonb
 
 from .fno_15m_historical_replay_v1 import MODE
-from .fno_15m_restart_safe_replay import run_fno_15m_historical_replay_restart_safe
+from .fno_15m_restart_safe_replay_v2 import run_fno_15m_historical_replay_restart_safe_v2
 from .providers.factory import get_provider
 
 UTC = timezone.utc
@@ -263,15 +263,13 @@ async def _run(settings, run_id: str) -> None:
         async def progress_callback(progress: Mapping[str, Any]) -> None:
             await _save_progress(database_url, run_id, progress)
 
-        result = await run_fno_15m_historical_replay_restart_safe(
+        result = await run_fno_15m_historical_replay_restart_safe_v2(
             get_provider(settings),
             database_url,
             progress_callback=progress_callback,
         )
         await _complete_run(database_url, run_id, result)
     except asyncio.CancelledError:
-        # A process shutdown must leave the durable row RUNNING. The next status
-        # poll on the replacement process will resume the same run.
         try:
             await _save_progress(
                 database_url,
@@ -343,7 +341,6 @@ def register_fno_15m_backtest_routes(app, settings, collector_auth) -> None:
         await _ensure_schema(settings.database_url)
         run = await _latest_run(settings.database_url)
         await _ensure_worker(settings, run)
-        # Re-read after scheduling so callers get the freshest durable heartbeat.
         return _summary(await _latest_run(settings.database_url))
 
     @app.get("/v1/internal/fno/backtest-15m/result")
@@ -379,13 +376,14 @@ def register_fno_15m_backtest_routes(app, settings, collector_auth) -> None:
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "FNO_15M_BACKTEST_API_V2_RESTART_SAFE",
+        "version": "FNO_15M_BACKTEST_API_V2_RESTART_SAFE_DAY_BOUNDED",
         "collector_auth_required": True,
         "background_job": True,
         "durable_run_state": True,
         "durable_result": True,
         "automatic_resume_after_process_restart": True,
         "durable_reconstructible_candle_checkpoints": True,
+        "point_in_time_option_chain_payload_scope": "ONE_TRADING_DAY",
         "point_in_time_option_chain_writes": False,
         "orchestration_database_writes": True,
         "strategy_policy_changed": False,
