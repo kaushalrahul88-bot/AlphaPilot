@@ -8,6 +8,7 @@ on:
       - ".github/workflows/fno-15m-full-window-backtest.yml"
       - "app/fno_15m_historical_replay_v1.py"
       - "app/fno_15m_restart_safe_replay.py"
+      - "app/fno_15m_restart_safe_replay_v2.py"
       - "app/fno_15m_backtest_api.py"
       - "app/__init__.py"
 
@@ -16,7 +17,7 @@ permissions:
 
 concurrency:
   group: fno-15m-full-window-backtest
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   replay:
