@@ -14,7 +14,7 @@ from .fno_candle_only_four_stock_backtest_v1 import (
     PROTOCOL_ID,
     run_candle_only_four_stock_backtest,
 )
-from .fno_candle_only_symbol_alias_v1 import adapt_current_cash_symbols
+from .fno_candle_only_symbol_alias_v1 import current_cash_symbol_aliases
 from .providers.factory import get_provider
 
 UTC = timezone.utc
@@ -61,18 +61,9 @@ def _row(row):
     if not row:
         return None
     keys = (
-        "run_id",
-        "protocol_id",
-        "deployment_commit",
-        "status",
-        "started_at",
-        "updated_at",
-        "completed_at",
-        "heartbeat_at",
-        "attempt_count",
-        "result_json",
-        "error",
-        "traceback",
+        "run_id", "protocol_id", "deployment_commit", "status", "started_at",
+        "updated_at", "completed_at", "heartbeat_at", "attempt_count",
+        "result_json", "error", "traceback",
     )
     payload = dict(zip(keys, row))
     for key in ("started_at", "updated_at", "completed_at", "heartbeat_at"):
@@ -171,7 +162,6 @@ def _summary(run):
             "live_execution": False,
             "capital_committed": 0,
         }
-
     payload = {
         "run_id": run.get("run_id"),
         "protocol_id": run.get("protocol_id"),
@@ -205,8 +195,9 @@ async def _run(settings, run_id):
     result = None
     try:
         await _attempt(settings.database_url, run_id)
-        provider = adapt_current_cash_symbols(get_provider(settings))
-        result = await run_candle_only_four_stock_backtest(provider)
+        provider = get_provider(settings)
+        with current_cash_symbol_aliases(provider):
+            result = await run_candle_only_four_stock_backtest(provider)
         if result.get("status") != "COMPLETED":
             diagnostics = (
                 result.get("available_session_count_per_stock")
