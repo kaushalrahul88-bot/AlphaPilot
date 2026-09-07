@@ -1,0 +1,118 @@
+name: F&O Four-Stock Context Enrichment V1
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_four_stock_context_enrichment_v1.py'
+      - 'app/fno_four_stock_context_replay_v1.py'
+      - 'app/fno_four_stock_context_replay_api.py'
+      - 'data/fno_four_stock_context_events_v1.json'
+      - 'tests/test_fno_four_stock_context_enrichment_v1.py'
+      - 'tests/test_fno_four_stock_context_replay_v1.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-four-stock-context-enrichment-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_four_stock_context_enrichment_v1.py'
+      - 'app/fno_four_stock_context_replay_v1.py'
+      - 'app/fno_four_stock_context_replay_api.py'
+      - 'data/fno_four_stock_context_events_v1.json'
+      - 'tests/test_fno_four_stock_context_enrichment_v1.py'
+      - 'tests/test_fno_four_stock_context_replay_v1.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-four-stock-context-enrichment-v1.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_four_stock_context_enrichment_v1.py tests/test_fno_four_stock_context_replay_v1.py
+      - run: python -m py_compile app/fno_four_stock_context_enrichment_v1.py app/fno_four_stock_context_replay_v1.py app/fno_four_stock_context_replay_api.py app/__init__.py
+
+  replay:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys;p=json.load(open("openapi.json")).get("paths",{});sys.exit(0 if "/v1/internal/fno/four-stock-context-replay/start" in p else 1)'; then
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render deployment"
+          exit 1
+      - name: Start context replay
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST "$API_BASE/v1/internal/fno/four-stock-context-replay/start" -o start.json
+          cat start.json
+          python - <<'PY'
+          import json
+          d=json.load(open('start.json'))
+          assert d.get('status') in {'RUNNING','COMPLETED'}, d
+          s=d.get('safety') or {}
+          assert s.get('options_read') is False and s.get('futures_read') is False
+          assert s.get('live_execution') is False and s.get('capital_committed') == 0
+          PY
+      - name: Poll context replay
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..160}; do
+            if curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/four-stock-context-replay/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"))'
+              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            else
+              echo "Transient status request failure; retrying durable run"
+            fi
+            sleep 15
+          done
+          test -s status.json
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+      - name: Fetch and validate comparison
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 180 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/four-stock-context-replay/result" -o result.json
+          python - <<'PY'
+          import json
+          d=json.load(open('result.json'))
+          assert d['status']=='COMPLETED'
+          assert d['experiment']['baseline_observations']==1600
+          assert d['experiment']['observations']==1600
+          assert d['experiment']['same_frozen_clicks'] is True
+          assert d['experiment']['same_frozen_future_tape'] is True
+          assert d['context_audit']['lookahead_violations']==0
+          assert d['safety']['options_read'] is False and d['safety']['futures_read'] is False
+          summary={k:d[k] for k in ('experiment','baseline_summary','enriched_summary','comparison','context_audit','by_stock','methodology','safety')}
+          json.dump(summary,open('summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-four-stock-context-enrichment-v1
+          path: |
+            result.json
+            summary.json

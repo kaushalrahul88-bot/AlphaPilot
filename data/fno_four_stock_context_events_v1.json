@@ -1,0 +1,100 @@
+{
+  "protocol": "FNO_FOUR_STOCK_CONTEXT_ENRICHMENT_V1_2026-09-07",
+  "policy": {
+    "timestamp_rule": "If an exact market-public timestamp is not independently verified, the event becomes usable only from the next NSE session open at 09:15 IST.",
+    "direction_rule": "Direction is assigned only when the event itself has an unambiguous directional interpretation; ambiguous strategic, administrative, or results-without-quantified-surprise events are NEUTRAL.",
+    "outcome_used": false
+  },
+  "events": [
+    {
+      "id": "RBI_MPC_2026_08_05",
+      "symbol": "MARKET",
+      "category": "MACRO_MONETARY_POLICY",
+      "effective_at": "2026-08-05T11:08:00+05:30",
+      "title": "RBI keeps repo rate at 5.25% and maintains neutral stance",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_RBI_PLUS_TIMESTAMPED_REPORT",
+      "source": "https://m.rbi.org.in/scripts/bs_speechesview.aspx?id=1352",
+      "notes": "Event predates the frozen replay window; retained as recent macro context only."
+    },
+    {
+      "id": "SBIN_Q1FY27_2026_08_07",
+      "symbol": "SBIN",
+      "category": "FINANCIAL_RESULTS",
+      "effective_at": "2026-08-10T09:15:00+05:30",
+      "title": "State Bank of India Q1 FY27 results board outcome",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_FILING_REPRODUCTION",
+      "source": "https://www.lse.co.uk/rns/1st-quarter-results-138avnlnpw3egem.html?mobile_view=desktop",
+      "notes": "Board meeting concluded on 7 Aug. Conservative next-session-open timestamp avoids assuming an earlier dissemination time; no directional surprise score is inferred from later price."
+    },
+    {
+      "id": "SUNPHARMA_LIPITOR_2026_08_17",
+      "symbol": "SUNPHARMA",
+      "category": "LEGAL_REGULATORY",
+      "effective_at": "2026-08-18T09:15:00+05:30",
+      "title": "Sun Pharma update on Lipitor antitrust litigation",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE_INDEX",
+      "source": "https://sunpharma.com/disclosure-under-regulation-30/",
+      "notes": "Company disclosure is dated 17 Aug; effective next session open because exact exchange broadcast timestamp was not frozen. The disclosed court outcome was favorable, so direction is intrinsic to the event rather than inferred from price."
+    },
+    {
+      "id": "SUNPHARMA_POSTAL_BALLOT_2026_08_25",
+      "symbol": "SUNPHARMA",
+      "category": "CORPORATE_GOVERNANCE",
+      "effective_at": "2026-08-26T09:15:00+05:30",
+      "title": "Sun Pharma postal ballot / promoter-group reclassification notice",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE_INDEX",
+      "source": "https://sunpharma.com/disclosure-under-regulation-30/",
+      "notes": "Administrative/corporate-governance disclosure; retained as context but deliberately not assigned price direction."
+    },
+    {
+      "id": "SUNPHARMA_POSTAL_AD_2026_08_26",
+      "symbol": "SUNPHARMA",
+      "category": "CORPORATE_GOVERNANCE",
+      "effective_at": "2026-08-27T09:15:00+05:30",
+      "title": "Sun Pharma newspaper advertisement for postal ballot",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE_INDEX",
+      "source": "https://sunpharma.com/disclosure-under-regulation-30/",
+      "notes": "Retained to prevent the archive from silently dropping known disclosures; no directional score."
+    },
+    {
+      "id": "ONGC_DEEPWATER_PLAN_2026_08_31",
+      "symbol": "ONGC",
+      "category": "STRATEGY_CAPEX",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "ONGC outlines major five-year deepwater exploration investment plan",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/business/energy/indias-ongc-invest-1-trillion-rupees-deepwater-exploration-says-chairman-2026-08-31/",
+      "notes": "Strategic investment can be interpreted both positively and as capex burden; therefore no directional score is assigned."
+    },
+    {
+      "id": "ONGC_VENEZUELA_2026_08_31",
+      "symbol": "ONGC",
+      "category": "INTERNATIONAL_OPERATIONS",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "ONGC reported among firms nearing final Venezuela energy agreements",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/business/energy/firms-including-chevron-ongc-ge-vernova-track-sign-final-pacts-venezuela-sources-2026-08-31/",
+      "notes": "Potential agreement, not a completed transaction; no directional score."
+    }
+  ],
+  "known_coverage_notes": {
+    "LTIM": "No material August 10-September 4 company event with sufficiently reliable point-in-time evidence has yet been admitted to v1; market and IT peer context still apply.",
+    "ONGC": "Quarterly results were before the replay window and are reflected only indirectly in price history; two Aug 31 strategic reports are retained from Sep 1 open.",
+    "SBIN": "Q1 FY27 result event is admitted conservatively from Aug 10 open but not given a directional surprise score.",
+    "SUNPHARMA": "Official company disclosure archive supplies dated August events; untimed disclosures become usable next session open."
+  }
+}
