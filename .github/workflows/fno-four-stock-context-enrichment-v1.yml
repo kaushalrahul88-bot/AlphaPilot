@@ -8,6 +8,7 @@ on:
       - 'app/fno_four_stock_context_replay_api.py'
       - 'data/fno_four_stock_context_events_v1.json'
       - 'tests/test_fno_four_stock_context_enrichment_v1.py'
+      - 'tests/test_fno_four_stock_context_replay_v1.py'
       - 'app/__init__.py'
       - '.github/workflows/fno-four-stock-context-enrichment-v1.yml'
   push:
@@ -18,6 +19,7 @@ on:
       - 'app/fno_four_stock_context_replay_api.py'
       - 'data/fno_four_stock_context_events_v1.json'
       - 'tests/test_fno_four_stock_context_enrichment_v1.py'
+      - 'tests/test_fno_four_stock_context_replay_v1.py'
       - 'app/__init__.py'
       - '.github/workflows/fno-four-stock-context-enrichment-v1.yml'
   workflow_dispatch:
@@ -31,7 +33,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: pytest -q tests/test_fno_four_stock_context_enrichment_v1.py
+      - run: pytest -q tests/test_fno_four_stock_context_enrichment_v1.py tests/test_fno_four_stock_context_replay_v1.py
       - run: python -m py_compile app/fno_four_stock_context_enrichment_v1.py app/fno_four_stock_context_replay_v1.py app/fno_four_stock_context_replay_api.py app/__init__.py
 
   replay:
