@@ -1,0 +1,155 @@
+name: F&O V5 Historical Holdout A Dataset
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_market_brain_v5_holdout_a_dataset.py'
+      - 'app/fno_market_brain_v5_holdout_a_dataset_api.py'
+      - 'data/fno_market_brain_v5_holdout_a_knowledge.json'
+      - 'docs/fno_market_brain_v5_holdout_a_protocol.md'
+      - 'tests/test_fno_market_brain_v5_holdout_a_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v5-historical-holdout-a-dataset.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_market_brain_v5_holdout_a_dataset.py'
+      - 'app/fno_market_brain_v5_holdout_a_dataset_api.py'
+      - 'data/fno_market_brain_v5_holdout_a_knowledge.json'
+      - 'docs/fno_market_brain_v5_holdout_a_protocol.md'
+      - 'tests/test_fno_market_brain_v5_holdout_a_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v5-historical-holdout-a-dataset.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_market_brain_v5.py tests/test_fno_market_brain_v5_holdout_a_dataset.py
+      - run: python -m py_compile app/fno_market_brain_v5.py app/fno_market_brain_v5_holdout_a_dataset.py app/fno_market_brain_v5_holdout_a_dataset_api.py app/__init__.py
+
+  build-dataset:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed V5 Holdout A endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..180}; do
+            if curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 --retry-all-errors "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render V5 Holdout A deployment"
+          exit 1
+
+      - name: Start frozen Holdout A dataset build
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/v5-holdout-a-dataset/start" \
+            -o start.json
+          cat start.json
+
+      - name: Poll Holdout A dataset build
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..300}; do
+            if curl -fsS --connect-timeout 10 --max-time 45 --retry 2 --retry-delay 2 --retry-all-errors \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/v5-holdout-a-dataset/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            fi
+            sleep 15
+          done
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and validate frozen historical holdout dataset
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/v5-holdout-a-dataset/result" -o dataset.json
+          python - <<'PY'
+          import json
+          d=json.load(open('dataset.json'))
+          assert d['status']=='COMPLETED'
+          assert d['protocol_id']=='FNO_MARKET_BRAIN_V5_HOLDOUT_A_2026-09-07'
+          assert d['brain_frozen_commit']=='a5a39253c1aa79f6663cd11b41f7d6607b96af90'
+          e=d['experiment']
+          assert e['kind']=='HISTORICAL_HOLDOUT_NOT_FORWARD_TEST'
+          assert [x['symbol'] for x in e['stocks']]==['HDFCBANK','INFY','MARUTI','BHARTIARTL']
+          assert [(w['id'],w['start'],w['end']) for w in e['windows']]==[
+              ('JUNE_2026','2026-06-01','2026-06-12'),
+              ('JULY_2026','2026-07-01','2026-07-14'),
+          ]
+          assert all(w['session_count']>0 for w in e['windows'])
+          assert e['clicks_per_session']==20
+          assert e['observations']==e['session_count']*20*4
+          assert e['same_click_times_across_stocks'] is True
+          assert e['thesis_tracker_reset_each_stock_session'] is True
+          assert e['future_outcomes_resolved'] is False
+          assert e['evaluation_metrics_computed'] is False
+          s=d['safety']
+          assert s['historical_backtest_dataset_only'] is True
+          assert s['forward_test'] is False
+          assert s['completed_candles_only'] is True
+          assert s['point_in_time_context_only'] is True
+          assert s['clicks_deterministic_and_frozen'] is True
+          assert s['thesis_deduplication_enabled'] is True
+          assert s['future_tape_frozen'] is True
+          assert s['future_outcomes_resolved'] is False
+          assert s['evaluation_metrics_computed'] is False
+          assert s['options_read_for_decision'] is False
+          assert s['futures_read_for_decision'] is False
+          assert s['v3_development_rows_used_as_holdout'] is False
+          assert s['live_execution'] is False
+          assert s['capital_committed']==0
+          rows=d['rows']
+          assert len(rows)==e['observations']
+          by_day={}
+          for row in rows:
+              by_day.setdefault(row['trade_date'],set()).add(row['click_at'])
+          assert all(len(clicks)==20 for clicks in by_day.values())
+          summary={
+              'protocol_id':d['protocol_id'],
+              'brain_protocol_id':d['brain_protocol_id'],
+              'brain_frozen_commit':d['brain_frozen_commit'],
+              'experiment':e,
+              'decision_counts':d['decision_counts'],
+              'data_coverage':d['data_coverage'],
+              'context_coverage':d['context_coverage'],
+              'frozen_5m_tape_hashes':d['frozen_5m_tape_hashes'],
+              'safety':s,
+          }
+          json.dump(summary,open('dataset-summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-v5-historical-holdout-a-dataset
+          path: |
+            dataset.json
+            dataset-summary.json
