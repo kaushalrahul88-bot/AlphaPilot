@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
-      COLLECTOR_TOKEN: ${{ secrets.COLLECTOR_TOKEN }}
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
     steps:
       - name: Wait for deployed endpoint
         run: |
