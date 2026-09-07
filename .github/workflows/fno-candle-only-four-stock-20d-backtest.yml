@@ -86,12 +86,16 @@ jobs:
           d=json.load(open("result.json")); e=d["experiment"]
           assert d["status"]=="COMPLETED", d.get("status")
           assert e["session_count"]==20 and e["clicks_per_day"]==20, e
+          assert len(e["session_count_per_stock"])==4, e
+          assert all(v==20 for v in e["session_count_per_stock"].values()), e
+          assert e["observations_per_stock"]==400, e
           assert e["expected_observations"]==1600 and e["observations"]==1600, e
           s=d["safety"]
           assert s["candle_only"] is True and s["option_data_required"] is False
+          assert s["common_session_requirement"] is False
           for key in ("option_chain_read","option_premium_read","option_oi_read","iv_read","greeks_read","futures_read","news_read","live_execution"):
               assert s[key] is False, (key,s)
-          summary={k:d[k] for k in ("experiment","data_coverage","brain_input_audit","summary","by_stock","methodology","safety")}
+          summary={k:d[k] for k in ("experiment","data_coverage","brain_input_audit","summary","by_stock","by_trade_date","methodology","safety")}
           json.dump(summary,open("summary.json","w"),indent=2,sort_keys=True)
           print(json.dumps(summary,indent=2,sort_keys=True))
           PY
