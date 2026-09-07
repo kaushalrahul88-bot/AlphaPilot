@@ -38,6 +38,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .fno_current_expiry_history_probe_api import register_fno_current_expiry_history_probe_routes  # noqa: E402
     from .fno_four_stock_context_replay_api import register_fno_four_stock_context_replay_routes  # noqa: E402
     from .fno_four_stock_context_replay_api_v2 import register_fno_four_stock_context_replay_v2_routes  # noqa: E402
+    from .fno_market_brain_v3_current_expiry_backtest_api import register_fno_market_brain_v3_current_expiry_backtest_routes  # noqa: E402
     from .fno_market_brain_v3_current_expiry_dataset_api import register_fno_market_brain_v3_current_expiry_dataset_routes  # noqa: E402
     from .fno_prospective_api_v1 import register_fno_prospective_routes, register_fno_prospective_startup  # noqa: E402
     from .fno_underlying_prospective_api_v2 import register_fno_underlying_prospective_v2_routes, register_fno_underlying_prospective_v2_startup  # noqa: E402
@@ -68,6 +69,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_fno_four_stock_context_replay_routes(_app, _settings, _collector_auth)
     register_fno_four_stock_context_replay_v2_routes(_app, _settings, _collector_auth)
     register_fno_market_brain_v3_current_expiry_dataset_routes(_app, _settings, _collector_auth)
+    register_fno_market_brain_v3_current_expiry_backtest_routes(_app, _settings, _collector_auth)
     register_fno_current_expiry_history_probe_routes(_app, _settings, _collector_auth)
     register_fno_underlying_random_backtest_routes(_app, _settings, _collector_auth)
     register_crypto_btc_dashboard_routes(_app, _settings)
