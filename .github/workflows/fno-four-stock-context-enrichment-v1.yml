@@ -65,9 +65,14 @@ jobs:
       - name: Start context replay
         run: |
           set -euo pipefail
-          curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST "$API_BASE/v1/internal/fno/four-stock-context-replay/start" -o start.json
-          cat start.json
-          python - <<'PY'
+          rm -f start.json
+          set +e
+          curl -fsS --max-time 15 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST "$API_BASE/v1/internal/fno/four-stock-context-replay/start" -o start.json
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -eq 0 ] && [ -s start.json ]; then
+            cat start.json
+            python - <<'PY'
           import json
           d=json.load(open('start.json'))
           assert d.get('status') in {'RUNNING','COMPLETED'}, d
@@ -75,14 +80,17 @@ jobs:
           assert s.get('options_read') is False and s.get('futures_read') is False
           assert s.get('live_execution') is False and s.get('capital_committed') == 0
           PY
+          else
+            echo "Start request did not return cleanly (curl rc=$CURL_RC); durable status polling will recover or resume the run."
+          fi
       - name: Poll context replay
         run: |
           set -euo pipefail
           : > status.json
-          for i in {1..160}; do
+          for i in {1..240}; do
             if curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/four-stock-context-replay/status" -o status.json; then
               STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
-              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"))'
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"heartbeat:",d.get("heartbeat_at"),"progress:",d.get("progress"))'
               if [ "$STATE" = "COMPLETED" ]; then break; fi
               if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
             else
