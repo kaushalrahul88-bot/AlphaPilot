@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 import httpx
 
 from .commodity_backtest import _fetch_chunked
 from .fno_15m_candle_checkpoint_v2 import _refresh_after_401
+
+
+FetchChunked = Callable[..., Awaitable[list[list]]]
 
 
 async def _throttle_if_available(provider) -> None:
@@ -24,6 +30,8 @@ async def fetch_chunked_auth_safe(
     interval_minutes,
     start,
     end,
+    *,
+    fetcher: FetchChunked | None = None,
 ):
     """Fetch commodity history with one fail-closed Groww auth refresh retry.
 
@@ -34,15 +42,19 @@ async def fetch_chunked_auth_safe(
 
     - enter the shared account throttle before each fetch attempt;
     - register an account-wide cooldown if the raw helper returns HTTP 429;
-    - on the first HTTP 401, clear the stale static/session credential through the
-      already-tested Groww historical refresh path and retry the same request once;
+    - on the first HTTP 401, clear stale session credentials through the already
+      tested Groww historical refresh path and retry the exact same fetch once;
     - if the retry still fails, propagate the upstream error rather than accepting
       an empty or partial tape.
+
+    ``fetcher`` exists only to preserve the existing Copper PIT test seam; runtime
+    defaults to the unchanged commodity ``_fetch_chunked`` implementation.
     """
+    candle_fetcher = fetcher or _fetch_chunked
 
     async def attempt():
         await _throttle_if_available(provider)
-        return await _fetch_chunked(
+        return await candle_fetcher(
             provider,
             contract,
             interval_minutes,
@@ -70,7 +82,7 @@ async def fetch_chunked_auth_safe(
         raise
 
 
-def architecture_contract():
+def architecture_contract() -> dict[str, Any]:
     return {
         "version": "COMMODITY_HISTORY_AUTH_SAFE_V1",
         "historical_fetch_semantics_changed": False,
