@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from functools import lru_cache
+from heapq import nsmallest
 from math import sqrt
 from statistics import mean
 
@@ -51,6 +53,32 @@ def _distance(query: dict, candidate: dict, scales: dict) -> float:
         if a and b and "UNKNOWN" not in {str(a), str(b)}:
             parts.append(0.0 if a == b else 1.0)
     return sqrt(sum(parts) / len(parts)) if parts else 999.0
+
+
+@lru_cache(maxsize=32768)
+def _parsed_resolved_at(value: str):
+    """Cache immutable historical outcome timestamps across repeated PIT queries."""
+    return parse_ist_timestamp(value)
+
+
+def _stable_nearest(experiences: list[dict], query: dict, scales: dict, k: int) -> list[dict]:
+    """Return the same stable top-k as sorted(..., key=distance)[:k], with less work.
+
+    The original full sort is stable: equal-distance candidates retain their source
+    order. Including the source index as the second key preserves that exact tie
+    behavior while heap-based selection avoids sorting the full causal memory pool.
+    This is a runtime optimization only; distances, k, candidates and ordering are
+    unchanged.
+    """
+    if k <= 0:
+        return []
+    indexed = enumerate(experiences)
+    selected = nsmallest(
+        k,
+        indexed,
+        key=lambda item: (_distance(query, item[1], scales), item[0]),
+    )
+    return [item[1] for item in selected]
 
 
 def _event_path(day_rows: list[list], start_index: int, direction: str, atr_points: float) -> dict | None:
@@ -140,7 +168,7 @@ def _adaptive_k(prior_count: int) -> int:
 
 def query_memory(experiences: list[dict], snapshot: dict, click_at) -> dict:
     click = parse_ist_timestamp(click_at)
-    safe = [e for e in experiences if parse_ist_timestamp(e["resolved_at"]) < click]
+    safe = [e for e in experiences if _parsed_resolved_at(str(e["resolved_at"])) < click]
     if len(safe) < 40:
         return {"status": "INSUFFICIENT_MEMORY", "prior_resolved_experiences": len(safe)}
 
@@ -152,7 +180,7 @@ def query_memory(experiences: list[dict], snapshot: dict, click_at) -> dict:
     }
     scales = _scales(safe)
     k = _adaptive_k(len(safe))
-    nearest = sorted(safe, key=lambda e: _distance(query, e, scales))[:k]
+    nearest = _stable_nearest(safe, query, scales, k)
     by_direction = {}
     for direction in ("BULLISH", "BEARISH"):
         sample = [e for e in nearest if e["direction"] == direction]
