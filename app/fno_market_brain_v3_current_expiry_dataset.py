@@ -36,6 +36,11 @@ CLICK_END = time(14, 0)
 CLICK_STEP_MINUTES = 5
 FETCH_ATTEMPTS = 4
 RETRY_DELAYS_SECONDS = (2, 5, 10)
+# Keep every provider request materially smaller than the baseline helper's own
+# maximum chunk. This prevents one transient timeout late in a long history
+# request from discarding all earlier successful history. The frozen time range
+# and candle contents are unchanged; only transport recovery is different.
+HISTORY_WINDOW_DAYS = {"5m": 5, "15m": 10, "1h": 45}
 KNOWLEDGE_PATH = Path(__file__).resolve().parent.parent / "data" / "fno_market_brain_v3_new_stock_knowledge.json"
 
 FROZEN_STOCKS = (
@@ -77,22 +82,75 @@ def _sessions(candles: list[list]) -> list[date]:
     return sorted(output)
 
 
+def _history_windows(timeframe: str, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """Partition the exact frozen range into contiguous, non-overlapping windows."""
+    step = timedelta(minutes=baseline.TF_MIN[timeframe])
+    span = timedelta(days=HISTORY_WINDOW_DAYS[timeframe])
+    windows: list[tuple[datetime, datetime]] = []
+    cursor = start
+    while cursor <= end:
+        window_end = min(end, cursor + span - step)
+        windows.append((cursor, window_end))
+        if window_end >= end:
+            break
+        cursor = window_end + step
+    return windows
+
+
 async def _fetch(provider, symbol: str, timeframe: str, start: datetime, end: datetime, progress=None):
-    failures = []
-    for attempt in range(1, FETCH_ATTEMPTS + 1):
-        try:
-            rows = await baseline._chunk(provider, symbol, timeframe, start, end)
-            if rows:
-                return rows, failures
-            failures.append(f"attempt {attempt}: EMPTY_TAPE")
-        except Exception as exc:
-            failures.append(f"attempt {attempt}: {exc.__class__.__name__}: {str(exc)[:400]}")
-        if attempt < FETCH_ATTEMPTS:
-            delay = RETRY_DELAYS_SECONDS[attempt - 1]
-            if progress:
-                await progress({"stage": "RETRYING_HISTORY", "symbol": symbol, "timeframe": timeframe, "next_attempt": attempt + 1, "delay_seconds": delay, "last_error": failures[-1]})
-            await asyncio.sleep(delay)
-    return [], failures
+    failures: list[str] = []
+    merged: list[list] = []
+    windows = _history_windows(timeframe, start, end)
+
+    for window_index, (window_start, window_end) in enumerate(windows, start=1):
+        segment_rows: list[list] = []
+        for attempt in range(1, FETCH_ATTEMPTS + 1):
+            try:
+                segment_rows = await baseline._chunk(
+                    provider, symbol, timeframe, window_start, window_end
+                )
+                if segment_rows:
+                    break
+                failures.append(
+                    f"window {window_index}/{len(windows)} attempt {attempt}: EMPTY_TAPE"
+                )
+            except Exception as exc:
+                failures.append(
+                    f"window {window_index}/{len(windows)} attempt {attempt}: "
+                    f"{exc.__class__.__name__}: {str(exc)[:400]}"
+                )
+
+            if attempt < FETCH_ATTEMPTS:
+                delay = RETRY_DELAYS_SECONDS[attempt - 1]
+                if progress:
+                    await progress({
+                        "stage": "RETRYING_HISTORY",
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "window": window_index,
+                        "windows": len(windows),
+                        "window_start": window_start.isoformat(),
+                        "window_end": window_end.isoformat(),
+                        "next_attempt": attempt + 1,
+                        "delay_seconds": delay,
+                        "last_error": failures[-1],
+                    })
+                await asyncio.sleep(delay)
+
+        if not segment_rows:
+            return [], failures
+
+        merged.extend(segment_rows)
+        if progress:
+            await progress({
+                "stage": "FETCHING_HISTORY_WINDOW",
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "completed_windows": window_index,
+                "total_windows": len(windows),
+            })
+
+    return baseline._merge(merged), failures
 
 
 def _event_applies(event: Mapping[str, Any], symbol: str, category: str) -> bool:
@@ -271,6 +329,7 @@ def architecture_contract() -> dict[str, Any]:
         "options_read_for_decision": False,
         "futures_read_for_decision": False,
         "v3_thresholds_changed": False,
+        "history_fetch_recovery": "SEGMENTED_RETRY_SAME_FROZEN_RANGE",
         "live_execution": False,
         "capital_committed": 0,
     }
