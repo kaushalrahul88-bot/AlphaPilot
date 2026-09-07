@@ -13,12 +13,14 @@ from psycopg.types.json import Jsonb
 from .fno_v1_current_expiry_comparator import (
     PROTOCOL_ID,
     SOURCE_PROTOCOL_ID,
+    V3_EVALUATION_PROTOCOL_ID,
     architecture_contract,
     evaluate_frozen_dataset,
 )
 
 UTC = timezone.utc
 SOURCE_RUN_TABLE = "fno_market_brain_v3_current_expiry_dataset_runs"
+V3_EVALUATION_RUN_TABLE = "fno_market_brain_v3_current_expiry_backtest_runs"
 RUN_TABLE = "fno_v1_current_expiry_comparator_runs"
 SQL = f"""
 CREATE TABLE IF NOT EXISTS {RUN_TABLE}(
@@ -77,11 +79,12 @@ def _row(row):
 
 
 def _latest_source_sync(url):
+    """Pin the latest completed frozen source, ignoring duplicate rebuilds in flight."""
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT run_id,deployment_commit,status,error FROM {SOURCE_RUN_TABLE} "
-                "WHERE protocol_id=%s ORDER BY started_at DESC LIMIT 1",
+                "WHERE protocol_id=%s AND status='COMPLETED' ORDER BY started_at DESC LIMIT 1",
                 (SOURCE_PROTOCOL_ID,),
             )
             row = cursor.fetchone()
@@ -113,6 +116,23 @@ def _source_result_sync(url, run_id):
 
 async def _source_result(url, run_id):
     return await asyncio.to_thread(_source_result_sync, url, run_id)
+
+
+def _objective_result_sync(url, source_run_id):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT result_json FROM {V3_EVALUATION_RUN_TABLE} "
+                "WHERE source_run_id=%s AND protocol_id=%s AND status='COMPLETED' "
+                "ORDER BY started_at DESC LIMIT 1",
+                (source_run_id, V3_EVALUATION_PROTOCOL_ID),
+            )
+            row = cursor.fetchone()
+    return row[0] if row and row[0] else None
+
+
+async def _objective_result(url, source_run_id):
+    return await asyncio.to_thread(_objective_result_sync, url, source_run_id)
 
 
 def _latest_sync(url):
@@ -219,8 +239,14 @@ async def _run(settings, run_id, source):
         source_result = await _source_result(settings.database_url, source["run_id"])
         if not source_result:
             raise RuntimeError("SOURCE_DATASET_RESULT_MISSING")
+
+        await _update(settings.database_url, run_id, {"stage": "LOADING_RESOLVED_OBJECTIVE_PATHS"})
+        objective_result = await _objective_result(settings.database_url, source["run_id"])
+        if not objective_result:
+            raise RuntimeError("COMPLETED_V3_OBJECTIVE_RESULT_MISSING")
+
         await _update(settings.database_url, run_id, {"stage": "EVALUATING_FROZEN_V1_LOGIC"})
-        result = await asyncio.to_thread(evaluate_frozen_dataset, source_result)
+        result = await asyncio.to_thread(evaluate_frozen_dataset, source_result, objective_result)
         await _complete(settings.database_url, run_id, result)
     except asyncio.CancelledError:
         raise
@@ -273,9 +299,7 @@ def register_fno_v1_current_expiry_comparator_routes(app, settings, collector_au
         await _ensure(settings.database_url)
         source = await _latest_source(settings.database_url)
         if not source:
-            raise HTTPException(409, detail={"status": "SOURCE_DATASET_MISSING"})
-        if source.get("status") != "COMPLETED":
-            raise HTTPException(409, detail={"status": "SOURCE_DATASET_NOT_COMPLETED", "source": source})
+            raise HTTPException(409, detail={"status": "COMPLETED_SOURCE_DATASET_MISSING"})
 
         latest = await _latest(settings.database_url)
         if latest and latest.get("status") == "RUNNING":
