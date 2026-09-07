@@ -1,0 +1,252 @@
+{
+  "protocol": "FNO_FOUR_STOCK_CONTEXT_ENRICHMENT_V2_2026-09-07",
+  "policy": {
+    "timestamp_rule": "Use independently verified publication/exchange timestamps when available. If only a calendar date is verified, make the event usable from the next NSE session open at 09:15 IST.",
+    "direction_rule": "Assign direction only from information intrinsic to the event at publication time. Administrative/strategic items with ambiguous valuation impact remain NEUTRAL. No subsequent price action is used.",
+    "scope_rule": "Events may apply to MARKET, one stock, or a frozen sector scope. Sector events are eligible only for the matching frozen stock sector.",
+    "outcome_used": false,
+    "thresholds_retuned_from_v1_results": false
+  },
+  "events": [
+    {
+      "id": "RBI_MPC_2026_08_05",
+      "symbol": "MARKET",
+      "category": "MACRO_MONETARY_POLICY",
+      "effective_at": "2026-08-05T11:08:00+05:30",
+      "title": "RBI keeps repo rate at 5.25% and maintains neutral stance",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_RBI_PLUS_TIMESTAMPED_REPORT",
+      "source": "https://m.rbi.org.in/scripts/bs_speechesview.aspx?id=1352"
+    },
+    {
+      "id": "SBIN_Q1FY27_BEAT_2026_08_07",
+      "symbol": "SBIN",
+      "category": "FINANCIAL_RESULTS",
+      "effective_at": "2026-08-10T09:15:00+05:30",
+      "title": "SBI Q1 FY27 profit beat consensus with healthy loan growth",
+      "direction": "POSITIVE",
+      "weight": 2,
+      "source_quality": "TIER1_NEWS_WITH_CONSENSUS",
+      "source": "https://www.reuters.com/world/india/state-bank-india-posts-higher-quarterly-profit-2026-08-07/",
+      "notes": "Reuters reported net profit above LSEG consensus. Conservative next-session-open effective time prevents assuming the intraday Aug 7 release timestamp for the frozen Aug 10-start replay."
+    },
+    {
+      "id": "MARKET_SOFT_US_JOBS_2026_08_10",
+      "symbol": "MARKET",
+      "category": "GLOBAL_MACRO",
+      "effective_at": "2026-08-10T07:55:00+05:30",
+      "title": "Soft US jobs data eases near-term Fed hike concern for Indian equities",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.brecorder.com/news/40434080/indian-shares-set-to-gain-as-soft-us-jobs-data-offsets-oil-worries"
+    },
+    {
+      "id": "MARKET_OIL_RISK_2026_08_10",
+      "symbol": "MARKET",
+      "category": "OIL_GEOPOLITICS",
+      "effective_at": "2026-08-10T07:55:00+05:30",
+      "title": "Higher crude and Hormuz uncertainty weigh on Indian market sentiment",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.brecorder.com/news/40434080/indian-shares-set-to-gain-as-soft-us-jobs-data-offsets-oil-worries"
+    },
+    {
+      "id": "LTM_ESG_RATING_2026_08_11",
+      "symbol": "LTIM",
+      "category": "ESG_RATING",
+      "effective_at": "2026-08-11T12:40:00+05:30",
+      "title": "LTM discloses ESG rating issued by NSE Sustainability Ratings & Analytics",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "LTM_ANALYST_MEET_2026_08_12",
+      "symbol": "LTIM",
+      "category": "INVESTOR_RELATIONS",
+      "effective_at": "2026-08-13T09:15:00+05:30",
+      "title": "LTM schedule of analyst/institutional investor meeting",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "LTM_SUSTAINABILITY_REPORT_2026_08_14",
+      "symbol": "LTIM",
+      "category": "CORPORATE_DISCLOSURE",
+      "effective_at": "2026-08-14T11:42:00+05:30",
+      "title": "LTM submits FY2025-26 sustainability report",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "MARKET_MIDEAST_OIL_PRESSURE_2026_08_17",
+      "symbol": "MARKET",
+      "category": "OIL_GEOPOLITICS",
+      "effective_at": "2026-08-18T09:15:00+05:30",
+      "title": "Indian shares face continued pressure from elevated crude and Iran-war uncertainty",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.brecorder.com/news/40435201"
+    },
+    {
+      "id": "SUNPHARMA_LIPITOR_2026_08_17",
+      "symbol": "SUNPHARMA",
+      "category": "LEGAL_REGULATORY",
+      "effective_at": "2026-08-18T09:15:00+05:30",
+      "title": "Sun Pharma favorable appellate ruling in Lipitor antitrust litigation",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE_INDEX",
+      "source": "https://sunpharma.com/disclosure-under-regulation-30/"
+    },
+    {
+      "id": "LTM_AI_CONTRACT_PRESSURE_2026_08_21",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "SECTOR_FUNDAMENTAL",
+      "effective_at": "2026-08-21T09:15:00+05:30",
+      "title": "AI-driven pricing and contract pressure highlighted across Indian IT services",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://in.marketscreener.com/news/ai-reshapes-india-s-it-services-sector-contracts-as-clients-demand-more-for-less-ce7859d3de8cfe2d"
+    },
+    {
+      "id": "LTM_KOTAK_DOWNGRADE_2026_08_21",
+      "symbol": "LTIM",
+      "category": "BROKER_RATING",
+      "effective_at": "2026-08-21T10:38:00+05:30",
+      "title": "Kotak Institutional Equities downgrades LTM to Sell from Reduce",
+      "direction": "NEGATIVE",
+      "weight": 2,
+      "source_quality": "TIMESTAMPED_MARKET_REPORT",
+      "source": "https://www.moneycontrol.com/news/business/markets/kotak-turns-cautious-on-indian-it-downgrades-infosys-tcs-and-ltm-prefers-challengers-amid-ai-shift-14012060.html"
+    },
+    {
+      "id": "LTM_ACQUISITION_UPDATE_2026_08_22",
+      "symbol": "LTIM",
+      "category": "M_AND_A",
+      "effective_at": "2026-08-24T09:15:00+05:30",
+      "title": "LTM exchange update on previously announced Randstad technology consulting acquisition",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "LTM_ANALYST_MEET_2026_08_24",
+      "symbol": "LTIM",
+      "category": "INVESTOR_RELATIONS",
+      "effective_at": "2026-08-25T09:15:00+05:30",
+      "title": "LTM schedule of analyst/institutional investor meeting",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "SUNPHARMA_POSTAL_BALLOT_2026_08_25",
+      "symbol": "SUNPHARMA",
+      "category": "CORPORATE_GOVERNANCE",
+      "effective_at": "2026-08-26T09:15:00+05:30",
+      "title": "Sun Pharma postal ballot and promoter-group reclassification notice",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE_INDEX",
+      "source": "https://sunpharma.com/disclosure-under-regulation-30/"
+    },
+    {
+      "id": "IT_H1B_COST_CONCERN_2026_08_26",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "SECTOR_POLICY_RISK",
+      "effective_at": "2026-08-27T09:15:00+05:30",
+      "title": "Proposed US H-1B fee changes raise cost concerns for Indian IT services",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/world/india/indian-shares-seen-higher-oil-slides-strait-hormuz-reopening-hopes-2026-08-26/"
+    },
+    {
+      "id": "LTM_PRESS_RELEASE_2026_08_27",
+      "symbol": "LTIM",
+      "category": "CORPORATE_PRESS_RELEASE",
+      "effective_at": "2026-08-27T12:21:00+05:30",
+      "title": "LTM files Regulation 30 press/media release",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "EXCHANGE_ANNOUNCEMENT_INDEX",
+      "source": "https://www.moneycontrol.com/company-notices/ltm/notices/LI12/"
+    },
+    {
+      "id": "IT_NVIDIA_UPBEAT_2026_08_28",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "GLOBAL_TECH_SENTIMENT",
+      "effective_at": "2026-08-28T11:04:00+05:30",
+      "title": "Indian IT sentiment improves after Nvidia strong revenue outlook",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "TIMESTAMPED_MARKET_REPORT",
+      "source": "https://www.business-standard.com/markets/news/nifty-it-index-soars-3-ltm-coforge-tcs-techm-gain-up-to-5-here-s-why-126082800283_1.html"
+    },
+    {
+      "id": "ONGC_DEEPWATER_PLAN_2026_08_31",
+      "symbol": "ONGC",
+      "category": "STRATEGY_CAPEX",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "ONGC outlines major five-year deepwater exploration investment plan",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/business/energy/indias-ongc-invest-1-trillion-rupees-deepwater-exploration-says-chairman-2026-08-31/"
+    },
+    {
+      "id": "ONGC_VENEZUELA_2026_08_31",
+      "symbol": "ONGC",
+      "category": "INTERNATIONAL_OPERATIONS",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "ONGC reported among firms nearing final Venezuela energy agreements",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/business/energy/firms-including-chevron-ongc-ge-vernova-track-sign-final-pacts-venezuela-sources-2026-08-31/"
+    },
+    {
+      "id": "MARKET_FPI_AUGUST_INFLOW_2026_08_31",
+      "symbol": "MARKET",
+      "category": "FUND_FLOWS",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "August foreign buying in Indian equities reaches 23-month high",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_DEPOSITORY_DATA",
+      "source": "https://www.reuters.com/world/india/foreign-buying-indian-stocks-hits-23-month-high-august-rbi-data-shows-2026-08-31/"
+    },
+    {
+      "id": "SUNPHARMA_US_DRUG_PRICING_2026_09_01",
+      "symbol": "SUNPHARMA",
+      "category": "US_DRUG_PRICING_POLICY",
+      "effective_at": "2026-09-02T09:15:00+05:30",
+      "title": "Sun Pharma named among companies agreeing to US drug-pricing concessions with policy relief",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/business/healthcare-pharmaceuticals/global-pharma-companies-that-have-publicly-announced-trump-drug-pricing-2026-09-01/",
+      "notes": "Price concessions and policy/tariff relief have offsetting valuation implications, so no directional score is assigned."
+    }
+  ],
+  "coverage_notes": {
+    "ONGC": "Company strategic news plus market/oil context; ambiguous capex and Venezuela items remain neutral.",
+    "LTIM": "Adds timestamped exchange announcements, a stock-specific downgrade, IT-sector AI pressure, H-1B policy risk and Nvidia-driven positive sector sentiment.",
+    "SBIN": "Adds consensus-qualified Q1 profit beat plus RBI/market context.",
+    "SUNPHARMA": "Retains official corporate disclosures, favorable litigation outcome and US drug-pricing policy context.",
+    "MARKET": "Adds selected pre-market or conservatively next-session macro, oil and fund-flow context. Intraday market movement remains sourced from completed cash candles rather than retrospective news explanations."
+  }
+}
