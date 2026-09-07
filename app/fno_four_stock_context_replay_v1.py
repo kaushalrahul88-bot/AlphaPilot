@@ -85,7 +85,7 @@ def _context_audit(rows, history_errors, event_count):
     }
 
 
-async def run_four_stock_context_replay(provider, baseline_result):
+async def run_four_stock_context_replay(provider, baseline_result, progress_callback=None):
     if not isinstance(baseline_result, dict) or baseline_result.get("status") != "COMPLETED":
         return {"protocol_id": PROTOCOL_ID, "status": "VALIDATED_BASELINE_REQUIRED", "safety": architecture_contract()}
     base_rows = baseline_result.get("rows") or []
@@ -105,13 +105,31 @@ async def run_four_stock_context_replay(provider, baseline_result):
     symbols = tuple(sorted(set(CONTEXT_SYMBOLS).union(baseline.STOCKS)))
     histories = {}
     errors = []
-    for symbol in symbols:
+    total_symbols = len(symbols)
+
+    for index, symbol in enumerate(symbols, start=1):
+        if progress_callback:
+            await progress_callback({
+                "stage": "FETCHING_CONTEXT",
+                "current_symbol": symbol,
+                "completed_symbols": index - 1,
+                "total_symbols": total_symbols,
+            })
         try:
             histories[symbol] = await baseline._chunk(provider, symbol, "15m", start, end)
             if not histories[symbol]:
                 errors.append({"symbol": symbol, "error": "EMPTY_15M_CONTEXT_TAPE"})
         except Exception as exc:
             errors.append({"symbol": symbol, "error": f"{exc.__class__.__name__}: {str(exc)[:500]}"})
+        if progress_callback:
+            await progress_callback({
+                "stage": "FETCHING_CONTEXT",
+                "current_symbol": symbol,
+                "completed_symbols": index,
+                "total_symbols": total_symbols,
+                "candles_for_symbol": len(histories.get(symbol) or []),
+                "history_errors": len(errors),
+            })
 
     required = {"NIFTY", *baseline.STOCKS}
     missing_required = sorted(symbol for symbol in required if not histories.get(symbol))
@@ -126,7 +144,15 @@ async def run_four_stock_context_replay(provider, baseline_result):
 
     events = _load_events()
     rows = []
-    for base_row in base_rows:
+    if progress_callback:
+        await progress_callback({
+            "stage": "ENRICHING_CLICKS",
+            "completed_observations": 0,
+            "total_observations": len(base_rows),
+            "event_archive_events": len(events),
+        })
+
+    for index, base_row in enumerate(base_rows, start=1):
         click = datetime.fromisoformat(str(base_row["click_at"]))
         symbol = str(base_row["symbol"])
         context = context_at(symbol, click, histories, histories, events)
@@ -143,7 +169,15 @@ async def run_four_stock_context_replay(provider, baseline_result):
             "context": context,
             "outcome": outcome_for_action(base_row["outcome"], action),
         })
+        if progress_callback and (index % 100 == 0 or index == len(base_rows)):
+            await progress_callback({
+                "stage": "ENRICHING_CLICKS",
+                "completed_observations": index,
+                "total_observations": len(base_rows),
+            })
 
+    if progress_callback:
+        await progress_callback({"stage": "SUMMARIZING", "observations": len(rows)})
     summary = _summarize(rows)
     baseline_summary = baseline_result.get("summary") or {}
     trade_dates = sorted({row["trade_date"] for row in rows})
