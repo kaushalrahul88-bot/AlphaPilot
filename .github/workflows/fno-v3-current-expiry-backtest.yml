@@ -1,0 +1,131 @@
+name: F&O V3 Current-Expiry Backtest
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_market_brain_v3_current_expiry_backtest.py'
+      - 'app/fno_market_brain_v3_current_expiry_backtest_api.py'
+      - 'tests/test_fno_market_brain_v3_current_expiry_backtest.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v3-current-expiry-backtest.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_market_brain_v3_current_expiry_backtest.py'
+      - 'app/fno_market_brain_v3_current_expiry_backtest_api.py'
+      - 'tests/test_fno_market_brain_v3_current_expiry_backtest.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v3-current-expiry-backtest.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_market_brain_v3.py tests/test_fno_market_brain_v3_current_expiry_dataset.py tests/test_fno_market_brain_v3_current_expiry_backtest.py
+      - run: python -m py_compile app/fno_market_brain_v3_current_expiry_backtest.py app/fno_market_brain_v3_current_expiry_backtest_api.py app/__init__.py
+
+  backtest:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed V3 backtest endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys;p=json.load(open("openapi.json")).get("paths",{});sys.exit(0 if "/v1/internal/fno/v3-current-expiry-backtest/start" in p else 1)'; then
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render V3 backtest deployment"
+          exit 1
+
+      - name: Start frozen V3 backtest
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST "$API_BASE/v1/internal/fno/v3-current-expiry-backtest/start" -o start.json
+          cat start.json
+
+      - name: Poll V3 backtest
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..120}; do
+            if curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/v3-current-expiry-backtest/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            fi
+            sleep 10
+          done
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and validate V3 backtest result
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 300 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/v3-current-expiry-backtest/result" -o result.json
+          python - <<'PY'
+          import json
+          d=json.load(open('result.json'))
+          assert d['status']=='COMPLETED'
+          assert d['protocol_id']=='FNO_MARKET_BRAIN_V3_CURRENT_EXPIRY_BACKTEST_V1_2026-09-07'
+          src=d['source']
+          assert src['protocol_id']=='FNO_V3_NEW_STOCK_CURRENT_EXPIRY_DATASET_2026-09-07'
+          assert src['stocks']==['HDFCBANK','INFY','MARUTI','BHARTIARTL']
+          assert src['expiry_cycle_start']=='2026-08-26'
+          assert src['data_frozen_through']=='2026-09-07'
+          assert src['session_count']==9
+          assert src['clicks_per_session']==20
+          assert src['observations']==720
+          c=d['criteria']
+          assert c['horizons']==['15m','30m','60m','90m','EOD']
+          assert c['no_trade_large_move_thresholds_pct']==[0.5,1.0]
+          assert c['new_pass_threshold_added'] is False
+          assert c['atr_expansion_gate_added'] is False
+          assert c['bootstrap_gate_added'] is False
+          s=d['safety']
+          assert s['source_decisions_recomputed'] is False
+          assert s['source_decisions_mutated'] is False
+          assert s['source_tape_hashes_verified'] is True
+          assert s['same_outcome_resolver_as_first_four_stock_replay'] is True
+          assert s['options_read'] is False
+          assert s['futures_read'] is False
+          assert s['new_strategy_thresholds_added'] is False
+          summary={
+            'protocol_id':d['protocol_id'],
+            'source':src,
+            'criteria':c,
+            'summary':d['summary'],
+            'by_stock':d['by_stock'],
+            'by_day':d['by_day'],
+            'decision_diagnostics':d['decision_diagnostics'],
+            'safety':s,
+          }
+          json.dump(summary,open('summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-v3-current-expiry-backtest-v1
+          path: |
+            result.json
+            summary.json
