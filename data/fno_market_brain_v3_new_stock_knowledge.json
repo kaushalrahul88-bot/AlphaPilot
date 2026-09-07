@@ -9,6 +9,7 @@
   "policy": {
     "use": "Static stock knowledge may classify drivers and peers; only point-in-time events and pre-click market data may influence V3 decisions.",
     "unknown_intraday_event_time": "NEXT_NSE_SESSION_OPEN",
+    "direction_rule": "Direction is assigned only from the event's intrinsic information available at publication time. Ambiguous events remain NEUTRAL with zero weight; subsequent price action is never used.",
     "outcomes_used": false,
     "future_bars_used_for_decision": false,
     "options_used_for_decision": false,
@@ -25,16 +26,16 @@
     "INFY": {
       "category": "INFORMATION_TECHNOLOGY",
       "business": "Global IT services and consulting company with material North American enterprise exposure.",
-      "primary_drivers": ["large_deal_wins", "discretionary_IT_spending", "US_macro_and_rates", "USD_INR", "operating_margin", "utilisation", "AI_and_automation_demand", "client_concentration"],
+      "primary_drivers": ["large_deal_wins", "discretionary_IT_spending", "US_macro_and_rates", "USD_INR", "operating_margin", "utilisation", "AI_and_automation_demand", "client_concentration", "H1B_and_US_immigration_costs"],
       "peer_basket": ["TCS", "HCLTECH", "WIPRO", "TECHM"],
-      "source_urls": ["https://www.infosys.com/investors/reports-filings/exchange-filings.html", "https://www.infosys.com/investors/investor-services/investor-calendar-fy-27.html"]
+      "source_urls": ["https://www.infosys.com/investors/reports-filings/exchange-filings.html", "https://www.infosys.com/investors/investor-services/investor-calendar-fy-27.html", "https://www.reuters.com/legal/government/trump-administration-moves-impose-more-than-100000-fee-h-1b-worker-visas-2026-08-24/"]
     },
     "MARUTI": {
       "category": "PASSENGER_AUTOMOBILES",
       "business": "Indian passenger-vehicle manufacturer with domestic, export, CNG, hybrid and EV exposure.",
       "primary_drivers": ["monthly_vehicle_sales", "dealer_inventory", "input_costs", "pricing", "fuel_and_E20_policy", "interest_rates", "festive_demand", "exports", "model_mix"],
       "peer_basket": ["M&M", "EICHERMOT", "ASHOKLEY", "HEROMOTOCO"],
-      "source_urls": ["https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026", "https://www.reuters.com/world/india/indias-maruti-suzuki-hikes-prices-third-time-since-may-2026-09-07/"]
+      "source_urls": ["https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026", "https://www.reuters.com/world/india/indias-maruti-suzuki-hikes-prices-third-time-since-may-2026-09-07/", "https://www.reuters.com/world/india/indias-alternative-fuel-car-sales-top-petrol-cost-e20-concerns-dealers-body-says-2026-09-07/"]
     },
     "BHARTIARTL": {
       "category": "TELECOMMUNICATIONS",
@@ -45,6 +46,18 @@
     }
   },
   "events": [
+    {
+      "id": "IT_H1B_FEE_PRESSURE_2026_08_24",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "US_IMMIGRATION_COST",
+      "effective_at": "2026-08-26T09:15:00+05:30",
+      "title": "US administration proposes a permanent $103,265 fee on new H-1B visas heavily used by technology employers",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/legal/government/trump-administration-moves-impose-more-than-100000-fee-h-1b-worker-visas-2026-08-24/",
+      "notes": "The proposal was public before the August 26 dataset start. It is classified as negative for Indian IT services because it raises potential onsite staffing costs; no later stock-price response is used."
+    },
     {
       "id": "HDFCBANK_LEGAL_LEADERSHIP_2026_08_27",
       "symbol": "HDFCBANK",
@@ -69,17 +82,6 @@
       "source": "https://www.infosys.com/investors/investor-services/investor-calendar-fy-27.html"
     },
     {
-      "id": "INFY_SUBSIDIARY_LIQUIDATIONS_2026_09_03",
-      "symbol": "INFY",
-      "category": "CORPORATE_DISCLOSURE",
-      "effective_at": "2026-09-04T09:15:00+05:30",
-      "title": "Infosys disclosed voluntary liquidation of step-down wholly owned subsidiaries",
-      "direction": "NEUTRAL",
-      "weight": 0,
-      "source_quality": "OFFICIAL_COMPANY_EXCHANGE_FILING",
-      "source": "https://www.infosys.com/investors/reports-filings/exchange-filings.html"
-    },
-    {
       "id": "MARUTI_RAIL_DISPATCH_2026_08_26",
       "symbol": "MARUTI",
       "category": "OPERATIONS_LOGISTICS",
@@ -89,17 +91,6 @@
       "weight": 0,
       "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
       "source": "https://www.marutisuzuki.com/corporate/media"
-    },
-    {
-      "id": "MARUTI_AUGUST_SALES_2026_09_01",
-      "symbol": "MARUTI",
-      "category": "MONTHLY_SALES",
-      "effective_at": "2026-09-02T09:15:00+05:30",
-      "title": "Maruti Suzuki reported 219,220 total vehicle sales in August 2026 and crossed one million FY27 units within five months",
-      "direction": "POSITIVE",
-      "weight": 1,
-      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
-      "source": "https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026"
     },
     {
       "id": "BHARTIARTL_DOT_NOTICES_2026_08_31",
@@ -124,6 +115,88 @@
       "source": "https://www.reuters.com/world/india/foreign-buying-indian-stocks-hits-23-month-high-august-rbi-data-shows-2026-08-31/"
     },
     {
+      "id": "MARUTI_AUGUST_SALES_2026_09_01",
+      "symbol": "MARUTI",
+      "category": "MONTHLY_SALES",
+      "effective_at": "2026-09-02T09:15:00+05:30",
+      "title": "Maruti Suzuki reported 219,220 total vehicle sales in August 2026 and crossed one million FY27 units within five months",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026"
+    },
+    {
+      "id": "MARKET_RBI_FX_INFLOW_2026_09_02",
+      "symbol": "MARKET",
+      "category": "FX_RESERVES_AND_RUPEE_SUPPORT",
+      "effective_at": "2026-09-03T09:15:00+05:30",
+      "title": "RBI reports $136.38 billion of special-scheme foreign inflows, increasing reserve firepower against external shocks",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_OFFICIAL_RBI_DATA",
+      "source": "https://www.reuters.com/world/india/india-draws-13638-billion-forex-inflows-boosting-reserves-2026-09-02/",
+      "notes": "Reuters publication was after the September 2 cash session, so the event becomes usable only from the September 3 open."
+    },
+    {
+      "id": "INFY_SUBSIDIARY_LIQUIDATIONS_2026_09_03",
+      "symbol": "INFY",
+      "category": "CORPORATE_DISCLOSURE",
+      "effective_at": "2026-09-04T09:15:00+05:30",
+      "title": "Infosys disclosed voluntary liquidation of step-down wholly owned subsidiaries",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_EXCHANGE_FILING",
+      "source": "https://www.infosys.com/investors/reports-filings/exchange-filings.html"
+    },
+    {
+      "id": "IT_US_JOBS_HAWKISH_2026_09_04",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "US_MACRO_RATES",
+      "effective_at": "2026-09-07T09:15:00+05:30",
+      "title": "US August payrolls beat expectations, raising the probability of a September Federal Reserve rate hike",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_US_LABOR_DATA",
+      "source": "https://www.reuters.com/business/us-nonfarm-payrolls-surge-august-unemployment-rate-steady-41-2026-09-04/",
+      "notes": "The September 4 US payroll report was public before the next NSE session. Higher US rates are an intrinsic headwind for discretionary client spending and valuations in Indian IT services."
+    },
+    {
+      "id": "MARKET_HORMUZ_WEEKEND_ESCALATION_2026_09_06",
+      "symbol": "MARKET",
+      "category": "OIL_GEOPOLITICS",
+      "effective_at": "2026-09-07T09:15:00+05:30",
+      "title": "US-Iran vessel strikes and sharply reduced Strait of Hormuz traffic raise oil-supply disruption risk",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_SHIPPING_DATA",
+      "source": "https://www.reuters.com/world/middle-east/hormuz-traffic-dips-lowest-since-may-after-us-iranian-strikes-ships-2026-09-06/",
+      "notes": "The escalation occurred over the weekend and was public before the September 7 NSE open. Higher oil and geopolitical risk are an intrinsic macro headwind for Indian equities."
+    },
+    {
+      "id": "MARUTI_ALT_FUEL_SHIFT_2026_09_07",
+      "symbol": "MARUTI",
+      "category": "INDUSTRY_DEMAND_MIX",
+      "effective_at": "2026-09-07T10:05:00+05:30",
+      "title": "Indian alternative-fuel passenger-vehicle sales exceeded petrol sales in August amid E20 concerns and high oil prices",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_FADA_DATA",
+      "source": "https://www.reuters.com/world/india/indias-alternative-fuel-car-sales-top-petrol-cost-e20-concerns-dealers-body-says-2026-09-07/",
+      "notes": "Maruti has material CNG, hybrid and petrol exposure, so the directional valuation impact is mixed and deliberately scored neutral. Reuters publication time was before 10:05 IST."
+    },
+    {
+      "id": "MARUTI_PRICE_HIKE_2026_09_07",
+      "symbol": "MARUTI",
+      "category": "PRICING_AND_COSTS",
+      "effective_at": "2026-09-07T11:40:00+05:30",
+      "title": "Maruti Suzuki announces price increases of up to 20,000 rupees on select models amid elevated costs",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/world/india/indias-maruti-suzuki-hikes-prices-third-time-since-may-2026-09-07/",
+      "notes": "Pricing can support margins but hurt demand, so the event is deliberately neutral. Reuters publication timestamp was approximately 11:39 IST; 11:40 is used as the conservative usable time."
+    },
+    {
       "id": "IT_US_RATE_PRESSURE_2026_09_07",
       "scope": "SECTOR:INFORMATION_TECHNOLOGY",
       "category": "GLOBAL_MACRO",
@@ -133,7 +206,7 @@
       "weight": 1,
       "source_quality": "TIER1_NEWS",
       "source": "https://www.reuters.com/world/india/indian-shares-set-modest-gains-mideast-tensions-keep-investors-wary-2026-09-07/",
-      "notes": "Conservative next-session-open effective time means this event cannot influence September 7 historical clicks."
+      "notes": "Conservative next-session-open effective time means this market-wrap article cannot influence September 7 historical clicks. The separate September 4 US payroll event already captures the information that was genuinely known before the September 7 open."
     }
   ]
 }
