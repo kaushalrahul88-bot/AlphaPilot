@@ -1,0 +1,44 @@
+name: F&O Market Brain V5
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_market_brain_v5.py'
+      - 'tests/test_fno_market_brain_v5.py'
+      - 'docs/fno_market_brain_v5_freeze.md'
+      - '.github/workflows/fno-market-brain-v5.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_market_brain_v5.py'
+      - 'tests/test_fno_market_brain_v5.py'
+      - 'docs/fno_market_brain_v5_freeze.md'
+      - '.github/workflows/fno-market-brain-v5.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - name: Validate V5 unit contract only
+        run: pytest -q tests/test_fno_market_brain_v5.py
+      - name: Compile V5
+        run: python -m py_compile app/fno_market_brain_v5.py
+      - name: Assert no historical or forward evaluator is invoked
+        run: |
+          python - <<'PY'
+          from app import fno_market_brain_v5 as brain
+          c = brain.architecture_contract()
+          assert c['outcomes_read'] is False
+          assert c['future_bars_read'] is False
+          assert c['option_inputs_read'] is False
+          assert c['futures_inputs_read'] is False
+          assert c['historical_holdout_evaluation_run_by_module'] is False
+          assert c['forward_test_run_by_module'] is False
+          assert c['live_execution'] is False
+          print(c)
+          PY
