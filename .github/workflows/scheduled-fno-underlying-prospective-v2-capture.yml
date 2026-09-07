@@ -1,0 +1,46 @@
+name: Scheduled F&O Underlying Prospective V2 Capture
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:30-14:25 IST every five minutes on weekdays. The API persists only the
+    # 20 frozen random slots and refuses retrospective backfill outside grace.
+    - cron: "*/5 4-8 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-fno-underlying-prospective-v2-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Capture due underlying V2 research batch
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl -fsS --max-time 180 \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/underlying-prospective-v2/capture" \
+            -o capture.json
+          cat capture.json
+          python - <<'PY'
+          import json
+          d=json.load(open("capture.json"))
+          assert d.get("live_execution") is False,d
+          assert float(d.get("capital_committed") or 0)==0,d
+          assert d.get("status") in {
+              "SKIPPED_NOT_A_PRECOMMITTED_CLICK",
+              "SKIPPED_MARKET_LIVENESS_UNPROVEN",
+              "CAPTURED","PARTIAL","FAILED",
+          },d
+          if d.get("status") in {"CAPTURED","PARTIAL"}:
+              assert d.get("move_potential_diagnostic_only") is True,d
+          PY
