@@ -1,0 +1,32 @@
+name: F&O Market Brain V4
+
+on:
+  pull_request:
+    paths:
+      - "app/fno_market_brain_v4.py"
+      - "tests/test_fno_market_brain_v4.py"
+      - ".github/workflows/fno-market-brain-v4.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/fno_market_brain_v4.py"
+      - "tests/test_fno_market_brain_v4.py"
+      - ".github/workflows/fno-market-brain-v4.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: Run V4 semantic tests
+        run: pytest -q tests/test_fno_market_brain_v4.py
+      - name: Compile V4 module
+        run: python -m py_compile app/fno_market_brain_v4.py
