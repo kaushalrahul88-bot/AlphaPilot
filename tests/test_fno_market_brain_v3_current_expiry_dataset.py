@@ -1,4 +1,5 @@
-from datetime import date, datetime
+import asyncio
+from datetime import date, datetime, timedelta
 
 from app import fno_market_brain_v3_current_expiry_dataset as dataset
 
@@ -23,6 +24,47 @@ def test_random_clicks_are_deterministic_and_twenty_per_session():
     assert len(first) == 20
     assert len(set(first)) == 20
     assert all(click.date() == day for click in [value.astimezone(dataset.IST) for value in first])
+
+
+def test_history_windows_are_contiguous_and_preserve_exact_range():
+    start = datetime.fromisoformat("2026-07-02T09:15:00+05:30")
+    end = datetime.fromisoformat("2026-07-14T15:30:00+05:30")
+    windows = dataset._history_windows("5m", start, end)
+    assert len(windows) >= 2
+    assert windows[0][0] == start
+    assert windows[-1][1] == end
+    step = timedelta(minutes=5)
+    for left, right in zip(windows, windows[1:]):
+        assert left[1] + step == right[0]
+
+
+def test_segmented_fetch_retries_only_failed_window(monkeypatch):
+    start = datetime.fromisoformat("2026-07-02T09:15:00+05:30")
+    end = datetime.fromisoformat("2026-07-08T15:30:00+05:30")
+    windows = dataset._history_windows("5m", start, end)
+    calls = {}
+
+    async def fake_chunk(provider, symbol, timeframe, window_start, window_end):
+        key = (window_start, window_end)
+        calls[key] = calls.get(key, 0) + 1
+        if key == windows[0] and calls[key] == 1:
+            raise TimeoutError("transient")
+        return [[window_start.isoformat(), 1, 1, 1, 1, 1]]
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(dataset.baseline, "_chunk", fake_chunk)
+    monkeypatch.setattr(dataset.baseline, "_merge", lambda rows: rows)
+    monkeypatch.setattr(dataset.asyncio, "sleep", no_sleep)
+
+    rows, failures = asyncio.run(
+        dataset._fetch(object(), "INFY", "5m", start, end)
+    )
+    assert len(rows) == len(windows)
+    assert calls[windows[0]] == 2
+    assert all(calls[window] == 1 for window in windows[1:])
+    assert any("TimeoutError" in failure for failure in failures)
 
 
 def test_point_in_time_event_policy_excludes_future_event_and_keeps_known_macro():
@@ -61,3 +103,4 @@ def test_research_contract_freezes_future_tape_without_evaluation():
     assert contract["options_read_for_decision"] is False
     assert contract["futures_read_for_decision"] is False
     assert contract["v3_thresholds_changed"] is False
+    assert contract["history_fetch_recovery"] == "SEGMENTED_RETRY_SAME_FROZEN_RANGE"
