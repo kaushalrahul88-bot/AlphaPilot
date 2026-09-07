@@ -1,0 +1,135 @@
+name: F&O V3 Current-Expiry New-Stock Dataset
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_market_brain_v3_current_expiry_dataset.py'
+      - 'app/fno_market_brain_v3_current_expiry_dataset_api.py'
+      - 'data/fno_market_brain_v3_new_stock_knowledge.json'
+      - 'tests/test_fno_market_brain_v3_current_expiry_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v3-current-expiry-new-stocks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_market_brain_v3_current_expiry_dataset.py'
+      - 'app/fno_market_brain_v3_current_expiry_dataset_api.py'
+      - 'data/fno_market_brain_v3_new_stock_knowledge.json'
+      - 'tests/test_fno_market_brain_v3_current_expiry_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v3-current-expiry-new-stocks.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_market_brain_v3.py tests/test_fno_market_brain_v3_current_expiry_dataset.py
+      - run: python -m py_compile app/fno_market_brain_v3.py app/fno_market_brain_v3_current_expiry_dataset.py app/fno_market_brain_v3_current_expiry_dataset_api.py app/__init__.py
+
+  build-dataset:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed V3 dataset endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                if curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys;p=json.load(open("openapi.json")).get("paths",{});sys.exit(0 if "/v1/internal/fno/v3-current-expiry-dataset/start" in p else 1)'; then
+                  exit 0
+                fi
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render V3 dataset deployment"
+          exit 1
+
+      - name: Start dataset build
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST "$API_BASE/v1/internal/fno/v3-current-expiry-dataset/start" -o start.json || true
+          test -s start.json && cat start.json || true
+
+      - name: Poll dataset build
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..240}; do
+            if curl -fsS --max-time 30 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/v3-current-expiry-dataset/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            fi
+            sleep 15
+          done
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and validate frozen dataset
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 300 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/v3-current-expiry-dataset/result" -o dataset.json
+          python - <<'PY'
+          import json
+          d=json.load(open('dataset.json'))
+          assert d['status']=='COMPLETED'
+          e=d['experiment']
+          assert [x['symbol'] for x in e['stocks']]==['HDFCBANK','INFY','MARUTI','BHARTIARTL']
+          assert e['expiry_cycle_start']=='2026-08-26'
+          assert e['expiry_date']=='2026-09-29'
+          assert e['data_frozen_through']=='2026-09-07'
+          assert e['clicks_per_session']==20
+          assert e['observations']==e['session_count']*20*4
+          assert e['same_click_times_across_stocks'] is True
+          assert e['evaluation_run'] is False
+          s=d['safety']
+          assert s['completed_candles_only'] is True
+          assert s['future_tape_frozen'] is True
+          assert s['future_outcomes_resolved'] is False
+          assert s['evaluation_metrics_computed'] is False
+          assert s['options_read_for_decision'] is False
+          assert s['futures_read_for_decision'] is False
+          summary={k:d[k] for k in ('experiment','data_coverage','context_coverage','frozen_5m_tape_hashes','safety')}
+          json.dump(summary,open('dataset-summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - name: Probe September option-history coverage separately
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          base=os.environ['API_BASE']
+          token=os.environ['COLLECTOR_TOKEN']
+          out={}
+          for symbol in ('HDFCBANK','INFY','MARUTI','BHARTIARTL'):
+              path=f'option-probe-{symbol}.json'
+              subprocess.run(['curl','-fsS','--max-time','120','-H',f'X-Collector-Token: {token}',f'{base}/v1/internal/fno/current-expiry-history/probe?underlying={symbol}&expiry_date=2026-09-29','-o',path],check=True)
+              out[symbol]=json.load(open(path))
+          json.dump(out,open('option-history-probes.json','w'),indent=2,sort_keys=True)
+          print(json.dumps({s:{'status':v.get('status'),'coverage_proven':v.get('coverage_proven'),'contract_counts':v.get('contract_counts'),'sampled_contracts':v.get('sampled_contracts')} for s,v in out.items()},indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-v3-current-expiry-new-stocks
+          path: |
+            dataset.json
+            dataset-summary.json
+            option-history-probes.json
+            option-probe-*.json
