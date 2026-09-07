@@ -3,8 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from app import fno_market_brain_v5_holdout_a_dataset as dataset
 from app.fno_market_brain_v3_current_expiry_dataset import events_at
 
@@ -33,8 +31,12 @@ def test_clicks_are_deterministic_unique_and_within_frozen_pool():
 
 
 def test_clicks_outside_holdout_are_rejected():
-    with pytest.raises(ValueError):
+    try:
         dataset.deterministic_clicks(date(2026, 8, 31))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for a date outside frozen Holdout A windows")
 
 
 def test_july_inflation_event_is_point_in_time_only():
