@@ -29,9 +29,11 @@ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 completed_at TIMESTAMPTZ,
 heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 attempt_count INTEGER NOT NULL DEFAULT 0,
+progress_json JSONB,
 result_json JSONB,
 error TEXT,
 traceback TEXT);
+ALTER TABLE {RUN_TABLE} ADD COLUMN IF NOT EXISTS progress_json JSONB;
 CREATE INDEX IF NOT EXISTS fno_four_stock_context_runs_started_idx
 ON {RUN_TABLE}(started_at DESC);"""
 
@@ -62,7 +64,7 @@ def _row(row):
     keys = (
         "run_id", "protocol_id", "deployment_commit", "status", "started_at",
         "updated_at", "completed_at", "heartbeat_at", "attempt_count",
-        "result_json", "error", "traceback",
+        "progress_json", "result_json", "error", "traceback",
     )
     payload = dict(zip(keys, row))
     for key in ("started_at", "updated_at", "completed_at", "heartbeat_at"):
@@ -76,7 +78,7 @@ def _latest_sync(url):
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT run_id,protocol_id,deployment_commit,status,started_at,updated_at,"
-                f"completed_at,heartbeat_at,attempt_count,result_json,error,traceback "
+                f"completed_at,heartbeat_at,attempt_count,progress_json,result_json,error,traceback "
                 f"FROM {RUN_TABLE} WHERE protocol_id=%s ORDER BY started_at DESC LIMIT 1",
                 (PROTOCOL_ID,),
             )
@@ -109,8 +111,9 @@ def _create_sync(url, run_id, commit):
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                f"INSERT INTO {RUN_TABLE}(run_id,protocol_id,deployment_commit,status) VALUES(%s,%s,%s,'RUNNING')",
-                (run_id, PROTOCOL_ID, commit or None),
+                f"INSERT INTO {RUN_TABLE}(run_id,protocol_id,deployment_commit,status,progress_json) "
+                "VALUES(%s,%s,%s,'RUNNING',%s)",
+                (run_id, PROTOCOL_ID, commit or None, Jsonb({"stage": "QUEUED"})),
             )
         connection.commit()
 
@@ -123,9 +126,9 @@ def _attempt_sync(url, run_id):
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                f"UPDATE {RUN_TABLE} SET attempt_count=attempt_count+1,updated_at=NOW(),heartbeat_at=NOW() "
-                "WHERE run_id=%s AND status='RUNNING'",
-                (run_id,),
+                f"UPDATE {RUN_TABLE} SET attempt_count=attempt_count+1,updated_at=NOW(),heartbeat_at=NOW(),"
+                "progress_json=%s WHERE run_id=%s AND status='RUNNING'",
+                (Jsonb({"stage": "STARTING"}), run_id),
             )
         connection.commit()
 
@@ -134,13 +137,29 @@ async def _attempt(url, run_id):
     await asyncio.to_thread(_attempt_sync, url, run_id)
 
 
+def _heartbeat_sync(url, run_id, progress):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {RUN_TABLE} SET updated_at=NOW(),heartbeat_at=NOW(),progress_json=%s "
+                "WHERE run_id=%s AND status='RUNNING'",
+                (Jsonb(dict(progress)), run_id),
+            )
+        connection.commit()
+
+
+async def _heartbeat(url, run_id, progress):
+    await asyncio.to_thread(_heartbeat_sync, url, run_id, progress)
+
+
 def _complete_sync(url, run_id, result):
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"UPDATE {RUN_TABLE} SET status='COMPLETED',result_json=%s,error=NULL,traceback=NULL,"
-                "updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW() WHERE run_id=%s AND status='RUNNING'",
-                (Jsonb(dict(result)), run_id),
+                "progress_json=%s,updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW() "
+                "WHERE run_id=%s AND status='RUNNING'",
+                (Jsonb(dict(result)), Jsonb({"stage": "COMPLETED"}), run_id),
             )
         connection.commit()
 
@@ -154,8 +173,15 @@ def _fail_sync(url, run_id, error, trace, result=None):
         with connection.cursor() as cursor:
             cursor.execute(
                 f"UPDATE {RUN_TABLE} SET status='FAILED',result_json=%s,error=%s,traceback=%s,"
-                "updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW() WHERE run_id=%s AND status='RUNNING'",
-                (Jsonb(dict(result)) if result else None, error, trace, run_id),
+                "progress_json=%s,updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW() "
+                "WHERE run_id=%s AND status='RUNNING'",
+                (
+                    Jsonb(dict(result)) if result else None,
+                    error,
+                    trace,
+                    Jsonb({"stage": "FAILED"}),
+                    run_id,
+                ),
             )
         connection.commit()
 
@@ -174,6 +200,7 @@ def _summary(run):
         "status": run.get("status"),
         "attempt_count": int(run.get("attempt_count") or 0),
         "heartbeat_at": run.get("heartbeat_at"),
+        "progress": run.get("progress_json") or {},
         "error": run.get("error") if run.get("status") == "FAILED" else None,
         "safety": architecture_contract(),
     }
@@ -200,11 +227,23 @@ async def _run(settings, run_id):
         validated_baseline = await _baseline(settings.database_url)
         if not validated_baseline:
             raise RuntimeError("VALIDATED_1600_OBSERVATION_BASELINE_NOT_FOUND")
+        await _heartbeat(settings.database_url, run_id, {"stage": "BASELINE_VALIDATED", "baseline_observations": 1600})
         provider = get_provider(settings)
+
+        async def progress(update):
+            await _heartbeat(settings.database_url, run_id, update)
+
         with current_cash_symbol_aliases(provider):
-            result = await run_four_stock_context_replay(provider, validated_baseline)
+            result = await run_four_stock_context_replay(
+                provider,
+                validated_baseline,
+                progress_callback=progress,
+            )
         if result.get("status") != "COMPLETED":
-            raise RuntimeError(f"context replay did not complete: {result.get('status')} {result.get('history_errors') or result.get('missing_required') or ''}")
+            raise RuntimeError(
+                f"context replay did not complete: {result.get('status')} "
+                f"{result.get('history_errors') or result.get('missing_required') or ''}"
+            )
         await _complete(settings.database_url, run_id, result)
     except asyncio.CancelledError:
         raise
@@ -220,6 +259,12 @@ async def _run(settings, run_id):
         if _task_run_id == run_id:
             _task = None
             _task_run_id = None
+
+
+async def _run_deferred(settings, run_id):
+    # Let the HTTP request finish before the CPU/network-heavy replay begins.
+    await asyncio.sleep(1.0)
+    await _run(settings, run_id)
 
 
 def _active(run_id=None):
@@ -239,7 +284,7 @@ async def _worker(settings, run):
         if _active(run_id):
             return
         _task_run_id = run_id
-        _task = asyncio.create_task(_run(settings, run_id))
+        _task = asyncio.create_task(_run_deferred(settings, run_id))
 
 
 def register_fno_four_stock_context_replay_routes(app, settings, collector_auth):
@@ -278,7 +323,15 @@ def register_fno_four_stock_context_replay_routes(app, settings, collector_auth)
         if not run:
             raise HTTPException(409, detail={"status": "IDLE"})
         if run.get("status") == "FAILED":
-            raise HTTPException(500, detail={"run_id": run.get("run_id"), "error": run.get("error"), "failure_detail": run.get("result_json"), "traceback": run.get("traceback")})
+            raise HTTPException(
+                500,
+                detail={
+                    "run_id": run.get("run_id"),
+                    "error": run.get("error"),
+                    "failure_detail": run.get("result_json"),
+                    "traceback": run.get("traceback"),
+                },
+            )
         if run.get("status") != "COMPLETED":
             raise HTTPException(409, detail=_summary(run))
         return run.get("result_json")
