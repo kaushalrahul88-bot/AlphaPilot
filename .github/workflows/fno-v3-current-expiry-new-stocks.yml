@@ -80,7 +80,7 @@ jobs:
           done
           test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
 
-      - name: Fetch and validate frozen dataset
+      - name: Fetch and validate frozen candle-news dataset
         run: |
           set -euo pipefail
           curl -fsS --max-time 300 -H "X-Collector-Token: $COLLECTOR_TOKEN" "$API_BASE/v1/internal/fno/v3-current-expiry-dataset/result" -o dataset.json
@@ -109,27 +109,9 @@ jobs:
           print(json.dumps(summary,indent=2,sort_keys=True))
           PY
 
-      - name: Probe September option-history coverage separately
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json, os, subprocess
-          base=os.environ['API_BASE']
-          token=os.environ['COLLECTOR_TOKEN']
-          out={}
-          for symbol in ('HDFCBANK','INFY','MARUTI','BHARTIARTL'):
-              path=f'option-probe-{symbol}.json'
-              subprocess.run(['curl','-fsS','--max-time','120','-H',f'X-Collector-Token: {token}',f'{base}/v1/internal/fno/current-expiry-history/probe?underlying={symbol}&expiry_date=2026-09-29','-o',path],check=True)
-              out[symbol]=json.load(open(path))
-          json.dump(out,open('option-history-probes.json','w'),indent=2,sort_keys=True)
-          print(json.dumps({s:{'status':v.get('status'),'coverage_proven':v.get('coverage_proven'),'contract_counts':v.get('contract_counts'),'sampled_contracts':v.get('sampled_contracts')} for s,v in out.items()},indent=2))
-          PY
-
       - uses: actions/upload-artifact@v4
         with:
           name: fno-v3-current-expiry-new-stocks
           path: |
             dataset.json
             dataset-summary.json
-            option-history-probes.json
-            option-probe-*.json
