@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .commodity_backtest import _ts
+from .commodity_backtest import _fetch_chunked, _ts
 from .commodity_candle_collector import _records
 from .commodity_contract_continuity import (
     ContractArchiveStore,
@@ -75,6 +75,7 @@ async def collect_copper_pit_candles(
         TIMEFRAME_MINUTES,
         fetch_start,
         collected_at,
+        fetcher=_fetch_chunked,
     )
     completed = completed_rows(fetched, collected_at, TIMEFRAME_MINUTES)
     records = _records(
