@@ -8,6 +8,7 @@ on:
       - ".github/workflows/fno-candle-only-four-stock-20d-backtest.yml"
       - "app/fno_candle_only_four_stock_backtest_v1.py"
       - "app/fno_candle_only_four_stock_backtest_api.py"
+      - "app/fno_candle_only_symbol_alias_v1.py"
       - "app/__init__.py"
 
 permissions:
