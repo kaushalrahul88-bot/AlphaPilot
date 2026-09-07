@@ -1,0 +1,139 @@
+{
+  "protocol": "FNO_V3_NEW_STOCK_CURRENT_EXPIRY_DATASET_2026-09-07",
+  "current_expiry": {
+    "cycle_start": "2026-08-26",
+    "expiry_date": "2026-09-29",
+    "data_frozen_through": "2026-09-07",
+    "rule": "NSE individual-stock derivatives expire on the last Tuesday of the month; the September 2026 near-month cycle began after the August 25 expiry."
+  },
+  "policy": {
+    "use": "Static stock knowledge may classify drivers and peers; only point-in-time events and pre-click market data may influence V3 decisions.",
+    "unknown_intraday_event_time": "NEXT_NSE_SESSION_OPEN",
+    "outcomes_used": false,
+    "future_bars_used_for_decision": false,
+    "options_used_for_decision": false,
+    "futures_used_for_decision": false
+  },
+  "stocks": {
+    "HDFCBANK": {
+      "category": "PRIVATE_BANKING",
+      "business": "Large Indian private-sector bank with retail, corporate and treasury businesses.",
+      "primary_drivers": ["deposit_growth", "loan_growth", "net_interest_margin", "asset_quality", "credit_cost", "RBI_policy", "liquidity", "management_and_regulatory_events"],
+      "peer_basket": ["ICICIBANK", "KOTAKBANK", "AXISBANK", "SBIN"],
+      "source_urls": ["https://www.hdfcbank.com/", "https://www.reuters.com/world/india/indias-hdfc-bank-slips-2-12-year-low-legal-leadership-woes-linger-2026-08-27/"]
+    },
+    "INFY": {
+      "category": "INFORMATION_TECHNOLOGY",
+      "business": "Global IT services and consulting company with material North American enterprise exposure.",
+      "primary_drivers": ["large_deal_wins", "discretionary_IT_spending", "US_macro_and_rates", "USD_INR", "operating_margin", "utilisation", "AI_and_automation_demand", "client_concentration"],
+      "peer_basket": ["TCS", "HCLTECH", "WIPRO", "TECHM"],
+      "source_urls": ["https://www.infosys.com/investors/reports-filings/exchange-filings.html", "https://www.infosys.com/investors/investor-services/investor-calendar-fy-27.html"]
+    },
+    "MARUTI": {
+      "category": "PASSENGER_AUTOMOBILES",
+      "business": "Indian passenger-vehicle manufacturer with domestic, export, CNG, hybrid and EV exposure.",
+      "primary_drivers": ["monthly_vehicle_sales", "dealer_inventory", "input_costs", "pricing", "fuel_and_E20_policy", "interest_rates", "festive_demand", "exports", "model_mix"],
+      "peer_basket": ["M&M", "EICHERMOT", "ASHOKLEY", "HEROMOTOCO"],
+      "source_urls": ["https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026", "https://www.reuters.com/world/india/indias-maruti-suzuki-hikes-prices-third-time-since-may-2026-09-07/"]
+    },
+    "BHARTIARTL": {
+      "category": "TELECOMMUNICATIONS",
+      "business": "Indian telecom operator with mobile, home broadband, enterprise connectivity, data-centre and Africa exposure.",
+      "primary_drivers": ["ARPU", "subscriber_mix", "tariff_and_pricing", "5G_monetisation", "spectrum_cost", "capex", "regulatory_notices", "Africa_operations", "enterprise_and_data_centres"],
+      "peer_basket": ["IDEA", "INDUSTOWER", "TATACOMM"],
+      "source_urls": ["https://www.airtel.in/about-bharti/equity/shares/stock-exchange-submissions", "https://www.airtel.in/press-release/"]
+    }
+  },
+  "events": [
+    {
+      "id": "HDFCBANK_LEGAL_LEADERSHIP_2026_08_27",
+      "symbol": "HDFCBANK",
+      "category": "LEGAL_GOVERNANCE",
+      "effective_at": "2026-08-28T09:15:00+05:30",
+      "title": "Legal and leadership concerns weigh on HDFC Bank sentiment",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/world/india/indias-hdfc-bank-slips-2-12-year-low-legal-leadership-woes-linger-2026-08-27/",
+      "notes": "Publication date verified; next-session-open policy used because intraday publication time is not frozen here."
+    },
+    {
+      "id": "INFY_NDR_2026_08_26",
+      "symbol": "INFY",
+      "category": "INVESTOR_RELATIONS",
+      "effective_at": "2026-08-27T09:15:00+05:30",
+      "title": "Infosys management completed scheduled investor roadshows across New York and Kuala Lumpur",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_IR",
+      "source": "https://www.infosys.com/investors/investor-services/investor-calendar-fy-27.html"
+    },
+    {
+      "id": "INFY_SUBSIDIARY_LIQUIDATIONS_2026_09_03",
+      "symbol": "INFY",
+      "category": "CORPORATE_DISCLOSURE",
+      "effective_at": "2026-09-04T09:15:00+05:30",
+      "title": "Infosys disclosed voluntary liquidation of step-down wholly owned subsidiaries",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_EXCHANGE_FILING",
+      "source": "https://www.infosys.com/investors/reports-filings/exchange-filings.html"
+    },
+    {
+      "id": "MARUTI_RAIL_DISPATCH_2026_08_26",
+      "symbol": "MARUTI",
+      "category": "OPERATIONS_LOGISTICS",
+      "effective_at": "2026-08-27T09:15:00+05:30",
+      "title": "Maruti Suzuki expanded vehicle dispatch by rail to Pollachi Rail Terminal",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.marutisuzuki.com/corporate/media"
+    },
+    {
+      "id": "MARUTI_AUGUST_SALES_2026_09_01",
+      "symbol": "MARUTI",
+      "category": "MONTHLY_SALES",
+      "effective_at": "2026-09-02T09:15:00+05:30",
+      "title": "Maruti Suzuki reported 219,220 total vehicle sales in August 2026 and crossed one million FY27 units within five months",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.marutisuzuki.com/corporate/media/press-releases/2026/september/maruti-suzuki-sales-in-august-2026"
+    },
+    {
+      "id": "BHARTIARTL_DOT_NOTICES_2026_08_31",
+      "symbol": "BHARTIARTL",
+      "category": "REGULATORY",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "Bharti Airtel disclosed Department of Telecommunications notices for Karnataka and Maharashtra service areas",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_EXCHANGE_SUBMISSION",
+      "source": "https://www.airtel.in/about-bharti/equity/shares/stock-exchange-submissions"
+    },
+    {
+      "id": "MARKET_AUGUST_FPI_INFLOW_2026_08_31",
+      "symbol": "MARKET",
+      "category": "CAPITAL_FLOWS",
+      "effective_at": "2026-09-01T09:15:00+05:30",
+      "title": "Foreign buying of Indian equities reached a 23-month high in August",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_DEPOSITORY_DATA",
+      "source": "https://www.reuters.com/world/india/foreign-buying-indian-stocks-hits-23-month-high-august-rbi-data-shows-2026-08-31/"
+    },
+    {
+      "id": "IT_US_RATE_PRESSURE_2026_09_07",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "GLOBAL_MACRO",
+      "effective_at": "2026-09-08T09:15:00+05:30",
+      "title": "Stronger US jobs data revived rate-hike concerns for Indian IT services",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/world/india/indian-shares-set-modest-gains-mideast-tensions-keep-investors-wary-2026-09-07/",
+      "notes": "Conservative next-session-open effective time means this event cannot influence September 7 historical clicks."
+    }
+  ]
+}
