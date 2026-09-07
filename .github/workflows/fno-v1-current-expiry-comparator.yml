@@ -1,0 +1,138 @@
+name: F&O V1 Current-Expiry Comparator
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_v1_current_expiry_comparator.py'
+      - 'app/fno_v1_current_expiry_comparator_api.py'
+      - 'tests/test_fno_v1_current_expiry_comparator.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v1-current-expiry-comparator.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_v1_current_expiry_comparator.py'
+      - 'app/fno_v1_current_expiry_comparator_api.py'
+      - 'tests/test_fno_v1_current_expiry_comparator.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v1-current-expiry-comparator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_v1_current_expiry_comparator.py tests/test_fno_market_brain_v3_current_expiry_backtest.py
+      - run: python -m py_compile app/fno_v1_current_expiry_comparator.py app/fno_v1_current_expiry_comparator_api.py app/__init__.py
+
+  compare:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for exact deployed comparator commit
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 -fsS "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for exact Render comparator deployment"
+          exit 1
+
+      - name: Start frozen V1 comparator
+        run: |
+          set -euo pipefail
+          curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 -fsS \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+            "$API_BASE/v1/internal/fno/v1-current-expiry-comparator/start" -o start.json
+          cat start.json
+          python - <<'PY'
+          import json
+          d=json.load(open('start.json'))
+          assert d['status'] in {'RUNNING','COMPLETED'}, d
+          s=d['safety']
+          assert s['same_frozen_clicks_as_v3'] is True
+          assert s['same_frozen_future_tapes_as_v3'] is True
+          assert s['options_read'] is False and s['futures_read'] is False
+          assert s['thresholds_retuned'] is False
+          PY
+
+      - name: Poll frozen V1 comparator
+        run: |
+          set -euo pipefail
+          : > status.json
+          for i in {1..120}; do
+            if curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 -fsS \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/v1-current-expiry-comparator/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            fi
+            sleep 10
+          done
+          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+
+      - name: Fetch and validate comparator result
+        run: |
+          set -euo pipefail
+          curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 -fsS \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/v1-current-expiry-comparator/result" -o result.json
+          python - <<'PY'
+          import json
+          d=json.load(open('result.json'))
+          assert d['status']=='COMPLETED'
+          assert d['protocol_id']=='FNO_V1_CURRENT_EXPIRY_COMPARATOR_2026-09-07'
+          src=d['source']
+          assert src['protocol_id']=='FNO_V3_NEW_STOCK_CURRENT_EXPIRY_DATASET_2026-09-07'
+          assert src['stocks']==['HDFCBANK','INFY','MARUTI','BHARTIARTL']
+          assert src['expiry_cycle_start']=='2026-08-26'
+          assert src['data_frozen_through']=='2026-09-07'
+          assert src['session_count']==9
+          assert src['clicks_per_session']==20
+          assert src['observations']==720
+          m=d['methodology']
+          assert m['v3_context_used_for_v1_decision'] is False
+          assert m['v3_news_used_for_v1_decision'] is False
+          assert m['v3_action_used_for_v1_decision'] is False
+          assert m['new_strategy_thresholds_added'] is False
+          assert m['retuning_from_v3_results'] is False
+          s=d['safety']
+          assert s['frozen_technical_snapshots_reused'] is True
+          assert s['old_v1_decision_logic_reused'] is True
+          assert s['same_outcome_resolver_as_original_v1'] is True
+          assert s['options_read'] is False and s['futures_read'] is False
+          assert s['thresholds_retuned'] is False
+          assert 'rows' not in d
+          summary={k:d[k] for k in ('protocol_id','source','methodology','summary','by_stock','by_day','decision_comparison','safety')}
+          json.dump(summary,open('summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fno-v1-current-expiry-comparator
+          path: |
+            result.json
+            summary.json
