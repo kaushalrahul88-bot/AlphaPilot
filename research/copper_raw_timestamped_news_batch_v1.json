@@ -1,0 +1,59 @@
+{
+  "mode": "COPPER_RAW_TIMESTAMPED_NEWS_BATCH_V1",
+  "status": "RAW_INPUT_FOR_ALPHAPILOT_NEWS_PIPELINE",
+  "acquisition_policy": "Collector stores source facts and timestamps only. No collector-authored bullish/bearish effect, confidence, or trading interpretation.",
+  "records": [
+    {
+      "available_at": "2026-08-04T00:01:00-04:00",
+      "source": "Reuters via Fidelity",
+      "source_url": "https://www.fidelity.com/news/article/default/202608040001RTRSNEWSCOMBINED_L1N441027_1",
+      "headline": "Copper inventories diverge across LME, SHFE and COMEX as Chinese downstream consumption weakens",
+      "facts": [
+        "LME copper stocks 244,025 metric tons versus about 400,000 in April",
+        "SHFE copper stocks about 69,300 metric tons versus more than 430,000 in March",
+        "COMEX stocks 717,314 short tons on August 3",
+        "Chinese downstream copper consumption reported weakening at higher prices"
+      ]
+    },
+    {
+      "available_at": "2026-08-19",
+      "timestamp_precision": "DATE_ONLY_DO_NOT_EXPOSE_INTRADAY",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/commentary/reuters-open-interest/lme-gripped-by-flash-squeeze-copper-tensions-boil-over-2026-08-19/",
+      "headline": "LME gripped by flash squeeze as copper tensions boil over",
+      "facts": [
+        "Cash premium reached $545 per metric ton during the squeeze",
+        "Live LME stocks had fallen to just over 103,000 metric tons",
+        "More than 38,000 metric tons were newly delivered into LME warehouses"
+      ]
+    },
+    {
+      "available_at": "2026-08-24T14:40:00+08:00",
+      "source": "Shanghai Metals Market",
+      "source_url": "https://news.metal.com/id/newscontent/104076084-copper-cathode-social-inventory-sees-significant-drawdown-all-regions-simultaneously-digest-spot-copper-smm-weekly-data",
+      "headline": "Copper cathode social inventory sees significant drawdown",
+      "facts": [
+        "Mainstream-region copper inventory fell 19,700 metric tons week on week to 114,200 metric tons",
+        "SMM reported end-user purchasing remained insufficient"
+      ]
+    },
+    {
+      "available_at": "2026-08-25",
+      "timestamp_precision": "DATE_ONLY_DO_NOT_EXPOSE_INTRADAY",
+      "source": "Reuters",
+      "source_url": "https://www.reuters.com/business/us-tariff-threat-upends-copper-surplus-prices-test-all-time-peak-2026-08-25/",
+      "headline": "US tariff threat upends copper surplus as prices test all-time peak",
+      "facts": [
+        "US refined-copper imports were almost 885,000 metric tons in first-half 2026",
+        "COMEX inventories reached 675,185 metric tons",
+        "Reuters reported limited supply outside the US, strong domestic Chinese demand, mine disruptions and an Indonesian smelter outage"
+      ]
+    }
+  ],
+  "ingestion_contract": [
+    "News Integrity receives these records before Market Brain.",
+    "News Intelligence alone determines relevance/effect.",
+    "DATE_ONLY_DO_NOT_EXPOSE_INTRADAY records remain quarantined until exact availability time is verified.",
+    "Source facts must not be selected using replay outcomes."
+  ]
+}
