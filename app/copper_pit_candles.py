@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .commodity_backtest import _fetch_chunked, _ts
+from .commodity_backtest import _ts
 from .commodity_candle_collector import _records
 from .commodity_contract_continuity import (
     ContractArchiveStore,
     archive_active_contract_if_needed,
     retention_policy,
 )
+from .commodity_history_auth_safe import fetch_chunked_auth_safe
 from .commodity_mtf import completed_rows
 from .commodities import resolve_nearest_mcx_future
 from .copper_candle_observation_store import (
@@ -68,7 +69,7 @@ async def collect_copper_pit_candles(
         else _ts(latest) - timedelta(minutes=OVERLAP_MINUTES)
     )
 
-    fetched = await _fetch_chunked(
+    fetched = await fetch_chunked_auth_safe(
         provider,
         contract,
         TIMEFRAME_MINUTES,
