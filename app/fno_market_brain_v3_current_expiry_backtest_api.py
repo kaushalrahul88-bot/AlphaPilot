@@ -77,10 +77,15 @@ def _row(row):
 
 
 def _latest_source_sync(url):
+    """Load only source metadata so /start and /status remain fast.
+
+    The frozen source JSONB is intentionally fetched only by the background
+    worker after the API has returned a RUNNING response to the caller.
+    """
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                f"SELECT run_id,deployment_commit,status,result_json,error FROM {SOURCE_RUN_TABLE} "
+                f"SELECT run_id,deployment_commit,status,error FROM {SOURCE_RUN_TABLE} "
                 "WHERE protocol_id=%s ORDER BY started_at DESC LIMIT 1",
                 (SOURCE_PROTOCOL_ID,),
             )
@@ -91,13 +96,28 @@ def _latest_source_sync(url):
         "run_id": row[0],
         "deployment_commit": row[1],
         "status": row[2],
-        "result_json": row[3],
-        "error": row[4],
+        "error": row[3],
     }
 
 
 async def _latest_source(url):
     return await asyncio.to_thread(_latest_source_sync, url)
+
+
+def _source_result_sync(url, run_id):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT result_json FROM {SOURCE_RUN_TABLE} "
+                "WHERE run_id=%s AND protocol_id=%s AND status='COMPLETED'",
+                (run_id, SOURCE_PROTOCOL_ID),
+            )
+            row = cursor.fetchone()
+    return row[0] if row and row[0] else None
+
+
+async def _source_result(url, run_id):
+    return await asyncio.to_thread(_source_result_sync, url, run_id)
 
 
 def _latest_sync(url):
@@ -199,8 +219,12 @@ def _summary(run):
 async def _run(settings, run_id, source):
     global _task, _task_run_id
     try:
+        await _update(settings.database_url, run_id, {"stage": "LOADING_FROZEN_SOURCE"})
+        source_result = await _source_result(settings.database_url, source["run_id"])
+        if not source_result:
+            raise RuntimeError("SOURCE_DATASET_RESULT_MISSING")
         await _update(settings.database_url, run_id, {"stage": "RESOLVING_FROZEN_OUTCOMES"})
-        result = await asyncio.to_thread(evaluate_frozen_dataset, source["result_json"])
+        result = await asyncio.to_thread(evaluate_frozen_dataset, source_result)
         await _complete(settings.database_url, run_id, result)
     except asyncio.CancelledError:
         raise
@@ -254,7 +278,7 @@ def register_fno_market_brain_v3_current_expiry_backtest_routes(app, settings, c
         source = await _latest_source(settings.database_url)
         if not source:
             raise HTTPException(409, detail={"status": "SOURCE_DATASET_MISSING"})
-        if source.get("status") != "COMPLETED" or not source.get("result_json"):
+        if source.get("status") != "COMPLETED":
             raise HTTPException(409, detail={"status": "SOURCE_DATASET_NOT_COMPLETED", "source": source})
 
         latest = await _latest(settings.database_url)
