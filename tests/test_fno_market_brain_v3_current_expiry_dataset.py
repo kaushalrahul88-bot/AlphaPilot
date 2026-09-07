@@ -25,13 +25,31 @@ def test_random_clicks_are_deterministic_and_twenty_per_session():
     assert all(click.date() == day for click in [value.astimezone(dataset.IST) for value in first])
 
 
-def test_point_in_time_event_policy_excludes_future_event():
+def test_point_in_time_event_policy_excludes_future_event_and_keeps_known_macro():
     knowledge = dataset.load_knowledge()
     click = datetime.fromisoformat("2026-09-07T13:00:00+05:30")
     events = dataset.events_at("INFY", "INFORMATION_TECHNOLOGY", click, knowledge["events"])
     ids = {event["id"] for event in events}
     assert "IT_US_RATE_PRESSURE_2026_09_07" not in ids
+    assert "IT_US_JOBS_HAWKISH_2026_09_04" in ids
+    assert "MARKET_HORMUZ_WEEKEND_ESCALATION_2026_09_06" in ids
     assert "INFY_SUBSIDIARY_LIQUIDATIONS_2026_09_03" in ids
+
+
+def test_intraday_maruti_news_is_not_visible_before_its_timestamp():
+    knowledge = dataset.load_knowledge()
+    before = datetime.fromisoformat("2026-09-07T11:35:00+05:30")
+    after = datetime.fromisoformat("2026-09-07T11:45:00+05:30")
+    before_ids = {
+        event["id"]
+        for event in dataset.events_at("MARUTI", "PASSENGER_AUTOMOBILES", before, knowledge["events"])
+    }
+    after_ids = {
+        event["id"]
+        for event in dataset.events_at("MARUTI", "PASSENGER_AUTOMOBILES", after, knowledge["events"])
+    }
+    assert "MARUTI_PRICE_HIKE_2026_09_07" not in before_ids
+    assert "MARUTI_PRICE_HIKE_2026_09_07" in after_ids
 
 
 def test_research_contract_freezes_future_tape_without_evaluation():
