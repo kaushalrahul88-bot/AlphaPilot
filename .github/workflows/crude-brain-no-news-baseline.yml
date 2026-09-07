@@ -1,0 +1,174 @@
+name: Crude Brain No-News Baseline
+
+on:
+  pull_request:
+    paths:
+      - "app/crude_research_brain.py"
+      - "tests/test_crude_research_brain.py"
+      - ".github/workflows/crude-brain-no-news-baseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crude-brain-no-news-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experiment-001:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+
+      - name: Test Crude Brain integrity
+        run: python -m unittest tests.test_crude_research_brain -v
+
+      - name: Backfill recent exact Crude contract sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --silent --show-error --max-time 20 "$API_BASE/health" >/dev/null || true
+          : > crude-backfill-summary.ndjson
+          rm -f crude-contract.txt
+
+          python - <<'PY' > crude-session-ranges.txt
+          from datetime import date, timedelta
+          start=date(2026,8,17)
+          end=date(2026,9,1)
+          day=start
+          while day<=end:
+              if day.weekday()<5:
+                  print(f"{day.isoformat()}T09:00:00+05:30|{day.isoformat()}T23:30:00+05:30")
+              day += timedelta(days=1)
+          PY
+
+          while IFS='|' read -r START_AT END_AT; do
+            PAYLOAD=$(python - "$START_AT" "$END_AT" <<'PY'
+          import json,sys
+          print(json.dumps({
+              "symbol":"CRUDEOIL",
+              "start_at":sys.argv[1],
+              "end_at":sys.argv[2],
+              "timeframe_minutes":5,
+          }))
+          PY
+            )
+            SUCCESS=0
+            for ATTEMPT in {1..4}; do
+              CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+                -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                -H "Content-Type: application/json" \
+                -X POST "$API_BASE/v1/internal/commodity-candles/backfill" \
+                --data "$PAYLOAD" -o backfill.json || echo "000")
+              echo "Crude $START_AT attempt=$ATTEMPT HTTP=$CODE"
+              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              cat backfill.json 2>/dev/null || true
+              sleep $((ATTEMPT*8))
+            done
+            [ "$SUCCESS" = "1" ] || { cat backfill.json 2>/dev/null || true; exit 1; }
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.load(open("backfill.json"))
+          assert d.get("status")=="BACKFILLED",d
+          assert d.get("symbol")=="CRUDEOIL",d
+          assert d.get("timeframe_minutes")==5,d
+          contract=d.get("contract")
+          fetched=int(d.get("fetched") or 0)
+          if fetched>0:
+              assert contract,d
+              p=Path("crude-contract.txt")
+              if p.exists():
+                  assert p.read_text().strip()==contract,(p.read_text(),contract)
+              else:
+                  p.write_text(contract+"\n")
+          with open("crude-backfill-summary.ndjson","a") as f:
+              f.write(json.dumps({k:d.get(k) for k in ("start","end","contract","fetched","completed","upserted")},sort_keys=True)+"\n")
+          PY
+          done < crude-session-ranges.txt
+
+          test -s crude-contract.txt
+          echo "Exact baseline contract: $(cat crude-contract.txt)"
+
+      - name: Run Crude Experiment 001
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          python - <<'PY'
+          import asyncio
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          from app.crude_research_brain import (
+              read_exact_crude_contract_from_store,
+              run_crude_experiment_001,
+          )
+
+          IST=ZoneInfo("Asia/Kolkata")
+          contract=Path("crude-contract.txt").read_text().strip()
+          start=datetime(2026,8,17,9,0,tzinfo=IST)
+          end=datetime(2026,9,1,23,30,tzinfo=IST)
+          candles=asyncio.run(read_exact_crude_contract_from_store(
+              os.environ["DATABASE_URL"], contract, start, end
+          ))
+          result=run_crude_experiment_001(
+              candles,
+              trading_symbol=contract,
+              sample_every_bars=3,
+              round_trip_cost_bps=4.0,
+          )
+          result["data_collection"]={
+              "window_start":start.isoformat(),
+              "window_end":end.isoformat(),
+              "contract":contract,
+              "method":"GROWW_CURRENT_LISTED_CONTRACT_BOUNDED_BACKFILL",
+              "news_collected_for_decisions":False,
+          }
+          Path("crude-experiment-001.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          summary={
+              "mode":result["mode"],
+              "contract":contract,
+              "coverage":result["coverage"],
+              "full_sample":{k:result["full_sample"].get(k) for k in ("signals","wins","losses","win_rate_pct","avg_net_return_pct","net_return_sum_pct","profit_factor")},
+              "train":{k:result["chronological_split"]["train"].get(k) for k in ("signals","win_rate_pct","avg_net_return_pct","profit_factor")},
+              "holdout":{k:result["chronological_split"]["holdout"].get(k) for k in ("signals","win_rate_pct","avg_net_return_pct","profit_factor")},
+              "news_enabled":result["news_enabled"],
+              "next_gate":result["next_gate"],
+          }
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          assert result["mode"]=="ALPHAPILOT_CRUDE_EXPERIMENT_001"
+          assert result["news_enabled"] is False
+          assert result["production_rules_changed"] is False
+          assert result["live_execution_enabled"] is False
+          assert result["manifest"]["news_policy"]=="FORBIDDEN_IN_BASELINE"
+          assert result["coverage"]["mcx_5m_candles"]>=80
+          PY
+
+      - name: Upload baseline artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crude-experiment-001-no-news
+          path: |
+            crude-experiment-001.json
+            crude-backfill-summary.ndjson
+          if-no-files-found: warn
+          retention-days: 30

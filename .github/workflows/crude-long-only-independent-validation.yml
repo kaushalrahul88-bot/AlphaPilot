@@ -1,0 +1,163 @@
+name: Crude Long-Only Independent Validation
+
+on:
+  pull_request:
+    paths:
+      - "app/crude_directional_asymmetry_candidate.py"
+      - "tests/test_crude_directional_asymmetry_candidate.py"
+      - ".github/workflows/crude-long-only-independent-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crude-long-only-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experiment-003:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+
+      - name: Test preregistered candidate integrity
+        run: python -m unittest tests.test_crude_directional_asymmetry_candidate -v
+
+      - name: Backfill independent Aug 3-14 Crude window
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          curl --silent --show-error --max-time 20 "$API_BASE/health" >/dev/null || true
+          : > crude-validation-backfill.ndjson
+          rm -f crude-validation-contract.txt
+
+          python - <<'PY' > crude-validation-ranges.txt
+          from datetime import date,timedelta
+          day=date(2026,8,3)
+          end=date(2026,8,14)
+          while day<=end:
+              if day.weekday()<5:
+                  print(f"{day.isoformat()}T09:00:00+05:30|{day.isoformat()}T23:30:00+05:30")
+              day += timedelta(days=1)
+          PY
+
+          while IFS='|' read -r START_AT END_AT; do
+            PAYLOAD=$(python - "$START_AT" "$END_AT" <<'PY'
+          import json,sys
+          print(json.dumps({
+              "symbol":"CRUDEOIL",
+              "start_at":sys.argv[1],
+              "end_at":sys.argv[2],
+              "timeframe_minutes":5,
+          }))
+          PY
+            )
+            SUCCESS=0
+            for ATTEMPT in {1..4}; do
+              CODE=$(curl --silent --show-error --max-time 180 -w "%{http_code}" \
+                -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                -H "Content-Type: application/json" \
+                -X POST "$API_BASE/v1/internal/commodity-candles/backfill" \
+                --data "$PAYLOAD" -o validation-backfill.json || echo "000")
+              echo "Crude validation $START_AT attempt=$ATTEMPT HTTP=$CODE"
+              if [ "$CODE" = "200" ]; then SUCCESS=1; break; fi
+              cat validation-backfill.json 2>/dev/null || true
+              sleep $((ATTEMPT*8))
+            done
+            [ "$SUCCESS" = "1" ] || { cat validation-backfill.json 2>/dev/null || true; exit 1; }
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.load(open("validation-backfill.json"))
+          assert d.get("status")=="BACKFILLED",d
+          assert d.get("symbol")=="CRUDEOIL",d
+          assert d.get("timeframe_minutes")==5,d
+          contract=d.get("contract")
+          fetched=int(d.get("fetched") or 0)
+          if fetched>0:
+              assert contract,d
+              p=Path("crude-validation-contract.txt")
+              if p.exists():
+                  assert p.read_text().strip()==contract,(p.read_text(),contract)
+              else:
+                  p.write_text(contract+"\n")
+          with open("crude-validation-backfill.ndjson","a") as f:
+              f.write(json.dumps({k:d.get(k) for k in ("start","end","contract","fetched","completed","upserted")},sort_keys=True)+"\n")
+          PY
+          done < crude-validation-ranges.txt
+
+          test -s crude-validation-contract.txt
+          echo "Independent validation contract: $(cat crude-validation-contract.txt)"
+
+      - name: Run frozen long-only validation
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          python - <<'PY'
+          import asyncio,json,os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          from app.crude_research_brain import read_exact_crude_contract_from_store
+          from app.crude_directional_asymmetry_candidate import validate_long_only_shadow
+
+          IST=ZoneInfo("Asia/Kolkata")
+          contract=Path("crude-validation-contract.txt").read_text().strip()
+          start=datetime(2026,8,3,9,0,tzinfo=IST)
+          end=datetime(2026,8,14,23,30,tzinfo=IST)
+          candles=asyncio.run(read_exact_crude_contract_from_store(
+              os.environ["DATABASE_URL"],contract,start,end
+          ))
+          result=validate_long_only_shadow(
+              candles,
+              trading_symbol=contract,
+              sample_every_bars=3,
+              round_trip_cost_bps=4.0,
+              validation_window={
+                  "start":start.isoformat(),
+                  "end":end.isoformat(),
+                  "previously_used_for_candidate_definition":False,
+              },
+          )
+          Path("crude-experiment-003.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          print(json.dumps({
+              "mode":result["mode"],
+              "contract":contract,
+              "coverage":result["coverage"],
+              "baseline":{k:result["baseline_brain_a"].get(k) for k in ("signals","wins","losses","win_rate_pct","avg_net_return_pct","net_return_sum_pct","profit_factor")},
+              "candidate":{k:result["long_only_shadow"].get(k) for k in ("signals","wins","losses","win_rate_pct","avg_net_return_pct","net_return_sum_pct","profit_factor")},
+              "gate":result["gate"],
+              "next_gate":result["next_gate"],
+          },indent=2,sort_keys=True))
+          assert result["news_enabled"] is False
+          assert result["candidate"]["validation_outcomes_used_to_choose_rule"] is False
+          assert result["validation_window"]["previously_used_for_candidate_definition"] is False
+          assert result["coverage"]["mcx_5m_candles"]>=80
+          PY
+
+      - name: Upload independent validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crude-experiment-003-long-only-no-news
+          path: |
+            crude-experiment-003.json
+            crude-validation-backfill.ndjson
+          if-no-files-found: warn
+          retention-days: 30
