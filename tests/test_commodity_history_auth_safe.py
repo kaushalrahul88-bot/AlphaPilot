@@ -1,5 +1,7 @@
+import unittest
+from unittest.mock import patch
+
 import httpx
-import pytest
 
 import app.commodity_history_auth_safe as safe
 
@@ -26,117 +28,115 @@ def _http_error(status_code: int) -> httpx.HTTPStatusError:
     )
 
 
-@pytest.mark.asyncio
-async def test_401_refreshes_once_and_retries_same_fetch(monkeypatch):
-    provider = DummyProvider()
-    attempts = 0
-    refreshes = 0
-    expected = [["2026-09-07T11:00:00+05:30", 1, 2, 0.5, 1.5, 10]]
+class CommodityHistoryAuthSafeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_401_refreshes_once_and_retries_same_fetch(self):
+        provider = DummyProvider()
+        attempts = 0
+        refreshes = 0
+        expected = [["2026-09-07T11:00:00+05:30", 1, 2, 0.5, 1.5, 10]]
 
-    async def fake_fetch(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
+        async def fake_fetch(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise _http_error(401)
+            return expected
+
+        async def fake_refresh(value):
+            nonlocal refreshes
+            self.assertIs(value, provider)
+            refreshes += 1
+            return "TOTP"
+
+        with patch.object(safe, "_refresh_after_401", fake_refresh):
+            result = await safe.fetch_chunked_auth_safe(
+                provider,
+                {"trading_symbol": "COPPER30SEP26FUT"},
+                5,
+                object(),
+                object(),
+                fetcher=fake_fetch,
+            )
+
+        self.assertEqual(result, expected)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(refreshes, 1)
+        self.assertEqual(provider.throttle_calls, 2)
+        self.assertEqual(provider.rate_limit_calls, 0)
+
+    async def test_persistent_401_fails_closed_after_one_refresh(self):
+        provider = DummyProvider()
+        attempts = 0
+        refreshes = 0
+
+        async def fake_fetch(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
             raise _http_error(401)
-        return expected
 
-    async def fake_refresh(value):
-        nonlocal refreshes
-        assert value is provider
-        refreshes += 1
-        return "TOTP"
+        async def fake_refresh(value):
+            nonlocal refreshes
+            self.assertIs(value, provider)
+            refreshes += 1
+            return "TOTP"
 
-    monkeypatch.setattr(safe, "_fetch_chunked", fake_fetch)
-    monkeypatch.setattr(safe, "_refresh_after_401", fake_refresh)
+        with patch.object(safe, "_refresh_after_401", fake_refresh):
+            with self.assertRaises(httpx.HTTPStatusError) as caught:
+                await safe.fetch_chunked_auth_safe(
+                    provider,
+                    {"trading_symbol": "COPPER30SEP26FUT"},
+                    5,
+                    object(),
+                    object(),
+                    fetcher=fake_fetch,
+                )
 
-    result = await safe.fetch_chunked_auth_safe(
-        provider,
-        {"trading_symbol": "COPPER30SEP26FUT"},
-        5,
-        object(),
-        object(),
-    )
+        self.assertEqual(caught.exception.response.status_code, 401)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(refreshes, 1)
+        self.assertEqual(provider.throttle_calls, 2)
+        self.assertEqual(provider.rate_limit_calls, 0)
 
-    assert result == expected
-    assert attempts == 2
-    assert refreshes == 1
-    assert provider.throttle_calls == 2
-    assert provider.rate_limit_calls == 0
+    async def test_429_registers_shared_cooldown_without_auth_refresh(self):
+        provider = DummyProvider()
+        refreshes = 0
 
+        async def fake_fetch(*args, **kwargs):
+            raise _http_error(429)
 
-@pytest.mark.asyncio
-async def test_persistent_401_fails_closed_after_one_refresh(monkeypatch):
-    provider = DummyProvider()
-    attempts = 0
-    refreshes = 0
+        async def fake_refresh(value):
+            nonlocal refreshes
+            refreshes += 1
 
-    async def fake_fetch(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        raise _http_error(401)
+        with patch.object(safe, "_refresh_after_401", fake_refresh):
+            with self.assertRaises(httpx.HTTPStatusError) as caught:
+                await safe.fetch_chunked_auth_safe(
+                    provider,
+                    {"trading_symbol": "COPPER30SEP26FUT"},
+                    5,
+                    object(),
+                    object(),
+                    fetcher=fake_fetch,
+                )
 
-    async def fake_refresh(value):
-        nonlocal refreshes
-        refreshes += 1
-        return "TOTP"
+        self.assertEqual(caught.exception.response.status_code, 429)
+        self.assertEqual(refreshes, 0)
+        self.assertEqual(provider.throttle_calls, 1)
+        self.assertEqual(provider.rate_limit_calls, 1)
 
-    monkeypatch.setattr(safe, "_fetch_chunked", fake_fetch)
-    monkeypatch.setattr(safe, "_refresh_after_401", fake_refresh)
-
-    with pytest.raises(httpx.HTTPStatusError) as caught:
-        await safe.fetch_chunked_auth_safe(
-            provider,
-            {"trading_symbol": "COPPER30SEP26FUT"},
-            5,
-            object(),
-            object(),
-        )
-
-    assert caught.value.response.status_code == 401
-    assert attempts == 2
-    assert refreshes == 1
-    assert provider.throttle_calls == 2
-
-
-@pytest.mark.asyncio
-async def test_429_registers_shared_cooldown_without_auth_refresh(monkeypatch):
-    provider = DummyProvider()
-    refreshes = 0
-
-    async def fake_fetch(*args, **kwargs):
-        raise _http_error(429)
-
-    async def fake_refresh(value):
-        nonlocal refreshes
-        refreshes += 1
-
-    monkeypatch.setattr(safe, "_fetch_chunked", fake_fetch)
-    monkeypatch.setattr(safe, "_refresh_after_401", fake_refresh)
-
-    with pytest.raises(httpx.HTTPStatusError) as caught:
-        await safe.fetch_chunked_auth_safe(
-            provider,
-            {"trading_symbol": "COPPER30SEP26FUT"},
-            5,
-            object(),
-            object(),
-        )
-
-    assert caught.value.response.status_code == 429
-    assert refreshes == 0
-    assert provider.throttle_calls == 1
-    assert provider.rate_limit_calls == 1
+    def test_architecture_contract_is_operational_only(self):
+        contract = safe.architecture_contract()
+        self.assertFalse(contract["historical_fetch_semantics_changed"])
+        self.assertFalse(contract["strategy_rules_changed"])
+        self.assertFalse(contract["contract_selection_changed"])
+        self.assertFalse(contract["pit_visibility_changed"])
+        self.assertEqual(contract["retry_on_401"], 1)
+        self.assertTrue(contract["shared_throttle_used"])
+        self.assertTrue(contract["shared_429_cooldown_registered"])
+        self.assertFalse(contract["live_execution_enabled"])
+        self.assertFalse(contract["broker_order_placement_enabled"])
+        self.assertEqual(contract["capital_committed"], 0)
 
 
-def test_architecture_contract_is_operational_only():
-    contract = safe.architecture_contract()
-    assert contract["historical_fetch_semantics_changed"] is False
-    assert contract["strategy_rules_changed"] is False
-    assert contract["contract_selection_changed"] is False
-    assert contract["pit_visibility_changed"] is False
-    assert contract["retry_on_401"] == 1
-    assert contract["shared_throttle_used"] is True
-    assert contract["shared_429_cooldown_registered"] is True
-    assert contract["live_execution_enabled"] is False
-    assert contract["broker_order_placement_enabled"] is False
-    assert contract["capital_committed"] == 0
+if __name__ == "__main__":
+    unittest.main()
