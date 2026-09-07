@@ -1,6 +1,5 @@
+import unittest
 from datetime import date, datetime, time, timedelta
-
-import pytest
 
 from app import fno_market_brain_v3_current_expiry_backtest as backtest
 from app import fno_market_brain_v3_current_expiry_dataset as source
@@ -87,37 +86,39 @@ def _dataset():
     }
 
 
-def test_criteria_match_original_underlying_random_replay():
-    contract = backtest.architecture_contract()
-    assert contract["same_outcome_resolver_as_first_four_stock_replay"] is True
-    assert contract["outcome_horizons"] == ["15m", "30m", "60m", "90m", "EOD"]
-    assert contract["same_no_trade_large_move_thresholds"] == [0.5, 1.0]
-    assert contract["new_strategy_thresholds_added"] is False
-    assert contract["options_read"] is False
-    assert contract["futures_read"] is False
+class FnoMarketBrainV3CurrentExpiryBacktestTests(unittest.TestCase):
+    def test_criteria_match_original_underlying_random_replay(self):
+        contract = backtest.architecture_contract()
+        self.assertTrue(contract["same_outcome_resolver_as_first_four_stock_replay"])
+        self.assertEqual(contract["outcome_horizons"], ["15m", "30m", "60m", "90m", "EOD"])
+        self.assertEqual(contract["same_no_trade_large_move_thresholds"], [0.5, 1.0])
+        self.assertFalse(contract["new_strategy_thresholds_added"])
+        self.assertFalse(contract["options_read"])
+        self.assertFalse(contract["futures_read"])
+
+    def test_evaluator_uses_frozen_v3_action_and_original_horizons(self):
+        result = backtest.evaluate_frozen_dataset(_dataset())
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["source"]["observations"], 1)
+        self.assertEqual(result["summary"]["action_counts"], {"LONG": 1})
+        self.assertEqual(list(result["summary"]["horizons"]), ["15m", "30m", "60m", "90m", "EOD"])
+        self.assertEqual(result["summary"]["horizons"]["60m"]["direction_correct"], 1)
+        self.assertGreater(result["summary"]["horizons"]["EOD"]["mean_directional_return_pct"], 0)
+        self.assertFalse(result["safety"]["source_decisions_recomputed"])
+        self.assertFalse(result["criteria"]["new_pass_threshold_added"])
+
+    def test_source_tape_hash_change_is_rejected(self):
+        dataset = _dataset()
+        dataset["frozen_5m_tape_by_stock"]["HDFCBANK"][0][4] = 999.0
+        with self.assertRaisesRegex(ValueError, "SOURCE_FROZEN_TAPE_HASH_MISMATCH"):
+            backtest.evaluate_frozen_dataset(dataset)
+
+    def test_source_with_options_decision_input_is_rejected(self):
+        dataset = _dataset()
+        dataset["safety"]["options_read_for_decision"] = True
+        with self.assertRaisesRegex(ValueError, "SOURCE_OPTIONS_DECISION_INPUT_PRESENT"):
+            backtest.evaluate_frozen_dataset(dataset)
 
 
-def test_evaluator_uses_frozen_v3_action_and_original_horizons():
-    result = backtest.evaluate_frozen_dataset(_dataset())
-    assert result["status"] == "COMPLETED"
-    assert result["source"]["observations"] == 1
-    assert result["summary"]["action_counts"] == {"LONG": 1}
-    assert list(result["summary"]["horizons"]) == ["15m", "30m", "60m", "90m", "EOD"]
-    assert result["summary"]["horizons"]["60m"]["direction_correct"] == 1
-    assert result["summary"]["horizons"]["EOD"]["mean_directional_return_pct"] > 0
-    assert result["safety"]["source_decisions_recomputed"] is False
-    assert result["criteria"]["new_pass_threshold_added"] is False
-
-
-def test_source_tape_hash_change_is_rejected():
-    dataset = _dataset()
-    dataset["frozen_5m_tape_by_stock"]["HDFCBANK"][0][4] = 999.0
-    with pytest.raises(ValueError, match="SOURCE_FROZEN_TAPE_HASH_MISMATCH"):
-        backtest.evaluate_frozen_dataset(dataset)
-
-
-def test_source_with_options_decision_input_is_rejected():
-    dataset = _dataset()
-    dataset["safety"]["options_read_for_decision"] = True
-    with pytest.raises(ValueError, match="SOURCE_OPTIONS_DECISION_INPUT_PRESENT"):
-        backtest.evaluate_frozen_dataset(dataset)
+if __name__ == "__main__":
+    unittest.main()
