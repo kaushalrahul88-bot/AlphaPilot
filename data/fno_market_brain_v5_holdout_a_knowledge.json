@@ -1,0 +1,204 @@
+{
+  "protocol": "FNO_MARKET_BRAIN_V5_HOLDOUT_A_2026-09-07",
+  "windows": [
+    {
+      "id": "JUNE_2026",
+      "start": "2026-06-01",
+      "end": "2026-06-12",
+      "near_month_expiry": "2026-06-30"
+    },
+    {
+      "id": "JULY_2026",
+      "start": "2026-07-01",
+      "end": "2026-07-14",
+      "near_month_expiry": "2026-07-28"
+    }
+  ],
+  "policy": {
+    "use": "Static profiles classify sector drivers and peer baskets. Only completed candles and point-in-time events public by the simulated click may influence V5.",
+    "unknown_intraday_event_time": "NEXT_NSE_SESSION_OPEN",
+    "direction_rule": "Directional labels use only intrinsic information available at publication. Ambiguous company announcements are NEUTRAL. Subsequent stock-price action is never used.",
+    "v3_development_rows_excluded": true,
+    "outcomes_used_to_build_archive": false,
+    "future_bars_used_for_decision": false,
+    "options_used_for_decision": false,
+    "futures_used_for_decision": false
+  },
+  "stocks": {
+    "HDFCBANK": {
+      "category": "PRIVATE_BANKING",
+      "business": "Large Indian private-sector bank with retail, corporate and treasury businesses.",
+      "primary_drivers": ["deposit_growth", "loan_growth", "net_interest_margin", "asset_quality", "credit_cost", "RBI_policy", "liquidity", "management_and_regulatory_events"],
+      "peer_basket": ["ICICIBANK", "KOTAKBANK", "AXISBANK", "SBIN"]
+    },
+    "INFY": {
+      "category": "INFORMATION_TECHNOLOGY",
+      "business": "Global IT services and consulting company with material North American enterprise exposure.",
+      "primary_drivers": ["large_deal_wins", "discretionary_IT_spending", "US_macro_and_rates", "USD_INR", "operating_margin", "utilisation", "AI_and_automation_demand", "client_concentration"],
+      "peer_basket": ["TCS", "HCLTECH", "WIPRO", "TECHM"]
+    },
+    "MARUTI": {
+      "category": "PASSENGER_AUTOMOBILES",
+      "business": "Indian passenger-vehicle manufacturer with domestic, export, CNG, hybrid and EV exposure.",
+      "primary_drivers": ["monthly_vehicle_sales", "dealer_inventory", "input_costs", "pricing", "fuel_policy", "interest_rates", "exports", "model_mix"],
+      "peer_basket": ["M&M", "EICHERMOT", "ASHOKLEY", "HEROMOTOCO"]
+    },
+    "BHARTIARTL": {
+      "category": "TELECOMMUNICATIONS",
+      "business": "Indian telecom operator with mobile, home broadband, enterprise connectivity, data-centre and Africa exposure.",
+      "primary_drivers": ["ARPU", "subscriber_mix", "tariff_and_pricing", "5G_monetisation", "spectrum_cost", "capex", "regulatory_notices", "Africa_operations"],
+      "peer_basket": ["IDEA", "INDUSTOWER", "TATACOMM"]
+    }
+  },
+  "events": [
+    {
+      "id": "MARUTI_MAY_SALES_2026_06_01",
+      "symbol": "MARUTI",
+      "category": "MONTHLY_SALES",
+      "effective_at": "2026-06-02T09:15:00+05:30",
+      "title": "Maruti Suzuki reported record May 2026 total and domestic monthly sales",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.marutisuzuki.com/corporate/media/press-releases/2026/june/maruti-suzuki-sales-in-may-2026",
+      "notes": "Publication date is June 1. Intraday publication time is not frozen, so the next-session-open rule is used."
+    },
+    {
+      "id": "INFY_DNB_COLLAB_2026_06_02",
+      "symbol": "INFY",
+      "category": "CLIENT_COLLABORATION",
+      "effective_at": "2026-06-03T09:15:00+05:30",
+      "title": "Infosys expanded its collaboration with DNB Bank to modernize financial-crime operations",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.infosys.com/newsroom/press-releases.html",
+      "notes": "Commercial value is not disclosed in the archive, so the event is not assigned directional weight."
+    },
+    {
+      "id": "INFY_LTA_AI_2026_06_03",
+      "symbol": "INFY",
+      "category": "PARTNERSHIP",
+      "effective_at": "2026-06-04T09:15:00+05:30",
+      "title": "Infosys and LTA launched AI-driven match and fan experiences",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.infosys.com/newsroom/press-releases.html"
+    },
+    {
+      "id": "RBI_POLICY_2026_06_05",
+      "symbol": "MARKET",
+      "category": "RBI_POLICY",
+      "effective_at": "2026-06-08T09:15:00+05:30",
+      "title": "RBI held the policy rate and announced measures aimed at supporting the rupee and capital inflows",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_RBI_POLICY",
+      "source": "https://www.reuters.com/world/india/view-indian-central-bank-keeps-key-policy-rate-hold-despite-falling-currency-2026-06-05/",
+      "notes": "The policy mix contained supportive flow measures and higher inflation concerns, so the aggregate equity direction is deliberately neutral. The next-session-open rule avoids same-day timestamp ambiguity."
+    },
+    {
+      "id": "BHARTIARTL_5G_UPPER_NORTH_2026_06_10",
+      "symbol": "BHARTIARTL",
+      "category": "NETWORK_EXPANSION",
+      "effective_at": "2026-06-11T09:15:00+05:30",
+      "title": "Airtel announced more than 2,900 new 5G sites across its Upper North region over the prior 12 months",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.airtel.in/press-release/06-2026/airtel-brings-faster-speeds-and-wider-5g-coverage-to-millions-with-2900-new-sites/"
+    },
+    {
+      "id": "INFY_AI_MATURITY_2026_06_11",
+      "symbol": "INFY",
+      "category": "AI_CAPABILITY",
+      "effective_at": "2026-06-12T09:15:00+05:30",
+      "title": "Infosys announced CMMI AI maturity framework collaboration and milestone recognition",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.infosys.com/newsroom/press-releases.html"
+    },
+    {
+      "id": "INFY_IHH_ERP_2026_06_11",
+      "symbol": "INFY",
+      "category": "CLIENT_COLLABORATION",
+      "effective_at": "2026-06-12T09:15:00+05:30",
+      "title": "Infosys announced a multi-country AI-powered ERP transformation collaboration with IHH Healthcare",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.infosys.com/newsroom/press-releases.html"
+    },
+    {
+      "id": "BHARTIARTL_AMARNATH_NETWORK_2026_07_03",
+      "symbol": "BHARTIARTL",
+      "category": "NETWORK_EXPANSION",
+      "effective_at": "2026-07-06T09:15:00+05:30",
+      "title": "Airtel expanded mobile network coverage along the Amarnath Yatra route",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_PRESS_RELEASE",
+      "source": "https://www.airtel.in/press-release/07-2026/bharti-airtel-strengthens-connectivity-for-amarnath-yatra-with-expanded-network-coverage/"
+    },
+    {
+      "id": "MARUTI_ALT_FUEL_SHARE_2026_07_06",
+      "symbol": "MARUTI",
+      "category": "INDUSTRY_DEMAND_MIX",
+      "effective_at": "2026-07-06T09:15:00+05:30",
+      "title": "Alternative-fuel passenger vehicles reached a record June share while Maruti reported a jump in CNG bookings",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_FADA_DATA",
+      "source": "https://www.reuters.com/world/india/indias-retail-car-sales-jump-nearly-29-june-2026-07-06/",
+      "notes": "The mix shift benefits some Maruti powertrains but can pressure petrol-heavy mix; direction is deliberately neutral. Reuters publication time was before the NSE open."
+    },
+    {
+      "id": "IT_MUTED_Q1_PREVIEW_2026_07_06",
+      "scope": "SECTOR:INFORMATION_TECHNOLOGY",
+      "category": "SECTOR_DEMAND",
+      "effective_at": "2026-07-07T09:15:00+05:30",
+      "title": "Brokerages expected another subdued quarter for Indian IT services amid AI pricing pressure and weak client spending",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS",
+      "source": "https://www.reuters.com/",
+      "notes": "Reuters reporting was published after the July 6 cash session, so it becomes usable from the July 7 open."
+    },
+    {
+      "id": "INFY_ASCM_2026_07_06",
+      "symbol": "INFY",
+      "category": "PARTNERSHIP",
+      "effective_at": "2026-07-07T09:15:00+05:30",
+      "title": "Infosys announced collaboration with ASCM on supply-chain assessments",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_NEWSROOM",
+      "source": "https://www.infosys.com/newsroom/features.html"
+    },
+    {
+      "id": "INFY_BANK_SYDNEY_2026_07_08",
+      "symbol": "INFY",
+      "category": "CLIENT_DELIVERY",
+      "effective_at": "2026-07-09T09:15:00+05:30",
+      "title": "Infosys Finacle announced Bank of Sydney digital-banking go-live on AWS",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_NEWSROOM",
+      "source": "https://www.infosys.com/newsroom/features.html"
+    },
+    {
+      "id": "INDIA_CPI_2026_07_13",
+      "symbol": "MARKET",
+      "category": "INFLATION_RATES",
+      "effective_at": "2026-07-14T09:15:00+05:30",
+      "title": "India June retail inflation accelerated to 4.38%, above the RBI target and raising rate-hike expectations",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_OFFICIAL_CPI_DATA",
+      "source": "https://www.reuters.com/world/india/view-indias-retail-inflation-accelerates-438-raising-rate-hike-expectations-2026-07-13/",
+      "notes": "The inflation print was public after the July 13 cash session; it becomes usable at the July 14 open."
+    }
+  ]
+}
