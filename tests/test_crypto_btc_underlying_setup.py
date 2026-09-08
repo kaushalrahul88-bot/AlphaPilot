@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
-
-import pytest
+import math
 
 from app.crypto_btc_historical_data_adapter import BtcSpotCandleArchiveRow, HistoricalProvenance
 from app.crypto_btc_underlying_setup import (
@@ -33,6 +32,15 @@ def market(direction="BULLISH"):
     return {"instrument_neutral": True, "direction": direction, "state": "COHERENT_DIRECTION_THESIS"}
 
 
+def _assert_value_error(call, expected_text):
+    try:
+        call()
+    except ValueError as exc:
+        assert expected_text in str(exc)
+    else:
+        raise AssertionError(f"expected ValueError containing {expected_text!r}")
+
+
 def test_unknown_direction_is_wait_and_options_cannot_create_direction():
     result = build_btc_underlying_setup(
         click_id="c", decision_at=CLICK, market_state=market("UNKNOWN"), completed_candles=history(),
@@ -43,12 +51,14 @@ def test_unknown_direction_is_wait_and_options_cannot_create_direction():
 
 
 def test_future_input_candle_is_rejected():
-    with pytest.raises(ValueError, match="unavailable"):
-        build_btc_underlying_setup(
+    _assert_value_error(
+        lambda: build_btc_underlying_setup(
             click_id="c", decision_at=CLICK, market_state=market(),
             completed_candles=history() + [candle(CLICK + timedelta(minutes=15), 100, 101)],
             valid_until=CLICK + timedelta(hours=12),
-        )
+        ),
+        "unavailable",
+    )
 
 
 def test_geometry_has_minimum_one_point_five_r_and_no_execution():
@@ -58,14 +68,17 @@ def test_geometry_has_minimum_one_point_five_r_and_no_execution():
     )
     assert setup["decision"] == "BULLISH"
     assert setup["target1_r"] == 1.5
-    assert setup["target1"] == pytest.approx(setup["entry_trigger"] + 1.5 * setup["risk_per_btc"])
+    expected_target = setup["entry_trigger"] + 1.5 * setup["risk_per_btc"]
+    assert math.isclose(setup["target1"], expected_target, rel_tol=1e-12, abs_tol=1e-12)
     assert setup["live_execution"] is False
     assert setup["futures_trade_generated"] is False
 
 
 def test_policy_rejects_reward_below_one_point_five_r():
-    with pytest.raises(ValueError, match=">= 1.5"):
-        BtcUnderlyingSetupPolicy(minimum_risk_reward=1.4).validated()
+    _assert_value_error(
+        lambda: BtcUnderlyingSetupPolicy(minimum_risk_reward=1.4).validated(),
+        ">= 1.5",
+    )
 
 
 def test_actual_path_resolves_target_and_same_bar_collision_is_ambiguous():
