@@ -5,7 +5,7 @@ import asyncio
 import os
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Header, HTTPException
 from psycopg.types.json import Jsonb
@@ -20,6 +20,10 @@ from .providers.factory import get_provider
 
 UTC = timezone.utc
 RUN_TABLE = "fno_market_brain_v5_holdout_a_dataset_runs"
+CACHE_TABLE = "fno_market_brain_v5_holdout_a_history_segments"
+STALE_AFTER = timedelta(minutes=10)
+DB_RETRY_DELAYS_SECONDS = (0.25, 0.75, 2.0, 5.0)
+
 SQL = f"""CREATE TABLE IF NOT EXISTS {RUN_TABLE}(
 run_id TEXT PRIMARY KEY,
 protocol_id TEXT NOT NULL,
@@ -35,7 +39,19 @@ result_json JSONB,
 error TEXT,
 traceback TEXT);
 CREATE INDEX IF NOT EXISTS fno_v5_holdout_a_dataset_started_idx
-ON {RUN_TABLE}(started_at DESC);"""
+ON {RUN_TABLE}(started_at DESC);
+CREATE TABLE IF NOT EXISTS {CACHE_TABLE}(
+protocol_id TEXT NOT NULL,
+symbol TEXT NOT NULL,
+timeframe TEXT NOT NULL,
+window_start TIMESTAMPTZ NOT NULL,
+window_end TIMESTAMPTZ NOT NULL,
+rows_json JSONB NOT NULL,
+row_count INTEGER NOT NULL,
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+PRIMARY KEY(protocol_id,symbol,timeframe,window_start,window_end));
+CREATE INDEX IF NOT EXISTS fno_v5_holdout_a_history_symbol_idx
+ON {CACHE_TABLE}(protocol_id,symbol,timeframe);"""
 
 _task = None
 _task_run_id = None
@@ -47,6 +63,25 @@ def _connect(url):
     return psycopg.connect(url, connect_timeout=10)
 
 
+def _transient_db_error(exc: Exception) -> bool:
+    import psycopg
+    return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+
+
+async def _db_call(func, *args):
+    last = None
+    attempts = len(DB_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(attempts):
+        try:
+            return await asyncio.to_thread(func, *args)
+        except Exception as exc:
+            last = exc
+            if not _transient_db_error(exc) or attempt >= attempts - 1:
+                raise
+            await asyncio.sleep(DB_RETRY_DELAYS_SECONDS[attempt])
+    raise last  # pragma: no cover
+
+
 def _ensure_sync(url):
     with _connect(url) as connection:
         with connection.cursor() as cursor:
@@ -55,7 +90,7 @@ def _ensure_sync(url):
 
 
 async def _ensure(url):
-    await asyncio.to_thread(_ensure_sync, url)
+    await _db_call(_ensure_sync, url)
 
 
 def _row(row):
@@ -87,7 +122,7 @@ def _latest_sync(url):
 
 
 async def _latest(url):
-    return await asyncio.to_thread(_latest_sync, url)
+    return await _db_call(_latest_sync, url)
 
 
 def _create_sync(url, run_id, commit):
@@ -103,7 +138,7 @@ def _create_sync(url, run_id, commit):
 
 
 async def _create(url, run_id, commit):
-    await asyncio.to_thread(_create_sync, url, run_id, commit)
+    await _db_call(_create_sync, url, run_id, commit)
 
 
 def _update_sync(url, run_id, progress, increment=False):
@@ -128,7 +163,7 @@ def _update_sync(url, run_id, progress, increment=False):
 
 
 async def _update(url, run_id, progress, increment=False):
-    await asyncio.to_thread(_update_sync, url, run_id, progress, increment)
+    await _db_call(_update_sync, url, run_id, progress, increment)
 
 
 def _complete_sync(url, run_id, result):
@@ -145,7 +180,7 @@ def _complete_sync(url, run_id, result):
 
 
 async def _complete(url, run_id, result):
-    await asyncio.to_thread(_complete_sync, url, run_id, result)
+    await _db_call(_complete_sync, url, run_id, result)
 
 
 def _fail_sync(url, run_id, error, trace, result=None):
@@ -168,7 +203,70 @@ def _fail_sync(url, run_id, error, trace, result=None):
 
 
 async def _fail(url, run_id, error, trace, result=None):
-    await asyncio.to_thread(_fail_sync, url, run_id, error, trace, result)
+    await _db_call(_fail_sync, url, run_id, error, trace, result)
+
+
+def _interrupt_sync(url, run_id, reason):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""UPDATE {RUN_TABLE}
+                SET status='FAILED',error=%s,traceback=NULL,progress_json=%s,
+                updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW()
+                WHERE run_id=%s AND status='RUNNING'""",
+                (reason, Jsonb({"stage": "INTERRUPTED"}), run_id),
+            )
+        connection.commit()
+
+
+async def _interrupt(url, run_id, reason):
+    await _db_call(_interrupt_sync, url, run_id, reason)
+
+
+def _cache_get_sync(url, symbol, timeframe, window_start, window_end):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT rows_json FROM {CACHE_TABLE}
+                WHERE protocol_id=%s AND symbol=%s AND timeframe=%s
+                AND window_start=%s AND window_end=%s""",
+                (PROTOCOL_ID, symbol, timeframe, window_start, window_end),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            rows = row[0]
+            return list(rows) if isinstance(rows, list) else None
+
+
+async def _cache_get(url, symbol, timeframe, window_start, window_end):
+    return await _db_call(
+        _cache_get_sync, url, symbol, timeframe, window_start, window_end
+    )
+
+
+def _cache_put_sync(url, symbol, timeframe, window_start, window_end, rows):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""INSERT INTO {CACHE_TABLE}
+                (protocol_id,symbol,timeframe,window_start,window_end,rows_json,row_count)
+                VALUES(%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(protocol_id,symbol,timeframe,window_start,window_end)
+                DO UPDATE SET rows_json=EXCLUDED.rows_json,row_count=EXCLUDED.row_count,
+                updated_at=NOW()""",
+                (
+                    PROTOCOL_ID, symbol, timeframe, window_start, window_end,
+                    Jsonb(list(rows)), len(rows),
+                ),
+            )
+        connection.commit()
+
+
+async def _cache_put(url, symbol, timeframe, window_start, window_end, rows):
+    await _db_call(
+        _cache_put_sync, url, symbol, timeframe, window_start, window_end, rows
+    )
 
 
 def _summary(run):
@@ -197,6 +295,30 @@ def _summary(run):
     return payload
 
 
+def _parse_datetime(value):
+    if isinstance(value, datetime):
+        return value.astimezone(UTC)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _is_stale(run, *, now=None):
+    if not run or run.get("status") != "RUNNING":
+        return False
+    heartbeat = _parse_datetime(run.get("heartbeat_at"))
+    if heartbeat is None:
+        return True
+    current = now or datetime.now(UTC)
+    return current - heartbeat > STALE_AFTER
+
+
 async def _run(settings, run_id):
     global _task, _task_run_id
     result = None
@@ -205,10 +327,29 @@ async def _run(settings, run_id):
         provider = get_provider(settings)
 
         async def progress(update):
-            await _update(settings.database_url, run_id, update)
+            # A transient heartbeat failure must not abort or alter the dataset.
+            try:
+                await _update(settings.database_url, run_id, update)
+            except Exception:
+                return
+
+        async def cache_get(symbol, timeframe, window_start, window_end):
+            return await _cache_get(
+                settings.database_url, symbol, timeframe, window_start, window_end
+            )
+
+        async def cache_put(symbol, timeframe, window_start, window_end, rows):
+            await _cache_put(
+                settings.database_url, symbol, timeframe, window_start, window_end, rows
+            )
 
         with current_cash_symbol_aliases(provider):
-            result = await build_holdout_a_dataset(provider, progress=progress)
+            result = await build_holdout_a_dataset(
+                provider,
+                progress=progress,
+                cache_get=cache_get,
+                cache_put=cache_put,
+            )
         if result.get("status") != "COMPLETED":
             raise RuntimeError(
                 "V5 Holdout A dataset build did not complete: "
@@ -219,13 +360,18 @@ async def _run(settings, run_id):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        await _fail(
-            settings.database_url,
-            run_id,
-            f"{exc.__class__.__name__}: {str(exc)[:1600]}",
-            traceback.format_exc()[-16000:],
-            result,
-        )
+        try:
+            await _fail(
+                settings.database_url,
+                run_id,
+                f"{exc.__class__.__name__}: {str(exc)[:1600]}",
+                traceback.format_exc()[-16000:],
+                result,
+            )
+        except Exception:
+            # If the DB itself is unavailable, leave RUNNING; explicit POST /start
+            # will later classify it stale and create/resume safely from cache.
+            pass
     finally:
         if _task_run_id == run_id:
             _task = None
@@ -267,11 +413,24 @@ def register_fno_market_brain_v5_holdout_a_dataset_routes(app, settings, collect
         collector_auth(x_collector_token)
         await _ensure(settings.database_url)
         latest = await _latest(settings.database_url)
+        current_commit = os.getenv("RENDER_GIT_COMMIT", "")
+
         if latest and latest.get("status") == "RUNNING":
-            await _worker(settings, latest)
-            return _summary(latest)
+            same_commit = (latest.get("deployment_commit") or "") == current_commit
+            if _active(str(latest.get("run_id") or "")):
+                return _summary(latest)
+            if same_commit and not _is_stale(latest):
+                # Explicit POST is allowed to resume a recent interrupted worker.
+                await _worker(settings, latest)
+                return _summary(latest)
+            reason = (
+                "INTERRUPTED_STALE_RUN_REPLACED"
+                if same_commit else "INTERRUPTED_DEPLOYMENT_CHANGED"
+            )
+            await _interrupt(settings.database_url, latest["run_id"], reason)
+
         run_id = uuid.uuid4().hex
-        await _create(settings.database_url, run_id, os.getenv("RENDER_GIT_COMMIT", ""))
+        await _create(settings.database_url, run_id, current_commit)
         created = await _latest(settings.database_url)
         await _worker(settings, created)
         return _summary(created)
@@ -280,8 +439,7 @@ def register_fno_market_brain_v5_holdout_a_dataset_routes(app, settings, collect
     async def status(x_collector_token: str | None = Header(default=None)):
         collector_auth(x_collector_token)
         await _ensure(settings.database_url)
-        run = await _latest(settings.database_url)
-        await _worker(settings, run)
+        # Read-only by design: polling can never relaunch the expensive build.
         return _summary(await _latest(settings.database_url))
 
     @app.get("/v1/internal/fno/v5-holdout-a-dataset/result")
@@ -289,7 +447,6 @@ def register_fno_market_brain_v5_holdout_a_dataset_routes(app, settings, collect
         collector_auth(x_collector_token)
         await _ensure(settings.database_url)
         run = await _latest(settings.database_url)
-        await _worker(settings, run)
         if not run:
             raise HTTPException(409, detail={"status": "IDLE"})
         if run.get("status") == "FAILED":

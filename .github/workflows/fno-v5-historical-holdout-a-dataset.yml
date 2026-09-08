@@ -72,18 +72,21 @@ jobs:
         run: |
           set -euo pipefail
           : > status.json
-          for i in {1..300}; do
-            if curl -fsS --connect-timeout 10 --max-time 45 --retry 2 --retry-delay 2 --retry-all-errors \
+          deadline=$((SECONDS + 5400))
+          while (( SECONDS < deadline )); do
+            if curl -fsS --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 --retry-all-errors \
               -H "X-Collector-Token: $COLLECTOR_TOKEN" \
               "$API_BASE/v1/internal/fno/v5-holdout-a-dataset/status" -o status.json; then
               STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
-              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"progress:",d.get("progress"))'
-              if [ "$STATE" = "COMPLETED" ]; then break; fi
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then exit 0; fi
               if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
             fi
-            sleep 15
+            sleep 10
           done
-          test "$(python -c 'import json;print(json.load(open("status.json")).get("status",""))')" = "COMPLETED"
+          echo "Timed out after 90 minutes waiting for V5 Holdout A dataset"
+          cat status.json || true
+          exit 1
 
       - name: Fetch and validate frozen historical holdout dataset
         run: |
@@ -126,6 +129,8 @@ jobs:
           assert s['v3_development_rows_used_as_holdout'] is False
           assert s['live_execution'] is False
           assert s['capital_committed']==0
+          assert s['history_transport_cache_only'] is True
+          assert s['history_cache_may_change_decisions'] is False
           rows=d['rows']
           assert len(rows)==e['observations']
           by_day={}

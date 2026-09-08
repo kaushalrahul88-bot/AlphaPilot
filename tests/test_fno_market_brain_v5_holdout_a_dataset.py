@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+import asyncio
+import inspect
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from app import fno_market_brain_v5_holdout_a_dataset as dataset
+from app import fno_market_brain_v5_holdout_a_dataset_api as dataset_api
 from app.fno_market_brain_v3_current_expiry_dataset import events_at
 
 IST = ZoneInfo("Asia/Kolkata")
+UTC = timezone.utc
 
 
 def test_holdout_a_universe_windows_and_frozen_brain():
@@ -71,6 +76,8 @@ def test_holdout_contract_blocks_forward_and_outcome_evaluation():
     assert safety["v3_development_rows_used_as_holdout"] is False
     assert safety["live_execution"] is False
     assert safety["capital_committed"] == 0
+    assert safety["history_transport_cache_only"] is True
+    assert safety["history_cache_may_change_decisions"] is False
 
 
 def test_knowledge_archive_was_frozen_without_outcomes():
@@ -80,3 +87,67 @@ def test_knowledge_archive_was_frozen_without_outcomes():
     assert policy["future_bars_used_for_decision"] is False
     assert policy["options_used_for_decision"] is False
     assert policy["futures_used_for_decision"] is False
+
+
+def test_history_segment_cache_reuses_exact_transport_window():
+    calls = []
+    cache = {}
+    start = datetime(2026, 6, 1, 9, 15, tzinfo=IST)
+    end = datetime(2026, 6, 2, 15, 30, tzinfo=IST)
+    rows = [[1, 100.0, 101.0, 99.0, 100.5, 1000.0]]
+
+    async def fake_chunk(provider, symbol, timeframe, window_start, window_end):
+        calls.append((symbol, timeframe, window_start, window_end))
+        return list(rows)
+
+    async def cache_get(symbol, timeframe, window_start, window_end):
+        return cache.get((symbol, timeframe, window_start, window_end))
+
+    async def cache_put(symbol, timeframe, window_start, window_end, value):
+        cache[(symbol, timeframe, window_start, window_end)] = list(value)
+
+    async def run_twice():
+        first, _ = await dataset._fetch_cached(
+            object(), "INFY", "15m", start, end,
+            cache_get=cache_get, cache_put=cache_put,
+        )
+        second, _ = await dataset._fetch_cached(
+            object(), "INFY", "15m", start, end,
+            cache_get=cache_get, cache_put=cache_put,
+        )
+        return first, second
+
+    with patch.object(dataset.baseline, "_chunk", new=fake_chunk), patch.object(
+        dataset.baseline, "_merge", side_effect=lambda value: value
+    ):
+        first, second = asyncio.run(run_twice())
+
+    assert first == rows
+    assert second == rows
+    assert len(calls) == 1
+
+
+def test_stale_worker_detection_is_time_based():
+    now = datetime(2026, 9, 8, 0, 0, tzinfo=UTC)
+    recent = {
+        "status": "RUNNING",
+        "heartbeat_at": (now - timedelta(minutes=2)).isoformat(),
+    }
+    stale = {
+        "status": "RUNNING",
+        "heartbeat_at": (now - timedelta(minutes=20)).isoformat(),
+    }
+    assert dataset_api._is_stale(recent, now=now) is False
+    assert dataset_api._is_stale(stale, now=now) is True
+
+
+def test_status_and_result_polling_are_read_only():
+    source = inspect.getsource(dataset_api.register_fno_market_brain_v5_holdout_a_dataset_routes)
+    status_block = source.split('@app.get("/v1/internal/fno/v5-holdout-a-dataset/status")', 1)[1]
+    status_block, result_block = status_block.split('@app.get("/v1/internal/fno/v5-holdout-a-dataset/result")', 1)
+    assert "_worker(" not in status_block
+    assert "_worker(" not in result_block
+    start_block = source.split('@app.post("/v1/internal/fno/v5-holdout-a-dataset/start")', 1)[1].split(
+        '@app.get("/v1/internal/fno/v5-holdout-a-dataset/status")', 1
+    )[0]
+    assert "_worker(" in start_block
