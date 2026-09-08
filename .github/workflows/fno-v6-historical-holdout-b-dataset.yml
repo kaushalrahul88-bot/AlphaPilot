@@ -82,9 +82,18 @@ jobs:
               -H "X-Collector-Token: $COLLECTOR_TOKEN" \
               "$API_BASE/v1/internal/fno/v6-holdout-b-dataset/status" -o status.json; then
               STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
-              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"progress:",d.get("progress"))'
+              ACTIVE=$(python -c 'import json;print("true" if json.load(open("status.json")).get("worker_active") is True else "false")')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"worker_active:",d.get("worker_active"),"deployment_commit:",d.get("deployment_commit"),"progress:",d.get("progress"))'
               if [ "$STATE" = "COMPLETED" ]; then exit 0; fi
               if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+              if [ "$STATE" = "RUNNING" ] && [ "$ACTIVE" != "true" ]; then
+                echo "RUNNING dataset has no active worker; explicitly resuming from durable transport cache"
+                curl -fsS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 3 --retry-all-errors \
+                  -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                  -X POST "$API_BASE/v1/internal/fno/v6-holdout-b-dataset/start" \
+                  -o resume.json
+                cat resume.json
+              fi
             fi
             sleep 10
           done
@@ -146,8 +155,7 @@ jobs:
           for row in rows:
               by_day_symbol.setdefault((row['trade_date'],row['symbol']),set()).add(row['click_at'])
           assert all(len(clicks)==20 for clicks in by_day_symbol.values())
-          # Same click manifest applies to every primary stock on each session.
-          assert set(d['click_manifest'])=={w for w in {r['trade_date'] for r in rows}}
+          assert set(d['click_manifest'])=={r['trade_date'] for r in rows}
           summary={
               'protocol_id':d['protocol_id'],
               'brain_protocol_id':d['brain_protocol_id'],
