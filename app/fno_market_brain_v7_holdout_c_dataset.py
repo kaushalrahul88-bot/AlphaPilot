@@ -14,9 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from . import fno_15m_historical_replay_v1 as core
@@ -31,6 +31,7 @@ from .fno_market_brain_v6_holdout_b_dataset import (
 )
 
 IST = ZoneInfo("Asia/Kolkata")
+UTC = timezone.utc
 
 PROTOCOL_ID = "FNO_MARKET_BRAIN_V7_HOLDOUT_C_2026-09-08"
 BRAIN_FROZEN_COMMIT = "461053bb98ef60ffdad9f9bd34ce4a5e599016c3"
@@ -66,8 +67,8 @@ CLICK_START = time(9, 30)
 CLICK_END = time(14, 0)
 CLICK_STEP_MINUTES = 5
 
-# Warm-up ranges are fixed before outcomes. They provide more history than the
-# existing technical lookback semantics require at the first January click.
+# Fixed pre-outcome warm-up ranges. They intentionally exceed the technical
+# engine's rolling lookback needs at the first January click.
 HISTORY_START = {
     "5m": datetime(2025, 12, 15, 9, 15, tzinfo=IST),
     "15m": datetime(2025, 12, 1, 9, 15, tzinfo=IST),
@@ -103,16 +104,13 @@ def deterministic_clicks(day: date) -> list[datetime]:
     cursor = datetime.combine(day, CLICK_START, tzinfo=IST)
     end = datetime.combine(day, CLICK_END, tzinfo=IST)
     while cursor <= end:
-        pool.append(cursor)
-        cursor = cursor.replace() + __import__("datetime").timedelta(minutes=CLICK_STEP_MINUTES)
+        pool.append(cursor.astimezone(UTC))
+        cursor += timedelta(minutes=CLICK_STEP_MINUTES)
     seed = int.from_bytes(
         hashlib.sha256(f"{PROTOCOL_ID}:{day.isoformat()}".encode()).digest()[:8],
         "big",
     )
-    return sorted(
-        click.astimezone(__import__("datetime").timezone.utc)
-        for click in random.Random(seed).sample(pool, CLICKS_PER_DAY)
-    )
+    return sorted(random.Random(seed).sample(pool, CLICKS_PER_DAY))
 
 
 def sessions_from_tape(candles: list[list]) -> list[date]:
@@ -141,6 +139,41 @@ def _frozen_tape_rows(rows: list[list]) -> list[list]:
         if _eligible_day(local.date()) and time(9, 15) <= local.time() <= time(15, 30):
             output.append(list(row))
     return output
+
+
+def _technical_audit(technical: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist only the PIT features needed to audit/forensically explain V7.
+
+    V7 decisions are already frozen. Keeping a concise feature snapshot avoids a
+    large duplicated JSON payload while preserving every family/volume/location
+    field used by V5/V6/V7.
+    """
+    output: dict[str, Any] = {}
+    for timeframe in TIMEFRAMES:
+        payload = (technical.get("timeframes") or {}).get(timeframe) or {}
+        output[timeframe] = {
+            "market_structure": payload.get("market_structure"),
+            "family_scores": dict(payload.get("family_scores") or {}),
+            "volume_ratio_capped": payload.get("volume_ratio_capped"),
+            "volume_ratio_raw": payload.get("volume_ratio_raw"),
+            "distance_to_resistance_atr": payload.get("distance_to_resistance_atr"),
+            "distance_to_support_atr": payload.get("distance_to_support_atr"),
+            "alpha_score": payload.get("alpha_score"),
+        }
+    return output
+
+
+def _context_audit(context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "market_60m_pct": context.get("market_60m_pct"),
+        "stock_60m_pct": context.get("stock_60m_pct"),
+        "relative_strength_vs_nifty_pct": context.get("relative_strength_vs_nifty_pct"),
+        "peer_mean_60m_pct": context.get("peer_mean_60m_pct"),
+        "peer_breadth": context.get("peer_breadth"),
+        "components": dict(context.get("components") or {}),
+        "events": list(context.get("events") or []),
+        "complete": context.get("complete"),
+    }
 
 
 async def build_holdout_c_dataset(
@@ -191,13 +224,7 @@ async def build_holdout_c_dataset(
         symbol, timeframe = item
         histories[symbol][timeframe] = rows
         if not rows:
-            errors.append(
-                {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "attempt_errors": failures,
-                }
-            )
+            errors.append({"symbol": symbol, "timeframe": timeframe, "attempt_errors": failures})
     if errors:
         return {
             "protocol_id": PROTOCOL_ID,
@@ -245,8 +272,7 @@ async def build_holdout_c_dataset(
     context_histories: dict[str, list[list]] = {
         symbol: histories[symbol]["15m"] for symbol in STOCKS
     }
-    # Target stocks already have a frozen 15m tape. Do not refetch them when
-    # another target also uses them as a peer.
+    # A target may be another target's peer; its frozen 15m history is reused.
     context_items = sorted(context_symbols - set(STOCKS))
 
     await _safe_progress(
@@ -326,8 +352,8 @@ async def build_holdout_c_dataset(
                         "click_at": click.isoformat(),
                         "symbol": symbol,
                         "category": categories[symbol],
-                        "technical": technical,
-                        "context": context,
+                        "technical_audit": _technical_audit(technical),
+                        "context_audit": _context_audit(context),
                         "raw_decision": raw_decision,
                         "decision": decision,
                     }
@@ -365,9 +391,7 @@ async def build_holdout_c_dataset(
                     "id": window_id,
                     "start": start.isoformat(),
                     "end": end.isoformat(),
-                    "completed_sessions": [
-                        day.isoformat() for day in window_sessions[window_id]
-                    ],
+                    "completed_sessions": [day.isoformat() for day in window_sessions[window_id]],
                     "session_count": len(window_sessions[window_id]),
                 }
                 for window_id, start, end in WINDOWS
@@ -440,5 +464,6 @@ def architecture_contract() -> dict[str, Any]:
         "capital_committed": 0,
         "history_transport_cache_only": True,
         "history_cache_may_change_decisions": False,
+        "lean_audit_snapshot": True,
         "bounded_fetch_concurrency": FETCH_CONCURRENCY,
     }
