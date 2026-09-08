@@ -13,6 +13,10 @@ from uuid import uuid4
 from fastapi import HTTPException, Query, Response
 
 from app.crypto_btc_backtest_history import PostgresBtcBacktestHistoryStore
+from app.crypto_btc_continuous_direction_backtest import (
+    continuous_direction_readiness,
+    run_continuous_direction_15m,
+)
 from app.crypto_btc_enriched24h_underlying_backtest import (
     enriched_24h_readiness,
     run_enriched24h_underlying_15m,
@@ -160,6 +164,7 @@ async def _create_backtest_job(
     history: PostgresBtcBacktestHistoryStore,
     mode: str,
     runner: BacktestRunner,
+    total_clicks: int = 96,
 ) -> dict:
     job_id = _request_id()
     job = {
@@ -168,7 +173,7 @@ async def _create_backtest_job(
         "status": "RUNNING",
         "phase": "QUEUED",
         "completed_clicks": 0,
-        "total_clicks": 96,
+        "total_clicks": max(1, int(total_clicks)),
         "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
         "error": None,
@@ -247,6 +252,49 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
             runner=run_enriched24h_underlying_15m,
         )
 
+    @app.get("/v1/dashboard/crypto/btc/actions/continuous-direction-backtest/readiness")
+    async def read_continuous_direction_readiness(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        database_url = _database_url(settings)
+        try:
+            return await continuous_direction_readiness(database_url)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"BTC continuous direction readiness is unavailable: {exc}") from exc
+
+    @app.post("/v1/dashboard/crypto/btc/actions/continuous-direction-backtest")
+    async def run_user_continuous_direction_backtest(response: Response):
+        if _backtest_lock.locked():
+            raise HTTPException(status_code=409, detail="BTC underlying backtest is already running")
+        database_url = _database_url(settings)
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            readiness = await continuous_direction_readiness(database_url)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"BTC continuous direction readiness is unavailable: {exc}") from exc
+        if readiness.get("ready") is not True:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "BTC_CONTINUOUS_DIRECTION_NOT_READY",
+                    "message": str(readiness.get("reason") or "BTC PIT history is not ready for a 15-minute direction grid."),
+                    "readiness": readiness,
+                },
+            )
+
+        history = PostgresBtcBacktestHistoryStore(database_url)
+        try:
+            await history.initialize()
+            await _reconcile_stale_history(history)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
+        return await _create_backtest_job(
+            database_url=database_url,
+            history=history,
+            mode="CONTINUOUS_PIT_15M_DIRECTION",
+            runner=run_continuous_direction_15m,
+            total_clicks=int(readiness.get("scheduled_clicks") or 1),
+        )
+
     @app.get("/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest/{job_id}")
     async def read_user_underlying_backtest(job_id: str, response: Response):
         response.headers["Cache-Control"] = "no-store"
@@ -317,7 +365,7 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V4",
+        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V5",
         "user_backtest_allowed": True,
         "user_backtest_reports_real_progress": True,
         "user_backtest_progress_checkpointed": True,
@@ -328,6 +376,10 @@ def architecture_contract() -> dict:
         "later_enriched_24h_replay_available": True,
         "later_enriched_24h_requires_readiness_gate": True,
         "enriched_replay_may_run_before_full_context_window": False,
+        "continuous_direction_replay_available": True,
+        "continuous_direction_replay_uses_dynamic_click_count": True,
+        "continuous_direction_replay_options_profitability": False,
+        "production_two_origin_gate_changed": False,
         "user_live_shadow_setup_allowed": True,
         "broker_order_placement_allowed": False,
         "credentials_accepted_from_browser": False,
