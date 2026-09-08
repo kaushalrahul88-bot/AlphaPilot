@@ -2,20 +2,13 @@ name: F&O Current Expiry History Probe
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/fno-current-expiry-history-probe.yml"
-      - "app/fno_current_expiry_history_probe.py"
-      - "app/fno_current_expiry_history_probe_api.py"
-      - "app/__init__.py"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fno-current-expiry-history-probe
-  cancel-in-progress: true
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
 
 jobs:
   probe:
