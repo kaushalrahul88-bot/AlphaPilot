@@ -1,0 +1,276 @@
+{
+  "protocol": "FNO_MARKET_BRAIN_V7_HOLDOUT_C_2026-09-08",
+  "windows": [
+    {
+      "id": "JANUARY_2026",
+      "start": "2026-01-05",
+      "end": "2026-01-30"
+    },
+    {
+      "id": "FEBRUARY_2026",
+      "start": "2026-02-02",
+      "end": "2026-02-27"
+    },
+    {
+      "id": "MARCH_2026",
+      "start": "2026-03-02",
+      "end": "2026-03-27"
+    }
+  ],
+  "policy": {
+    "use": "Static profiles classify sector drivers and peer baskets. Only completed candles and point-in-time events public by the simulated click may influence V7.",
+    "unknown_intraday_event_time": "NEXT_NSE_SESSION_OPEN",
+    "direction_rule": "Directional labels use only intrinsic information available at publication. Ambiguous or mixed announcements are NEUTRAL. Subsequent stock-price action is never used.",
+    "v3_development_rows_excluded": true,
+    "v5_holdout_a_rows_excluded": true,
+    "v6_holdout_b_rows_excluded": true,
+    "outcomes_used_to_build_archive": false,
+    "future_bars_used_for_decision": false,
+    "options_used_for_decision": false,
+    "futures_used_for_decision": false
+  },
+  "stocks": {
+    "ICICIBANK": {
+      "category": "PRIVATE_BANKING",
+      "business": "Large Indian private-sector bank with retail, corporate, treasury and fee-income businesses.",
+      "primary_drivers": ["loan_growth", "deposit_growth", "net_interest_margin", "credit_cost", "asset_quality", "RBI_policy", "liquidity", "fee_income"],
+      "peer_basket": ["HDFCBANK", "AXISBANK", "KOTAKBANK", "SBIN"]
+    },
+    "TCS": {
+      "category": "INFORMATION_TECHNOLOGY",
+      "business": "Global information-technology services and consulting company with large enterprise transformation exposure.",
+      "primary_drivers": ["deal_wins", "constant_currency_growth", "AI_services", "discretionary_tech_spending", "operating_margin", "attrition", "US_and_Europe_demand", "INR"],
+      "peer_basket": ["INFY", "HCLTECH", "WIPRO", "TECHM"]
+    },
+    "M&M": {
+      "category": "AUTOMOBILES",
+      "business": "Indian automotive and farm-equipment group with utility vehicles, tractors and financial-services exposure.",
+      "primary_drivers": ["SUV_demand", "tractor_demand", "market_share", "commodity_costs", "rural_income", "monsoon", "new_launches", "auto_financing"],
+      "peer_basket": ["MARUTI", "TATAMOTORS", "EICHERMOT", "HEROMOTOCO"]
+    },
+    "HINDUNILVR": {
+      "category": "FMCG_CONSUMER",
+      "business": "Large Indian fast-moving consumer goods company spanning home care, beauty, personal care and foods.",
+      "primary_drivers": ["volume_growth", "rural_demand", "urban_demand", "input_costs", "pricing", "gross_margin", "premiumisation", "consumer_sentiment"],
+      "peer_basket": ["ITC", "NESTLEIND", "BRITANNIA"]
+    },
+    "CIPLA": {
+      "category": "PHARMACEUTICALS",
+      "business": "Indian pharmaceutical company with India, North America, Africa and emerging-market businesses.",
+      "primary_drivers": ["India_growth", "US_generics", "new_launches", "regulatory_events", "gross_margin", "R&D", "respiratory_franchise", "currency"],
+      "peer_basket": ["SUNPHARMA", "DRREDDY", "DIVISLAB", "APOLLOHOSP"]
+    },
+    "HINDALCO": {
+      "category": "METALS_ALUMINIUM",
+      "business": "Integrated aluminium and copper producer with global downstream exposure through Novelis.",
+      "primary_drivers": ["aluminium_prices", "copper_prices", "coal_and_power_costs", "Novelis_shipments", "China_demand", "India_industrial_demand", "currency", "leverage"],
+      "peer_basket": ["TATASTEEL", "JSWSTEEL", "COALINDIA"]
+    },
+    "NTPC": {
+      "category": "POWER_GENERATION",
+      "business": "Large Indian power generator with thermal generation and expanding renewable-energy capacity.",
+      "primary_drivers": ["power_demand", "plant_load_factor", "regulated_returns", "fuel_supply", "capacity_commissioning", "renewables", "government_policy", "interest_rates"],
+      "peer_basket": ["POWERGRID", "ONGC", "COALINDIA", "ADANIENT"]
+    },
+    "TITAN": {
+      "category": "CONSUMER_DISCRETIONARY",
+      "business": "Indian consumer company led by jewellery, watches and eyewear with premium discretionary-demand exposure.",
+      "primary_drivers": ["jewellery_demand", "gold_prices", "same_store_growth", "store_expansion", "wedding_demand", "premiumisation", "margin", "consumer_sentiment"],
+      "peer_basket": ["ASIANPAINT", "HINDUNILVR", "NESTLEIND", "BRITANNIA"]
+    },
+    "ASIANPAINT": {
+      "category": "PAINTS_HOME_IMPROVEMENT",
+      "business": "Large Indian decorative-paints company with home-improvement and international operations.",
+      "primary_drivers": ["decorative_volume", "housing_demand", "crude_linked_inputs", "pricing", "gross_margin", "competition", "rural_demand", "renovation_cycle"],
+      "peer_basket": ["TITAN", "HINDUNILVR", "ULTRACEMCO", "GRASIM"]
+    },
+    "ADANIPORTS": {
+      "category": "PORTS_LOGISTICS",
+      "business": "Indian ports and integrated logistics operator with domestic and international cargo exposure.",
+      "primary_drivers": ["cargo_volume", "container_volume", "port_tariffs", "logistics_growth", "capex", "acquisitions", "trade_flows", "leverage"],
+      "peer_basket": ["LT", "ADANIENT", "RELIANCE", "COALINDIA"]
+    },
+    "COALINDIA": {
+      "category": "COAL_MINING_ENERGY",
+      "business": "State-controlled Indian coal producer supplying the power and industrial sectors.",
+      "primary_drivers": ["coal_production", "dispatches", "e_auction_prices", "power_demand", "wage_costs", "government_policy", "dividends", "import_substitution"],
+      "peer_basket": ["ONGC", "HINDALCO", "TATASTEEL", "JSWSTEEL"]
+    },
+    "BRITANNIA": {
+      "category": "FMCG_FOODS",
+      "business": "Indian packaged-foods company led by biscuits, bakery and adjacent food categories.",
+      "primary_drivers": ["volume_growth", "rural_demand", "wheat_and_palm_oil", "pricing", "gross_margin", "distribution", "premiumisation", "consumer_sentiment"],
+      "peer_basket": ["HINDUNILVR", "NESTLEIND", "ITC"]
+    }
+  },
+  "events": [
+    {
+      "id": "TCS_Q3_FY26_2026_01_12",
+      "symbol": "TCS",
+      "category": "EARNINGS",
+      "effective_at": "2026-01-13T09:15:00+05:30",
+      "title": "TCS reported Q3 revenue growth, stable operating margin, net income growth and a strong order book with expanding AI-services revenue",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.tcs.com/who-we-are/newsroom/press-release/tcs-financial-results-q3-fy-2026",
+      "notes": "Direction uses only the published Q3 financial and order-book comparisons. Intraday publication time is conservatively shifted to the next NSE session open."
+    },
+    {
+      "id": "ICICIBANK_Q3_FY26_2026_01_17",
+      "symbol": "ICICIBANK",
+      "category": "EARNINGS",
+      "effective_at": "2026-01-19T09:15:00+05:30",
+      "title": "ICICI Bank reported a year-over-year profit decline and missed consensus after additional supervisory-review provisions, while loan growth and asset quality remained resilient",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "TIER1_NEWS_WITH_COMPANY_RESULTS",
+      "source": "https://www.reuters.com/world/india/indias-icici-bank-misses-quarterly-profit-expectations-reappoints-ceo-2026-01-17/",
+      "notes": "The negative label is based on the reported profit decline, consensus miss and additional provisions, not subsequent market reaction."
+    },
+    {
+      "id": "CIPLA_Q3_FY26_2026_01_23",
+      "symbol": "CIPLA",
+      "category": "EARNINGS",
+      "effective_at": "2026-01-27T09:15:00+05:30",
+      "title": "Cipla reported flat consolidated revenue with lower margin pressure from generic Revlimid, alongside strong double-digit India business growth",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.cipla.com/sites/default/files/Cipla_Q3FY26%20Press%20Release.pdf",
+      "notes": "Published strengths and weaknesses are mixed, so no direction is inferred. January 26 is an NSE holiday; the archive uses the next session open."
+    },
+    {
+      "id": "ASIANPAINT_Q3_FY26_2026_01_27",
+      "symbol": "ASIANPAINT",
+      "category": "EARNINGS",
+      "effective_at": "2026-01-28T09:15:00+05:30",
+      "title": "Asian Paints published Q3 FY26 consolidated results with modest sales growth and exceptional-item impacts",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.asianpaints.com/content/dam/asianpaints/website/secondary-navigation/press-releases/2025-2026/FY26-Q3-APL-Press-Release.pdf",
+      "notes": "The result contains mixed operating and exceptional-item information; direction is deliberately neutral."
+    },
+    {
+      "id": "NTPC_RENEWABLE_COD_2026_01_28",
+      "symbol": "NTPC",
+      "category": "CAPACITY_COMMISSIONING",
+      "effective_at": "2026-01-29T09:15:00+05:30",
+      "title": "NTPC disclosed commercial operation of another 130.47 MW part capacity of the Khavda-I solar project",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE",
+      "source": "https://ntpc.co.in/investors/disclosures-announcements/corporate-announcements?field_financial_year_target_id=10",
+      "notes": "Direction reflects incremental commissioned generation capacity only; publication-time ambiguity is handled with next-session-open timing."
+    },
+    {
+      "id": "INDIA_BUDGET_2026_02_01",
+      "symbol": "MARKET",
+      "category": "UNION_BUDGET",
+      "effective_at": "2026-02-02T09:15:00+05:30",
+      "title": "India's 2026-27 budget raised planned infrastructure spending by 11.4% to a record 12.2 trillion rupees, while the allocation was below some market expectations",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_OFFICIAL_BUDGET",
+      "source": "https://www.reuters.com/world/india/india-budget-india-raises-infrastructure-spending-record-122-trillion-rupees-2026-02-01/",
+      "notes": "Higher capex is supportive but the announcement was mixed relative to expectations; broad-market direction is therefore neutral."
+    },
+    {
+      "id": "ADANIPORTS_Q3_FY26_2026_02_03",
+      "symbol": "ADANIPORTS",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-04T09:15:00+05:30",
+      "title": "Adani Ports reported Q3 revenue up 22%, EBITDA up 20%, PAT up 21% and increased FY26 EBITDA guidance",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.adaniports.com/Newsroom/Media-Releases/apsez-q3-fy26-ebitda-up-20-percent-yoy-to-rs5786-cr-increases-fy26-ebitda-guidance-by-rs800-cr",
+      "notes": "Direction is based only on published growth and guidance, not later share-price movement."
+    },
+    {
+      "id": "RBI_POLICY_2026_02_06",
+      "symbol": "MARKET",
+      "category": "RBI_POLICY",
+      "effective_at": "2026-02-09T09:15:00+05:30",
+      "title": "RBI unanimously held the repo rate at 5.25% and retained a neutral stance amid low inflation and resilient growth",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_RBI_POLICY",
+      "source": "https://www.reuters.com/world/india/india-central-bank-holds-policy-rate-expected-2026-02-06/",
+      "notes": "The hold and neutral stance are treated as mixed/expected for equities; next-session-open timing is used."
+    },
+    {
+      "id": "TITAN_Q3_FY26_2026_02_10",
+      "symbol": "TITAN",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-11T09:15:00+05:30",
+      "title": "Titan approved and published its unaudited Q3 FY26 financial results and investor presentation",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_DISCLOSURE",
+      "source": "https://www.titancompany.in/investors/corporate-announcements",
+      "notes": "The archive records the result event but does not infer a directional surprise without an unambiguous intrinsic comparison."
+    },
+    {
+      "id": "BRITANNIA_Q3_FY26_2026_02_10",
+      "symbol": "BRITANNIA",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-11T09:15:00+05:30",
+      "title": "Britannia approved unaudited consolidated and standalone Q3 FY26 financial results",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_FILING",
+      "source": "https://media.britannia.co.in/Outcome_29d2ec0247.pdf",
+      "notes": "No outcome-driven interpretation is applied; the event is retained as neutral."
+    },
+    {
+      "id": "M_AND_M_Q3_FY26_2026_02_11",
+      "symbol": "M&M",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-12T09:15:00+05:30",
+      "title": "Mahindra & Mahindra reported Q3 consolidated revenue up 26% and PAT up strongly with broad operating growth across auto and farm businesses",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.mahindra.com/news-room/press-release/en/m-and-m-results-q3-f26",
+      "notes": "Direction uses only published year-over-year operating and profit growth."
+    },
+    {
+      "id": "HINDUNILVR_Q3_FY26_2026_02_12",
+      "symbol": "HINDUNILVR",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-13T09:15:00+05:30",
+      "title": "Hindustan Unilever reported 6% consolidated revenue growth, 4% underlying volume growth and 3% EBITDA growth in the December quarter",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RESULTS",
+      "source": "https://www.hul.co.in/files/investor-presentation-12-02-2026.pdf",
+      "notes": "Direction is based on published underlying sales, volume and EBITDA growth, excluding the exceptional demerger-related PAT effect."
+    },
+    {
+      "id": "HINDALCO_Q3_FY26_2026_02_12",
+      "symbol": "HINDALCO",
+      "category": "EARNINGS",
+      "effective_at": "2026-02-13T09:15:00+05:30",
+      "title": "Hindalco reported consolidated revenue up 14%, EBITDA up 5% and PAT before exceptional items up 8%, with record India-business PAT",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.hindalco.com/media/press-releases/hindalco-results-q3-fy26",
+      "notes": "Direction uses published operating growth before exceptional items and does not use later price reaction."
+    },
+    {
+      "id": "INDIA_CPI_FEB_2026_RELEASE_2026_03_12",
+      "symbol": "MARKET",
+      "category": "INFLATION_RATES",
+      "effective_at": "2026-03-13T09:15:00+05:30",
+      "title": "India February retail inflation rose to 3.21% from 2.74% in January, slightly above a Reuters poll but still below the RBI's 4% target",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_OFFICIAL_CPI_DATA",
+      "source": "https://www.reuters.com/world/india/indias-february-retail-inflation-quickens-321-yy-2026-03-12/",
+      "notes": "The higher print and oil risks were offset by inflation remaining below target, so the broad-market label is neutral."
+    }
+  ]
+}
