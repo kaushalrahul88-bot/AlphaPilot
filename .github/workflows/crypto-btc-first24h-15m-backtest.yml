@@ -28,7 +28,7 @@ jobs:
           for i in {1..120}; do
             if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
               DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
-              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+              if [ -n "$DEPLOYED" ] && curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json && python -c 'import json,sys;sys.exit(0 if "/v1/internal/crypto/btc/backtest/first-24h-15m" in json.load(open("openapi.json")).get("paths",{}) else 1)'; then exit 0; fi
             fi
             sleep 10
           done
