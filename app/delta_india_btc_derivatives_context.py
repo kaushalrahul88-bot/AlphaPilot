@@ -66,6 +66,19 @@ def _number(name: str, value: Any, *, positive: bool = False, nonnegative: bool 
     return number
 
 
+def _oi_volume(value: Any) -> float:
+    """Normalize Delta's non-semantic OI-candle volume field.
+
+    Delta's public ``OI:BTCUSD`` historical candles currently return ``volume``
+    as JSON null while the OI OHLC fields are populated. Volume is not used by
+    the OI-positioning model, so null/missing volume is safely represented as
+    zero. Any non-null value remains strictly validated as finite/non-negative.
+    """
+    if value is None:
+        return 0.0
+    return _number("volume", value, nonnegative=True)
+
+
 @dataclass(frozen=True)
 class DeltaIndiaBtcOiCandle:
     open_at: datetime
@@ -162,7 +175,7 @@ def normalize_delta_btc_oi_candles(payload: dict[str, Any], *, resolution: str) 
                 high=_number("high", raw.get("high"), positive=True),
                 low=_number("low", raw.get("low"), positive=True),
                 close=_number("close", raw.get("close"), positive=True),
-                volume=_number("volume", raw.get("volume", 0), nonnegative=True),
+                volume=_oi_volume(raw.get("volume")),
             ).validated()
         except (TypeError, ValueError):
             continue

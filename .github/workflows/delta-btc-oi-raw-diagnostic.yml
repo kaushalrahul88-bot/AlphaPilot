@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - '.github/workflows/delta-btc-oi-raw-diagnostic.yml'
+      - 'app/delta_india_btc_derivatives_context.py'
 
 permissions:
   contents: read
@@ -17,7 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe documented Delta BTC OI history
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install diagnostic dependency
+        run: python -m pip install --disable-pip-version-check -q httpx
+
+      - name: Probe documented Delta BTC OI history and application normalizer
         shell: bash
         run: |
           set -euo pipefail
@@ -29,6 +39,8 @@ jobs:
           python - <<'PY'
           import json, os
           from collections import Counter
+
+          from app.delta_india_btc_derivatives_context import normalize_delta_btc_oi_candles
 
           http = int(os.environ['HTTP'])
           start = int(os.environ['START'])
@@ -60,9 +72,18 @@ jobs:
               }
               out['first_time'] = next((row.get('time') for row in result if isinstance(row, dict)), None)
               out['last_time'] = next((row.get('time') for row in reversed(result) if isinstance(row, dict)), None)
+
+          normalized = normalize_delta_btc_oi_candles(payload, resolution='5m')
+          out['normalized_rows'] = len(normalized)
+          out['normalized_zero_volume_rows'] = sum(1 for row in normalized if row.volume == 0.0)
+          out['normalized_first_open_at'] = normalized[0].open_at.isoformat() if normalized else None
+          out['normalized_last_open_at'] = normalized[-1].open_at.isoformat() if normalized else None
+
           print(json.dumps(out, indent=2, sort_keys=True))
           if http != 200 or out.get('success') is not True:
               raise SystemExit(1)
+          if out.get('raw_rows', 0) > 0 and out['normalized_rows'] == 0:
+              raise SystemExit('Raw Delta OI rows were returned but application normalization produced zero rows')
           PY
 
       - uses: actions/upload-artifact@v4

@@ -82,6 +82,37 @@ class DeltaIndiaBtcDerivativesContextTests(unittest.TestCase):
         self.assertEqual(rows[0].open_at, opened)
         self.assertEqual(rows[0].available_at, opened + timedelta(minutes=5))
 
+    def test_normalization_accepts_null_volume_for_oi_history(self):
+        opened = datetime(2026, 9, 6, 8, 0, tzinfo=UTC)
+        raw = _raw(opened, 100.0)
+        raw["volume"] = None
+        rows = normalize_delta_btc_oi_candles({"success": True, "result": [raw]}, resolution="5m")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].volume, 0.0)
+
+    def test_normalization_accepts_missing_volume_for_oi_history(self):
+        opened = datetime(2026, 9, 6, 8, 0, tzinfo=UTC)
+        raw = _raw(opened, 100.0)
+        raw.pop("volume")
+        rows = normalize_delta_btc_oi_candles({"success": True, "result": [raw]}, resolution="5m")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].volume, 0.0)
+
+    def test_normalization_still_rejects_malformed_oi_ohlc(self):
+        opened = datetime(2026, 9, 6, 8, 0, tzinfo=UTC)
+        raw = _raw(opened, 100.0)
+        raw["close"] = None
+        raw["volume"] = None
+        rows = normalize_delta_btc_oi_candles({"success": True, "result": [raw]}, resolution="5m")
+        self.assertEqual(rows, [])
+
+    def test_normalization_still_rejects_invalid_non_null_volume(self):
+        opened = datetime(2026, 9, 6, 8, 0, tzinfo=UTC)
+        raw = _raw(opened, 100.0)
+        raw["volume"] = -1
+        rows = normalize_delta_btc_oi_candles({"success": True, "result": [raw]}, resolution="5m")
+        self.assertEqual(rows, [])
+
     def test_completed_oi_expansion_and_positive_price_is_bullish(self):
         decision = datetime(2026, 9, 6, 10, 11, tzinfo=UTC)
         rows = [
