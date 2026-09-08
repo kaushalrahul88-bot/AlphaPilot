@@ -1,0 +1,68 @@
+name: Delta BTC OI Raw Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe documented Delta BTC OI history
+        shell: bash
+        run: |
+          set -euo pipefail
+          END=$(date -u +%s)
+          START=$((END - 21600))
+          URL="https://api.india.delta.exchange/v2/history/candles?resolution=5m&symbol=OI%3ABTCUSD&start=${START}&end=${END}"
+          HTTP=$(curl -sS --max-time 30 -H 'Accept: application/json' -o delta_oi_raw.json -w '%{http_code}' "$URL")
+          export HTTP START END
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+
+          http = int(os.environ['HTTP'])
+          start = int(os.environ['START'])
+          end = int(os.environ['END'])
+          out = {
+              'endpoint': '/v2/history/candles',
+              'symbol': 'OI:BTCUSD',
+              'resolution': '5m',
+              'start': start,
+              'end': end,
+              'http_status': http,
+          }
+          try:
+              payload = json.load(open('delta_oi_raw.json'))
+          except Exception as exc:
+              out['json_error'] = type(exc).__name__
+              print(json.dumps(out, indent=2))
+              raise
+          result = payload.get('result') if isinstance(payload, dict) else None
+          out['success'] = payload.get('success') if isinstance(payload, dict) else None
+          out['result_is_list'] = isinstance(result, list)
+          out['raw_rows'] = len(result) if isinstance(result, list) else None
+          if isinstance(result, list):
+              keysets = Counter(tuple(sorted(row.keys())) for row in result if isinstance(row, dict))
+              out['row_keysets'] = [{'keys': list(keys), 'count': count} for keys, count in keysets.most_common(5)]
+              out['null_counts'] = {
+                  key: sum(1 for row in result if isinstance(row, dict) and row.get(key) is None)
+                  for key in ('time','open','high','low','close','volume')
+              }
+              out['first_time'] = next((row.get('time') for row in result if isinstance(row, dict)), None)
+              out['last_time'] = next((row.get('time') for row in reversed(result) if isinstance(row, dict)), None)
+              # Never print full rows; schema/null diagnostics are sufficient.
+          print(json.dumps(out, indent=2, sort_keys=True))
+          if http != 200 or out.get('success') is not True:
+              raise SystemExit(1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: delta-btc-oi-raw-diagnostic
+          path: delta_oi_raw.json
+          retention-days: 1
