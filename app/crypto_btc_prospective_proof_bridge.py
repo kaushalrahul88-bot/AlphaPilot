@@ -7,17 +7,19 @@ it:
 2. read already-visible rows from the immutable BTC PIT store;
 3. optionally admit caller-supplied completed Delta India BTC OI history;
 4. derive Spot Structure + one reconciled leveraged-positioning origin;
-5. admit fresh Deribit options and stablecoin-liquidity context already visible
+5. derive point-in-time historical analogue memory from completed BTC candles;
+6. admit fresh Deribit options and stablecoin-liquidity context already visible
    at the decision time;
-6. freeze a ``Prospective BTC Thesis Tape`` decision;
-7. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
+7. freeze a ``Prospective BTC Thesis Tape`` decision;
+8. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
    resolve the BTC-only outcome.
 
 Missing positioning data remains UNKNOWN context. Multiple providers sharing the
 same leveraged-positioning causal origin are never double-counted; disagreement
-within that origin cancels it to UNKNOWN. Options and stablecoin context are
-read-only Market Brain inputs and cannot create a trade by themselves. No Options
-contract, premium, P&L, Futures trade, order, or live capital is created.
+within that origin cancels it to UNKNOWN. Historical memory, options and
+stablecoin context are read-only Market Brain inputs and cannot create a trade by
+themselves. No Options contract, premium, P&L, Futures trade, order, or live
+capital is created.
 """
 from __future__ import annotations
 
@@ -30,6 +32,10 @@ from typing import Any
 
 from app.coindcx_btc_public_provider import CoinDcxBtcPublicProvider, SPOT_INTERVALS
 from app.crypto_btc_derivatives_evidence import derivatives_evidence_from_full_pit_context
+from app.crypto_btc_historical_analogue import (
+    BtcHistoricalAnaloguePolicy,
+    derive_btc_historical_analogue_evidence,
+)
 from app.crypto_btc_historical_data_adapter import (
     BtcHistoricalArchive,
     BtcSpotCandleArchiveRow,
@@ -71,6 +77,7 @@ def _finite(name: str, value: float, *, positive: bool = False) -> float:
 @dataclass(frozen=True)
 class ProspectiveBtcProofBridgePolicy:
     structure_lookback_hours: float = 30.0
+    historical_memory_lookback_hours: int = 24 * 7
     structure_interval: str = "1h"
     decision_price_interval: str = "1m"
     structure_max_age_seconds: int = 3700
@@ -82,6 +89,10 @@ class ProspectiveBtcProofBridgePolicy:
     def validated(self) -> "ProspectiveBtcProofBridgePolicy":
         _finite("structure_lookback_hours", self.structure_lookback_hours, positive=True)
         _finite("derivatives_price_lookback_hours", self.derivatives_price_lookback_hours, positive=True)
+        if int(self.historical_memory_lookback_hours) < 48:
+            raise ValueError("historical_memory_lookback_hours must be >= 48")
+        if int(self.historical_memory_lookback_hours) + 32 > 1000:
+            raise ValueError("historical_memory_lookback_hours exceeds CoinDCX 1000-candle bridge limit")
         if self.structure_interval != "1h":
             raise ValueError("V1 prospective proof bridge requires 1h structure candles")
         if self.decision_price_interval not in SPOT_INTERVALS:
@@ -229,8 +240,9 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     tape_policy.validated()
     decision = _utc(decision_at)
 
-    structure_limit = min(1000, int(ceil(float(bridge.structure_lookback_hours))) + 8)
-    structure_start = decision - timedelta(hours=float(bridge.structure_lookback_hours) + 2.0)
+    fetch_hours = max(float(bridge.structure_lookback_hours), float(bridge.historical_memory_lookback_hours) + 24.0)
+    structure_limit = min(1000, int(ceil(fetch_hours)) + 8)
+    structure_start = decision - timedelta(hours=fetch_hours + 2.0)
     decision_interval_seconds = int(SPOT_INTERVALS[bridge.decision_price_interval])
     decision_start = decision - timedelta(seconds=max(10 * decision_interval_seconds, 600))
 
@@ -263,7 +275,7 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     )
     if latest is None:
         return {
-            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
+            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V3",
             "status": "PROOF_INPUT_UNRESOLVED",
             "reason": "BTC_DECISION_PRICE_MISSING_OR_STALE",
             "decision_at": decision.isoformat(),
@@ -282,7 +294,7 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     )
     if spot_evidence is None:
         return {
-            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
+            "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V3",
             "status": "PROOF_INPUT_UNRESOLVED",
             "reason": "BTC_SPOT_STRUCTURE_UNAVAILABLE",
             "decision_at": decision.isoformat(),
@@ -292,6 +304,14 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
             "pit_store_read": True,
             "trade_generated": False,
         }
+
+    historical_memory_evidence = derive_btc_historical_analogue_evidence(
+        visible_structure,
+        decision_at=decision,
+        policy=BtcHistoricalAnaloguePolicy(
+            lookback_hours=int(bridge.historical_memory_lookback_hours),
+        ),
+    )
 
     price_change = _price_change_pct(
         visible_structure,
@@ -333,6 +353,8 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
     evidence = [spot_evidence]
     if derivatives_evidence is not None:
         evidence.append(derivatives_evidence)
+    if historical_memory_evidence is not None:
+        evidence.append(historical_memory_evidence)
     if options_context_available:
         evidence.append(options_evidence)
     if stablecoin_context_available:
@@ -350,11 +372,16 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
         dataset = str(row.get("dataset") or "UNKNOWN")
         dataset_counts[dataset] = dataset_counts.get(dataset, 0) + 1
     return {
-        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V2",
+        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_V3",
         "status": "PROSPECTIVE_PROOF_DECISION_FROZEN",
         "decision_at": decision.isoformat(),
         "decision_btc_price": float(latest.close),
         "structure_candle_count": len(visible_structure),
+        "historical_memory_lookback_hours": int(bridge.historical_memory_lookback_hours),
+        "historical_memory_available": historical_memory_evidence is not None,
+        "historical_memory_analogue_count": None if historical_memory_evidence is None else historical_memory_evidence.metadata.get("analogue_count"),
+        "historical_memory_mean_similarity": None if historical_memory_evidence is None else historical_memory_evidence.metadata.get("mean_similarity"),
+        "historical_memory_median_forward_return_pct": None if historical_memory_evidence is None else historical_memory_evidence.metadata.get("median_forward_return_pct"),
         "pit_record_count": len(pit_rows),
         "pit_dataset_counts": dict(sorted(dataset_counts.items())),
         "delta_oi_candle_count": 0 if delta_oi_rows is None else len(delta_oi_rows),
@@ -442,13 +469,14 @@ async def resolve_prospective_btc_thesis_from_coindcx(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_CONTRACT_V2",
+        "version": "BTC_PROSPECTIVE_PROOF_BRIDGE_CONTRACT_V3",
         "new_provider_added": False,
         "new_scheduler_added": False,
         "new_database_schema_added": False,
         "automatic_startup_added": False,
         "explicit_invocation_required": True,
         "spot_source": "COINDCX_PUBLIC_COMPLETED_CANDLES",
+        "historical_memory_source": "COINDCX_PUBLIC_COMPLETED_CANDLES",
         "derivatives_source": "EXISTING_IMMUTABLE_BTC_PIT_STORE_PLUS_OPTIONAL_COMPLETED_DELTA_OI",
         "options_context_source": "EXISTING_DERIBIT_PIT_ROWS",
         "stablecoin_context_source": "EXISTING_DEFILLAMA_PIT_ROWS",
@@ -458,6 +486,9 @@ def architecture_contract() -> dict:
         "derivatives_missing_equals_neutral_vote": False,
         "oi_liquidations_may_be_fabricated": False,
         "decision_uses_only_pit_visible_rows": True,
+        "historical_memory_uses_only_completed_rows_known_by_decision": True,
+        "historical_memory_outcomes_must_be_known_by_decision": True,
+        "historical_memory_may_create_current_direction": False,
         "options_context_uses_only_pit_visible_rows": True,
         "stablecoin_context_uses_only_pit_visible_rows": True,
         "missing_context_marks_lane_available": False,
