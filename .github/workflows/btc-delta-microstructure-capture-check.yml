@@ -20,6 +20,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt pytest
-      - run: pytest -q tests/test_crypto_btc_delta_microstructure_capture.py
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest tests.test_crypto_btc_delta_microstructure_capture -v
       - run: python -m py_compile app/crypto_btc_delta_microstructure_capture.py app/crypto_btc_source_capabilities.py app/__init__.py
