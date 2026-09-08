@@ -44,6 +44,24 @@ def _history() -> list[BtcSpotCandleArchiveRow]:
     return rows
 
 
+def _single_candidate_history(*, include_exact_outcome: bool) -> list[BtcSpotCandleArchiveRow]:
+    candidate = DECISION - timedelta(hours=30)
+    rows = [
+        _row(candidate - timedelta(hours=24), 70_000.0, 800),
+        _row(candidate - timedelta(hours=4), 70_500.0, 801),
+        _row(candidate - timedelta(hours=1), 70_800.0, 802),
+        _row(candidate, 71_000.0, 803),
+        # Exact bars required for the current-state feature vector.
+        _row(DECISION - timedelta(hours=24), 72_000.0, 804),
+        _row(DECISION - timedelta(hours=4), 72_500.0, 805),
+        _row(DECISION - timedelta(hours=1), 72_800.0, 806),
+        _row(DECISION, 73_000.0, 807),
+    ]
+    if include_exact_outcome:
+        rows.append(_row(candidate + timedelta(hours=1), 71_200.0, 808))
+    return sorted(rows, key=lambda row: row.available_at)
+
+
 class BtcHistoricalAnalogueTests(unittest.TestCase):
     def test_builds_context_only_memory_from_known_past_outcomes(self):
         evidence = derive_btc_historical_analogue_evidence(
@@ -89,6 +107,39 @@ class BtcHistoricalAnalogueTests(unittest.TestCase):
             policy=BtcHistoricalAnaloguePolicy(lookback_hours=48, min_analogues=12),
         )
         self.assertIsNone(evidence)
+
+    def test_missing_exact_outcome_bar_cannot_reuse_stale_candidate_close(self):
+        policy = BtcHistoricalAnaloguePolicy(
+            lookback_hours=48,
+            outcome_horizon_hours=1,
+            min_candidate_spacing_hours=4,
+            max_analogues=1,
+            min_analogues=1,
+        )
+        evidence = derive_btc_historical_analogue_evidence(
+            _single_candidate_history(include_exact_outcome=False),
+            decision_at=DECISION,
+            policy=policy,
+        )
+        self.assertIsNone(evidence)
+
+    def test_exact_outcome_bar_admits_the_same_candidate(self):
+        policy = BtcHistoricalAnaloguePolicy(
+            lookback_hours=48,
+            outcome_horizon_hours=1,
+            min_candidate_spacing_hours=4,
+            max_analogues=1,
+            min_analogues=1,
+        )
+        evidence = derive_btc_historical_analogue_evidence(
+            _single_candidate_history(include_exact_outcome=True),
+            decision_at=DECISION,
+            policy=policy,
+        )
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.metadata["analogue_count"], 1)
+        self.assertFalse(evidence.metadata["missing_hour_may_be_substituted_by_stale_close"])
 
 
 if __name__ == "__main__":
