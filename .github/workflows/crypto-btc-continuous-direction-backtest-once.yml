@@ -1,0 +1,154 @@
+name: Crypto BTC Continuous 15m Direction Backtest Once
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/crypto-btc-continuous-direction-backtest-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+    steps:
+      - name: Wait for deployed continuous-direction endpoint
+        run: |
+          set -euo pipefail
+          for i in {1..180}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json \
+              && curl -fsS --max-time 20 "$API_BASE/openapi.json" -o openapi.json \
+              && python - <<'PY'
+          import json, sys
+          paths = json.load(open("openapi.json")).get("paths", {})
+          needed = {
+              "/v1/dashboard/crypto/btc/actions/continuous-direction-backtest/readiness",
+              "/v1/dashboard/crypto/btc/actions/continuous-direction-backtest",
+          }
+          sys.exit(0 if needed.issubset(paths) else 1)
+          PY
+            then
+              sleep 30
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Continuous BTC direction endpoint did not become available" >&2
+          exit 1
+
+      - name: Verify point-in-time replay readiness
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 \
+            "$API_BASE/v1/dashboard/crypto/btc/actions/continuous-direction-backtest/readiness" \
+            -o readiness.json
+          python - <<'PY'
+          import json
+          d = json.load(open("readiness.json"))
+          assert d.get("ready") is True, d
+          assert int(d.get("scheduled_clicks") or 0) > 0, d
+          assert d.get("research_only") is True, d
+          assert d.get("options_profitability_evaluated") is False, d
+          print(json.dumps(d, indent=2))
+          PY
+
+      - name: Start continuous 15-minute direction replay
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 60 -X POST \
+            "$API_BASE/v1/dashboard/crypto/btc/actions/continuous-direction-backtest" \
+            -o start.json
+          python - <<'PY'
+          import json
+          d = json.load(open("start.json"))
+          assert d.get("status") == "RUNNING", d
+          assert d.get("mode") == "CONTINUOUS_PIT_15M_DIRECTION", d
+          assert int(d.get("total_clicks") or 0) > 0, d
+          open("job_id.txt", "w").write(str(d["job_id"]))
+          print(json.dumps(d, indent=2))
+          PY
+
+      - name: Poll replay until terminal
+        run: |
+          set -euo pipefail
+          JOB_ID=$(cat job_id.txt)
+          for i in {1..180}; do
+            curl -fsS --max-time 30 \
+              "$API_BASE/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest/$JOB_ID" \
+              -o job.json
+            STATUS=$(python -c 'import json; print(json.load(open("job.json")).get("status") or "")')
+            python - <<'PY'
+          import json
+          d = json.load(open("job.json"))
+          print(json.dumps({
+              "status": d.get("status"),
+              "phase": d.get("phase"),
+              "completed_clicks": d.get("completed_clicks"),
+              "total_clicks": d.get("total_clicks"),
+              "progress_pct": d.get("progress_pct"),
+              "error": d.get("error"),
+          }, indent=2))
+          PY
+            if [ "$STATUS" = "COMPLETED" ]; then
+              cp job.json result.json
+              exit 0
+            fi
+            if [ "$STATUS" = "FAILED" ]; then
+              cp job.json result.json
+              cat result.json
+              exit 1
+            fi
+            sleep 10
+          done
+          cp job.json result.json
+          echo "Continuous BTC direction replay timed out" >&2
+          exit 1
+
+      - name: Validate directional result
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          job = json.load(open("result.json"))
+          result = job.get("result") or {}
+          summary = result.get("summary") or {}
+          safety = result.get("safety") or {}
+          assert job.get("status") == "COMPLETED", job
+          assert result.get("mode") == "BTC_CONTINUOUS_PIT_15M_DIRECTION_REPLAY_V1", result
+          assert int(result.get("scheduled_clicks") or 0) == int(job.get("total_clicks") or 0), (result, job)
+          assert result.get("methodology", {}).get("future_outcome_used_for_direction") is False, result
+          assert summary.get("options_profitability_evaluated") is False, summary
+          assert safety.get("research_only") is True, safety
+          assert safety.get("live_execution") is False, safety
+          assert safety.get("capital_committed_inr") == 0, safety
+          assert safety.get("options_trade_generated") is False, safety
+          assert safety.get("futures_trade_generated") is False, safety
+          print(json.dumps({
+              "window_start": result.get("window_start"),
+              "window_end_exclusive": result.get("window_end_exclusive"),
+              "scheduled_clicks": result.get("scheduled_clicks"),
+              "summary": summary,
+              "coverage": result.get("coverage"),
+              "methodology": result.get("methodology"),
+              "safety": safety,
+          }, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-btc-continuous-15m-direction-backtest
+          path: |
+            readiness.json
+            start.json
+            job_id.txt
+            result.json
