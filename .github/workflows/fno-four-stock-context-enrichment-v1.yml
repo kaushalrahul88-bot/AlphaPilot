@@ -37,9 +37,12 @@ jobs:
       - run: python -m py_compile app/fno_four_stock_context_enrichment_v1.py app/fno_four_stock_context_replay_v1.py app/fno_four_stock_context_replay_api.py app/__init__.py
 
   replay:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
+    concurrency:
+      group: alphapilot-production-heavy-render-job
+      cancel-in-progress: false
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
