@@ -1,0 +1,27 @@
+name: F&O Market Brain V6
+
+on:
+  push:
+    paths:
+      - "app/fno_market_brain_v6.py"
+      - "tests/test_fno_market_brain_v6.py"
+      - "docs/fno_market_brain_v6_freeze.md"
+      - ".github/workflows/fno-market-brain-v6.yml"
+  pull_request:
+    paths:
+      - "app/fno_market_brain_v6.py"
+      - "tests/test_fno_market_brain_v6.py"
+      - "docs/fno_market_brain_v6_freeze.md"
+      - ".github/workflows/fno-market-brain-v6.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_market_brain_v5.py tests/test_fno_market_brain_v6.py
+      - run: python -m py_compile app/fno_market_brain_v5.py app/fno_market_brain_v6.py
