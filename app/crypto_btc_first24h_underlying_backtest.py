@@ -16,7 +16,7 @@ from app.coindcx_btc_public_provider import CoinDcxBtcProviderPolicy, CoinDcxBtc
 from app.crypto_btc_first24h_backtest import (
     _CachedCoinDcx,
     _fetch_spot,
-    _load_inputs,
+    _load_shared_window_start,
     frozen_clicks,
 )
 from app.crypto_btc_pit_postgres import PostgresBtcPitArchiveStore
@@ -77,7 +77,9 @@ async def run_first24h_underlying_15m(
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     await _progress(progress_callback, 0, 96, "LOADING_ARCHIVED_INPUTS")
-    start, _delta_snapshots = await asyncio.to_thread(_load_inputs, database_url)
+    # This replay is underlying-only. Loading thousands of full Delta option
+    # snapshot payloads here was unnecessary and could exhaust a 512 MB worker.
+    start = await asyncio.to_thread(_load_shared_window_start, database_url)
     clicks = frozen_clicks(start)
     window_end = start + timedelta(hours=24)
     public = CoinDcxBtcPublicProvider(CoinDcxBtcProviderPolicy(enabled=True, timeout_seconds=25))
