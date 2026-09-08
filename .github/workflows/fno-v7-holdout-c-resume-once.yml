@@ -1,6 +1,7 @@
 name: F&O V7 Holdout C Resume Once
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
