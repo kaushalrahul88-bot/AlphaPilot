@@ -7,7 +7,8 @@ strong historical match cannot create the current BTC direction or a trade.
 
 No future candle relative to ``decision_at`` is admitted. A candidate analogue is
 eligible only when both its feature history and its complete forward outcome were
-available by the current decision time.
+available by the current decision time. Missing hourly bars fail closed rather
+than allowing a stale close to masquerade as the requested anchor or outcome.
 """
 from __future__ import annotations
 
@@ -71,28 +72,30 @@ def _visible_rows(
     return visible
 
 
-def _index_at_or_before(rows: list[BtcSpotCandleArchiveRow], target: datetime) -> int | None:
+def _close_exactly_at(rows: list[BtcSpotCandleArchiveRow], target: datetime) -> float | None:
+    """Return the close for the requested completed-hour timestamp only.
+
+    Historical analogue features/outcomes must not silently fall back to an older
+    bar when the requested hour is missing. CoinDCX-normalized 1h candles use the
+    completed bar timestamp as ``available_at``, so exact UTC equality is the
+    correct continuity gate here.
+    """
     target = _utc(target)
-    result = None
-    for index, row in enumerate(rows):
-        if _utc(row.available_at) <= target:
-            result = index
-        else:
+    for row in rows:
+        at = _utc(row.available_at)
+        if at == target:
+            return float(row.close)
+        if at > target:
             break
-    return result
-
-
-def _close_at_or_before(rows: list[BtcSpotCandleArchiveRow], target: datetime) -> float | None:
-    index = _index_at_or_before(rows, target)
-    return None if index is None else float(rows[index].close)
+    return None
 
 
 def _feature_vector(rows: list[BtcSpotCandleArchiveRow], at: datetime) -> tuple[float, float, float] | None:
     at = _utc(at)
-    current = _close_at_or_before(rows, at)
+    current = _close_exactly_at(rows, at)
     if current is None or current <= 0:
         return None
-    anchors = [_close_at_or_before(rows, at - timedelta(hours=hours)) for hours in (1, 4, 24)]
+    anchors = [_close_exactly_at(rows, at - timedelta(hours=hours)) for hours in (1, 4, 24)]
     if any(value is None or value <= 0 for value in anchors):
         return None
     return tuple((current - float(anchor)) / float(anchor) * 100.0 for anchor in anchors)  # type: ignore[arg-type]
@@ -150,13 +153,10 @@ def derive_btc_historical_analogue_evidence(
             continue
 
         features = _feature_vector(visible, candidate_at)
-        outcome_close = _close_at_or_before(
-            visible,
-            candidate_at + timedelta(hours=int(policy.outcome_horizon_hours)),
-        )
+        outcome_available_at = candidate_at + timedelta(hours=int(policy.outcome_horizon_hours))
+        outcome_close = _close_exactly_at(visible, outcome_available_at)
         if features is None or outcome_close is None or float(row.close) <= 0:
             continue
-        outcome_available_at = candidate_at + timedelta(hours=int(policy.outcome_horizon_hours))
         if outcome_available_at > decision:
             continue
 
@@ -213,6 +213,7 @@ def derive_btc_historical_analogue_evidence(
         "selected_analogue_times": [item["candidate_at"].isoformat() for item in selected],
         "latest_selected_outcome_available_at": max(item["outcome_available_at"] for item in selected).isoformat(),
         "all_selected_outcomes_known_by_decision": all(item["outcome_available_at"] <= decision for item in selected),
+        "missing_hour_may_be_substituted_by_stale_close": False,
         "current_decision_at": decision.isoformat(),
         "direction_creator": False,
         "trade_generated": False,
@@ -222,11 +223,12 @@ def derive_btc_historical_analogue_evidence(
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_HISTORICAL_ANALOGUE_MEMORY_V1",
+        "version": "BTC_HISTORICAL_ANALOGUE_MEMORY_V2",
         "source": "COINDCX_COMPLETED_SPOT_CANDLES",
         "candidate_features_use_only_completed_candles": True,
         "candidate_outcome_must_be_known_by_current_decision": True,
         "future_relative_to_current_decision_allowed": False,
+        "missing_hour_may_be_substituted_by_stale_close": False,
         "minimum_candidate_spacing_prevents_dense_overlap": True,
         "fitted_model_used": False,
         "historical_memory_may_create_current_direction": False,
