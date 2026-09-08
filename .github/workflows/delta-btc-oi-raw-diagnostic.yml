@@ -2,12 +2,18 @@ name: Delta BTC OI Raw Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/delta-btc-oi-raw-diagnostic.yml'
 
 permissions:
   contents: read
 
 jobs:
   probe:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[delta-oi-probe]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -54,7 +60,6 @@ jobs:
               }
               out['first_time'] = next((row.get('time') for row in result if isinstance(row, dict)), None)
               out['last_time'] = next((row.get('time') for row in reversed(result) if isinstance(row, dict)), None)
-              # Never print full rows; schema/null diagnostics are sufficient.
           print(json.dumps(out, indent=2, sort_keys=True))
           if http != 200 or out.get('success') is not True:
               raise SystemExit(1)
