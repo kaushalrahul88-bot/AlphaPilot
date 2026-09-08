@@ -2,23 +2,13 @@ name: F&O 15m Full Window Backtest
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/fno-15m-full-window-backtest.yml"
-      - "app/fno_15m_historical_replay_v1.py"
-      - "app/fno_15m_restart_safe_replay.py"
-      - "app/fno_15m_restart_safe_replay_v2.py"
-      - "app/fno_15m_candle_checkpoint_v2.py"
-      - "app/fno_15m_backtest_api.py"
-      - "app/__init__.py"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fno-15m-full-window-backtest
-  cancel-in-progress: true
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
 
 jobs:
   replay:
