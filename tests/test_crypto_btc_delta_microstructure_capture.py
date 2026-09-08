@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import unittest
 from datetime import datetime, timezone
-
-import pytest
 
 from app.crypto_btc_delta_microstructure_capture import (
     DATASET,
@@ -63,96 +62,98 @@ def _payloads():
     return ticker, orderbook, trades
 
 
-def test_normalize_delta_microstructure_snapshot_is_point_in_time_and_non_tradeable():
-    ticker, orderbook, trades = _payloads()
-    first_seen = datetime(2026, 9, 8, 18, 30, 1, tzinfo=UTC)
-    snapshot = normalize_delta_microstructure_snapshot(
-        ticker, orderbook, trades, first_seen_at=first_seen
-    )
-    payload = snapshot["payload"]
-
-    assert snapshot["first_seen_at"] == first_seen
-    assert snapshot["event_at"] <= first_seen
-    assert payload["ticker"]["open_interest_contracts"] == 15250.0
-    assert payload["ticker"]["open_interest_value_usd"] == 1200500000.0
-    assert payload["orderbook"]["best_bid"] == 78959.5
-    assert payload["orderbook"]["best_ask"] == 78961.0
-    assert payload["orderbook"]["bid_size_top_levels"] == 12.0
-    assert payload["orderbook"]["ask_size_top_levels"] == 9.0
-    assert payload["orderbook"]["depth_imbalance"] == pytest.approx(3.0 / 21.0)
-    assert payload["orderbook"]["spread_bps"] > 0
-    assert payload["recent_trades"]["sample_count"] == 3
-    assert payload["recent_trades"]["buy_count"] == 2
-    assert payload["recent_trades"]["sell_count"] == 1
-    assert payload["recent_trades"]["notional_imbalance"] > 0
-    assert payload["provenance"]["historical_reconstruction"] is False
-    assert payload["provenance"]["future_rows_used"] is False
-    assert payload["may_generate_options_trade"] is False
-    assert payload["may_generate_futures_trade"] is False
-    assert payload["may_satisfy_options_contract_quote"] is False
-    assert payload["live_execution"] is False
-    assert payload["capital_committed_inr"] == 0
-
-
-def test_delta_microstructure_archive_record_uses_irrecoverable_pit_registry():
-    ticker, orderbook, trades = _payloads()
-    first_seen = datetime(2026, 9, 8, 18, 30, 1, tzinfo=UTC)
-    snapshot = normalize_delta_microstructure_snapshot(
-        ticker, orderbook, trades, first_seen_at=first_seen
-    )
-    record = delta_microstructure_archive_record(snapshot)
-    frozen = record.frozen_dict()
-
-    assert frozen["dataset"] == DATASET
-    assert frozen["provider"] == PROVIDER
-    assert frozen["point_in_time_proven"] is True
-    assert frozen["first_seen_at"] == first_seen.isoformat()
-    assert frozen["payload_hash"]
-    assert frozen["record_fingerprint"]
-    capability = capability_for(DATASET)
-    assert capability.can_reconstruct_later is False
-    assert capability.historical_mode == "FIRST_SEEN_ARCHIVE_REQUIRED"
-    assert capability.decision_role == "CONTEXT_ONLY"
-    assert DATASET in live_capture_plan()["capture_first"]
-
-
-def test_delta_microstructure_runtime_is_explicitly_gated():
-    disabled = DeltaMicrostructureRuntimeConfig.from_env({})
-    assert disabled.enabled is False
-    assert disabled.poll_seconds == 60
-
-    with pytest.raises(ValueError, match="DATABASE_URL"):
-        DeltaMicrostructureRuntimeConfig.from_env(
-            {"ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_ENABLED": "true"}
+class DeltaMicrostructureCaptureTests(unittest.TestCase):
+    def test_normalize_snapshot_is_point_in_time_and_non_tradeable(self):
+        ticker, orderbook, trades = _payloads()
+        first_seen = datetime(2026, 9, 8, 18, 30, 1, tzinfo=UTC)
+        snapshot = normalize_delta_microstructure_snapshot(
+            ticker, orderbook, trades, first_seen_at=first_seen
         )
+        payload = snapshot["payload"]
 
-    with pytest.raises(ValueError, match="poll_seconds"):
-        DeltaMicrostructureRuntimeConfig.from_env(
+        self.assertEqual(snapshot["first_seen_at"], first_seen)
+        self.assertLessEqual(snapshot["event_at"], first_seen)
+        self.assertEqual(payload["ticker"]["open_interest_contracts"], 15250.0)
+        self.assertEqual(payload["ticker"]["open_interest_value_usd"], 1200500000.0)
+        self.assertEqual(payload["orderbook"]["best_bid"], 78959.5)
+        self.assertEqual(payload["orderbook"]["best_ask"], 78961.0)
+        self.assertEqual(payload["orderbook"]["bid_size_top_levels"], 12.0)
+        self.assertEqual(payload["orderbook"]["ask_size_top_levels"], 9.0)
+        self.assertAlmostEqual(payload["orderbook"]["depth_imbalance"], 3.0 / 21.0)
+        self.assertGreater(payload["orderbook"]["spread_bps"], 0)
+        self.assertEqual(payload["recent_trades"]["sample_count"], 3)
+        self.assertEqual(payload["recent_trades"]["buy_count"], 2)
+        self.assertEqual(payload["recent_trades"]["sell_count"], 1)
+        self.assertGreater(payload["recent_trades"]["notional_imbalance"], 0)
+        self.assertFalse(payload["provenance"]["historical_reconstruction"])
+        self.assertFalse(payload["provenance"]["future_rows_used"])
+        self.assertFalse(payload["may_generate_options_trade"])
+        self.assertFalse(payload["may_generate_futures_trade"])
+        self.assertFalse(payload["may_satisfy_options_contract_quote"])
+        self.assertFalse(payload["live_execution"])
+        self.assertEqual(payload["capital_committed_inr"], 0)
+
+    def test_archive_record_uses_irrecoverable_pit_registry(self):
+        ticker, orderbook, trades = _payloads()
+        first_seen = datetime(2026, 9, 8, 18, 30, 1, tzinfo=UTC)
+        snapshot = normalize_delta_microstructure_snapshot(
+            ticker, orderbook, trades, first_seen_at=first_seen
+        )
+        record = delta_microstructure_archive_record(snapshot)
+        frozen = record.frozen_dict()
+
+        self.assertEqual(frozen["dataset"], DATASET)
+        self.assertEqual(frozen["provider"], PROVIDER)
+        self.assertTrue(frozen["point_in_time_proven"])
+        self.assertEqual(frozen["first_seen_at"], first_seen.isoformat())
+        self.assertTrue(frozen["payload_hash"])
+        self.assertTrue(frozen["record_fingerprint"])
+        capability = capability_for(DATASET)
+        self.assertFalse(capability.can_reconstruct_later)
+        self.assertEqual(capability.historical_mode, "FIRST_SEEN_ARCHIVE_REQUIRED")
+        self.assertEqual(capability.decision_role, "CONTEXT_ONLY")
+        self.assertIn(DATASET, live_capture_plan()["capture_first"])
+
+    def test_runtime_is_explicitly_gated(self):
+        disabled = DeltaMicrostructureRuntimeConfig.from_env({})
+        self.assertFalse(disabled.enabled)
+        self.assertEqual(disabled.poll_seconds, 60)
+
+        with self.assertRaisesRegex(ValueError, "DATABASE_URL"):
+            DeltaMicrostructureRuntimeConfig.from_env(
+                {"ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_ENABLED": "true"}
+            )
+
+        with self.assertRaisesRegex(ValueError, "poll_seconds"):
+            DeltaMicrostructureRuntimeConfig.from_env(
+                {
+                    "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_ENABLED": "true",
+                    "DATABASE_URL": "postgresql://example",
+                    "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_POLL_SECONDS": "10",
+                }
+            )
+
+        enabled = DeltaMicrostructureRuntimeConfig.from_env(
             {
                 "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_ENABLED": "true",
                 "DATABASE_URL": "postgresql://example",
-                "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_POLL_SECONDS": "10",
+                "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_POLL_SECONDS": "60",
             }
         )
+        self.assertTrue(enabled.enabled)
+        self.assertEqual(enabled.poll_seconds, 60)
 
-    enabled = DeltaMicrostructureRuntimeConfig.from_env(
-        {
-            "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_ENABLED": "true",
-            "DATABASE_URL": "postgresql://example",
-            "ALPHAPILOT_CRYPTO_BTC_DELTA_MICROSTRUCTURE_POLL_SECONDS": "60",
-        }
-    )
-    assert enabled.enabled is True
-    assert enabled.poll_seconds == 60
+    def test_architecture_contract_preserves_instrument_separation(self):
+        contract = architecture_contract()
+        self.assertFalse(contract["collection_enabled_by_default"])
+        self.assertFalse(contract["historical_reconstruction"])
+        self.assertFalse(contract["options_quote_substitution_allowed"])
+        self.assertFalse(contract["options_trade_generation_allowed"])
+        self.assertFalse(contract["futures_trade_generation_allowed"])
+        self.assertFalse(contract["live_execution"])
+        self.assertEqual(contract["capital_committed_inr"], 0)
+        self.assertTrue(contract["research_only"])
 
 
-def test_delta_microstructure_architecture_contract_preserves_instrument_separation():
-    contract = architecture_contract()
-    assert contract["collection_enabled_by_default"] is False
-    assert contract["historical_reconstruction"] is False
-    assert contract["options_quote_substitution_allowed"] is False
-    assert contract["options_trade_generation_allowed"] is False
-    assert contract["futures_trade_generation_allowed"] is False
-    assert contract["live_execution"] is False
-    assert contract["capital_committed_inr"] == 0
-    assert contract["research_only"] is True
+if __name__ == "__main__":
+    unittest.main()
