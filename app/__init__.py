@@ -26,6 +26,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .crypto_btc_capture_startup import register_btc_capture_startup  # noqa: E402
     from .crypto_btc_context_capture_startup import register_btc_context_capture_startup  # noqa: E402
     from .crypto_btc_dashboard_api import register_crypto_btc_dashboard_routes  # noqa: E402
+    from .crypto_btc_dashboard_actions_api import register_crypto_btc_dashboard_action_routes  # noqa: E402
     from .crypto_btc_first24h_backtest_api import register_crypto_btc_first24h_backtest_routes  # noqa: E402
     from .crypto_btc_delta_options_probe_api import register_delta_options_probe_routes  # noqa: E402
     from .crypto_btc_delta_options_probe_startup import register_delta_options_probe_startup  # noqa: E402
@@ -80,6 +81,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_fno_current_expiry_history_probe_routes(_app, _settings, _collector_auth)
     register_fno_underlying_random_backtest_routes(_app, _settings, _collector_auth)
     register_crypto_btc_dashboard_routes(_app, _settings)
+    register_crypto_btc_dashboard_action_routes(_app, _settings)
     register_crypto_btc_first24h_backtest_routes(_app, _settings, _collector_auth)
     register_crypto_macro_live_availability_routes(_app, _settings, _collector_auth)
     register_dashboard_market_universe_routes(_app)
