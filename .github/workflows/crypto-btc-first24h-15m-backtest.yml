@@ -1,0 +1,45 @@
+name: Crypto BTC First 24h 15m Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/crypto-btc-first24h-15m-backtest.yml"
+      - "app/crypto_btc_first24h_backtest.py"
+      - "app/crypto_btc_first24h_backtest_api.py"
+      - "app/__init__.py"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..120}; do
+            if curl -fsS --max-time 20 "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Run frozen replay
+        run: |
+          curl -fsS --max-time 600 -H "X-Collector-Token: $COLLECTOR_TOKEN" -X POST \
+            "$API_BASE/v1/internal/crypto/btc/backtest/first-24h-15m" -o result.json
+          python -c 'import json;d=json.load(open("result.json"));assert d["status"]=="COMPLETED";assert d["scheduled_clicks"]==96;assert d["safety"]["live_execution"] is False;print(json.dumps({"window_start":d["window_start"],"window_end_exclusive":d["window_end_exclusive"],"summary":d["summary"],"coverage":d["coverage"],"safety":d["safety"]},indent=2))'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-btc-first24h-15m-backtest
+          path: result.json
