@@ -3,21 +3,32 @@
 This module prepares two disjoint June/July 2026 historical windows using the
 already-frozen V5 Brain. It freezes decisions and five-minute future tapes but
 never resolves outcomes or calculates performance.
+
+Infrastructure note: history transport may be resumed from a durable segment
+cache. Cache use changes only how already-requested historical candles are
+obtained; it does not change the frozen Brain, dates, clicks, context, or tape.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import random
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
 from . import fno_15m_historical_replay_v1 as core
 from . import fno_candle_only_four_stock_backtest_v1 as baseline
 from . import fno_market_brain_v5 as brain
-from .fno_market_brain_v3_current_expiry_dataset import _fetch, _tape_hash, context_at
+from .fno_market_brain_v3_current_expiry_dataset import (
+    FETCH_ATTEMPTS,
+    RETRY_DELAYS_SECONDS,
+    _history_windows,
+    _tape_hash,
+    context_at,
+)
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = timezone.utc
@@ -49,6 +60,10 @@ HISTORY_START = {
 }
 HISTORY_END = datetime(2026, 7, 14, 15, 30, tzinfo=IST)
 CONTEXT_START = datetime(2026, 5, 15, 9, 15, tzinfo=IST)
+
+HistoryCacheGet = Callable[[str, str, datetime, datetime], Awaitable[list[list] | None]]
+HistoryCachePut = Callable[[str, str, datetime, datetime, list[list]], Awaitable[None]]
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 def load_knowledge(path: Path = KNOWLEDGE_PATH) -> dict[str, Any]:
@@ -110,7 +125,112 @@ def _frozen_tape_rows(rows: list[list]) -> list[list]:
     return output
 
 
-async def build_holdout_a_dataset(provider, progress=None) -> dict[str, Any]:
+async def _safe_progress(progress: ProgressCallback | None, update: dict[str, Any]) -> None:
+    if progress is None:
+        return
+    try:
+        await progress(update)
+    except Exception:
+        # Progress persistence must never alter the frozen data computation.
+        return
+
+
+async def _fetch_cached(
+    provider,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    progress: ProgressCallback | None = None,
+    cache_get: HistoryCacheGet | None = None,
+    cache_put: HistoryCachePut | None = None,
+) -> tuple[list[list], list[str]]:
+    """Fetch the exact V3 transport windows, reusing durable segments when present."""
+    failures: list[str] = []
+    merged: list[list] = []
+    windows = _history_windows(timeframe, start, end)
+
+    for window_index, (window_start, window_end) in enumerate(windows, start=1):
+        segment_rows: list[list] = []
+        cache_hit = False
+        if cache_get is not None:
+            try:
+                cached = await cache_get(symbol, timeframe, window_start, window_end)
+            except Exception as exc:
+                failures.append(
+                    f"window {window_index}/{len(windows)} cache read: "
+                    f"{exc.__class__.__name__}: {str(exc)[:400]}"
+                )
+                cached = None
+            if cached:
+                segment_rows = cached
+                cache_hit = True
+
+        if not segment_rows:
+            for attempt in range(1, FETCH_ATTEMPTS + 1):
+                try:
+                    segment_rows = await baseline._chunk(
+                        provider, symbol, timeframe, window_start, window_end
+                    )
+                    if segment_rows:
+                        break
+                    failures.append(
+                        f"window {window_index}/{len(windows)} attempt {attempt}: EMPTY_TAPE"
+                    )
+                except Exception as exc:
+                    failures.append(
+                        f"window {window_index}/{len(windows)} attempt {attempt}: "
+                        f"{exc.__class__.__name__}: {str(exc)[:400]}"
+                    )
+
+                if attempt < FETCH_ATTEMPTS:
+                    delay = RETRY_DELAYS_SECONDS[attempt - 1]
+                    await _safe_progress(progress, {
+                        "stage": "RETRYING_HISTORY",
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "window": window_index,
+                        "windows": len(windows),
+                        "window_start": window_start.isoformat(),
+                        "window_end": window_end.isoformat(),
+                        "next_attempt": attempt + 1,
+                        "delay_seconds": delay,
+                        "last_error": failures[-1],
+                    })
+                    await asyncio.sleep(delay)
+
+            if not segment_rows:
+                return [], failures
+
+            if cache_put is not None:
+                try:
+                    await cache_put(symbol, timeframe, window_start, window_end, segment_rows)
+                except Exception as exc:
+                    # Cache durability is an optimization, never a data-selection rule.
+                    failures.append(
+                        f"window {window_index}/{len(windows)} cache write: "
+                        f"{exc.__class__.__name__}: {str(exc)[:400]}"
+                    )
+
+        merged.extend(segment_rows)
+        await _safe_progress(progress, {
+            "stage": "FETCHING_HISTORY_WINDOW",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "completed_windows": window_index,
+            "total_windows": len(windows),
+            "cache_hit": cache_hit,
+        })
+
+    return baseline._merge(merged), failures
+
+
+async def build_holdout_a_dataset(
+    provider,
+    progress: ProgressCallback | None = None,
+    cache_get: HistoryCacheGet | None = None,
+    cache_put: HistoryCachePut | None = None,
+) -> dict[str, Any]:
     knowledge = load_knowledge()
     categories = dict(FROZEN_STOCKS)
 
@@ -118,15 +238,17 @@ async def build_holdout_a_dataset(provider, progress=None) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     tasks = [(symbol, timeframe) for symbol in STOCKS for timeframe in TIMEFRAMES]
     for index, (symbol, timeframe) in enumerate(tasks, start=1):
-        if progress:
-            await progress({
-                "stage": "FETCHING_STOCK_HISTORY",
-                "completed": index - 1,
-                "total": len(tasks),
-                "symbol": symbol,
-                "timeframe": timeframe,
-            })
-        rows, failures = await _fetch(provider, symbol, timeframe, HISTORY_START[timeframe], HISTORY_END, progress)
+        await _safe_progress(progress, {
+            "stage": "FETCHING_STOCK_HISTORY",
+            "completed": index - 1,
+            "total": len(tasks),
+            "symbol": symbol,
+            "timeframe": timeframe,
+        })
+        rows, failures = await _fetch_cached(
+            provider, symbol, timeframe, HISTORY_START[timeframe], HISTORY_END,
+            progress, cache_get, cache_put,
+        )
         histories[symbol][timeframe] = rows
         if not rows:
             errors.append({"symbol": symbol, "timeframe": timeframe, "attempt_errors": failures})
@@ -158,9 +280,16 @@ async def build_holdout_a_dataset(provider, progress=None) -> dict[str, Any]:
         context_symbols.update(knowledge["stocks"][symbol]["peer_basket"])
     context_histories: dict[str, list[list]] = {symbol: histories[symbol]["15m"] for symbol in STOCKS}
     for index, symbol in enumerate(sorted(context_symbols), start=1):
-        if progress:
-            await progress({"stage": "FETCHING_CONTEXT_HISTORY", "completed": index - 1, "total": len(context_symbols), "symbol": symbol})
-        rows, failures = await _fetch(provider, symbol, "15m", CONTEXT_START, HISTORY_END, progress)
+        await _safe_progress(progress, {
+            "stage": "FETCHING_CONTEXT_HISTORY",
+            "completed": index - 1,
+            "total": len(context_symbols),
+            "symbol": symbol,
+        })
+        rows, failures = await _fetch_cached(
+            provider, symbol, "15m", CONTEXT_START, HISTORY_END,
+            progress, cache_get, cache_put,
+        )
         context_histories[symbol] = rows
         if symbol == "NIFTY" and not rows:
             return {
@@ -177,7 +306,13 @@ async def build_holdout_a_dataset(provider, progress=None) -> dict[str, Any]:
     effective_actions = {"LONG": 0, "SHORT": 0, "NO_TRADE": 0}
     duplicate_suppressions = 0
 
-    for symbol in STOCKS:
+    for symbol_index, symbol in enumerate(STOCKS, start=1):
+        await _safe_progress(progress, {
+            "stage": "BUILDING_FROZEN_DECISIONS",
+            "completed_stocks": symbol_index - 1,
+            "total_stocks": len(STOCKS),
+            "symbol": symbol,
+        })
         for day in sessions:
             tracker = brain.ThesisTracker()
             for click in deterministic_clicks(day):
@@ -207,6 +342,7 @@ async def build_holdout_a_dataset(provider, progress=None) -> dict[str, Any]:
     if len(rows_out) != expected:
         return {"protocol_id": PROTOCOL_ID, "status": "OBSERVATION_COUNT_MISMATCH", "observations": len(rows_out), "expected": expected, "safety": architecture_contract()}
 
+    await _safe_progress(progress, {"stage": "FINALIZING_FROZEN_TAPES"})
     frozen_tape = {symbol: _frozen_tape_rows(histories[symbol]["5m"]) for symbol in STOCKS}
     return {
         "protocol_id": PROTOCOL_ID,
@@ -284,4 +420,6 @@ def architecture_contract() -> dict[str, Any]:
         "v3_development_rows_used_as_holdout": False,
         "live_execution": False,
         "capital_committed": 0,
+        "history_transport_cache_only": True,
+        "history_cache_may_change_decisions": False,
     }
