@@ -79,10 +79,13 @@ jobs:
             tests.test_crude_oil_mini_knowledge_board -v
 
   frozen-research-audit:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: unit-parity
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    concurrency:
+      group: alphapilot-production-heavy-render-job
+      cancel-in-progress: false
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
