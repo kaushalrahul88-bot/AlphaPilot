@@ -1,0 +1,23 @@
+name: Holdout C Admission Pause Check
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_v7_holdout_c_admission_pause.py'
+      - 'app/__init__.py'
+      - 'tests/test_fno_v7_holdout_c_admission_pause.py'
+      - '.github/workflows/holdout-c-admission-pause-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_v7_holdout_c_admission_pause.py
