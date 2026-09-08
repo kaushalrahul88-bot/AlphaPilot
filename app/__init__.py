@@ -45,6 +45,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .fno_market_brain_v3_current_expiry_dataset_api import register_fno_market_brain_v3_current_expiry_dataset_routes  # noqa: E402
     from .fno_market_brain_v5_holdout_a_dataset_api import register_fno_market_brain_v5_holdout_a_dataset_routes  # noqa: E402
     from .fno_market_brain_v6_holdout_b_dataset_api import register_fno_market_brain_v6_holdout_b_dataset_routes  # noqa: E402
+    from .fno_market_brain_v7_holdout_c_dataset_api import register_fno_market_brain_v7_holdout_c_dataset_routes  # noqa: E402
     from .fno_prospective_api_v1 import register_fno_prospective_routes, register_fno_prospective_startup  # noqa: E402
     from .fno_underlying_prospective_api_v2 import register_fno_underlying_prospective_v2_routes, register_fno_underlying_prospective_v2_startup  # noqa: E402
     from .fno_underlying_random_backtest_api import register_fno_underlying_random_backtest_routes  # noqa: E402
@@ -79,6 +80,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_fno_market_brain_v3_current_expiry_backtest_routes(_app, _settings, _collector_auth)
     register_fno_market_brain_v5_holdout_a_dataset_routes(_app, _settings, _collector_auth)
     register_fno_market_brain_v6_holdout_b_dataset_routes(_app, _settings, _collector_auth)
+    register_fno_market_brain_v7_holdout_c_dataset_routes(_app, _settings, _collector_auth)
     register_fno_v1_current_expiry_comparator_routes(_app, _settings, _collector_auth)
     register_fno_current_expiry_history_probe_routes(_app, _settings, _collector_auth)
     register_fno_underlying_random_backtest_routes(_app, _settings, _collector_auth)
