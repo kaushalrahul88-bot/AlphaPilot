@@ -13,6 +13,8 @@ def test_dashboard_actions_remain_research_only_and_history_enabled():
     contract = architecture_contract()
     assert contract["user_backtest_allowed"] is True
     assert contract["user_backtest_reports_real_progress"] is True
+    assert contract["user_backtest_progress_checkpointed"] is True
+    assert contract["interrupted_backtests_reconciled"] is True
     assert contract["user_backtest_history_persisted"] is True
     assert contract["user_backtest_history_readable"] is True
     assert contract["user_live_shadow_setup_allowed"] is True
@@ -59,6 +61,8 @@ def test_history_contract_is_durable_and_retains_full_terminal_result():
     assert contract["backend"] == "POSTGRES"
     assert contract["completed_runs_persisted"] is True
     assert contract["failed_runs_persisted"] is True
+    assert contract["running_progress_checkpointed"] is True
+    assert contract["stale_running_jobs_reconciled"] is True
     assert contract["survives_browser_refresh"] is True
     assert contract["survives_api_deploy"] is True
     assert contract["full_terminal_result_retained"] is True

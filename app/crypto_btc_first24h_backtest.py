@@ -36,15 +36,27 @@ def frozen_clicks(start: datetime) -> list[datetime]:
     return [start + index * CLICK_STEP for index in range(CLICK_COUNT)]
 
 
-def _load_inputs(database_url: str) -> tuple[datetime, list[dict[str, Any]]]:
+def _shared_window_start_from_cursor(cur) -> datetime:
+    cur.execute(
+        f"SELECT GREATEST((SELECT MIN(first_seen_at) FROM {DELTA_TABLE}),"
+        f" (SELECT MIN(first_seen_at) FROM {PIT_TABLE}))"
+    )
+    start = cur.fetchone()[0]
+    if start is None:
+        raise ValueError("shared Delta/PIT collection window is empty")
+    return start.astimezone(UTC)
+
+
+def _load_shared_window_start(database_url: str) -> datetime:
+    """Load only the shared replay boundary, without materializing option payloads."""
     with _connect(database_url) as conn, conn.cursor() as cur:
-        cur.execute(
-            f"SELECT GREATEST((SELECT MIN(first_seen_at) FROM {DELTA_TABLE}),"
-            f" (SELECT MIN(first_seen_at) FROM {PIT_TABLE}))"
-        )
-        start = cur.fetchone()[0]
-        if start is None:
-            raise ValueError("shared Delta/PIT collection window is empty")
+        return _shared_window_start_from_cursor(cur)
+
+
+def _load_inputs(database_url: str) -> tuple[datetime, list[dict[str, Any]]]:
+    """Load the legacy options replay inputs, including Delta payloads when required."""
+    with _connect(database_url) as conn, conn.cursor() as cur:
+        start = _shared_window_start_from_cursor(cur)
         end = start + timedelta(hours=28, minutes=2)
         cur.execute(
             f"SELECT first_seen_at, payload FROM {DELTA_TABLE} "
@@ -52,7 +64,7 @@ def _load_inputs(database_url: str) -> tuple[datetime, list[dict[str, Any]]]:
             (start - timedelta(minutes=3), end),
         )
         rows = [{"at": row[0].astimezone(UTC), "payload": row[1]} for row in cur.fetchall()]
-    return start.astimezone(UTC), rows
+    return start, rows
 
 
 class _CachedCoinDcx:

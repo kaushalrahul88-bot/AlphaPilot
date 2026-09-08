@@ -20,6 +20,7 @@ _backtest_lock = asyncio.Lock()
 _live_click_lock = asyncio.Lock()
 _backtest_jobs: dict[str, dict] = {}
 _MAX_IN_MEMORY_BACKTEST_JOBS = 20
+_PROGRESS_CHECKPOINT_EVERY_CLICKS = 4
 
 
 def _database_url(settings) -> str:
@@ -67,6 +68,19 @@ def _remember_in_memory(job: dict) -> None:
         _backtest_jobs.pop(str(oldest.get("job_id")), None)
 
 
+def _has_active_in_memory_backtest() -> bool:
+    return any(job.get("status") == "RUNNING" for job in _backtest_jobs.values())
+
+
+async def _reconcile_stale_history(history: PostgresBtcBacktestHistoryStore) -> None:
+    # The production service currently runs one worker instance. If this process
+    # has no active job, a stale RUNNING row belongs to a worker that disappeared
+    # during an OOM/restart/deploy and must not remain RUNNING forever.
+    if _has_active_in_memory_backtest():
+        return
+    await history.fail_stale_running(stale_after_seconds=45)
+
+
 async def _run_backtest_job(
     job_id: str,
     database_url: str,
@@ -74,9 +88,27 @@ async def _run_backtest_job(
 ) -> None:
     async with _backtest_lock:
         job = _backtest_jobs[job_id]
+        last_persisted_completed = -1
+        last_persisted_phase: str | None = None
 
-        def update(completed: int, total: int, phase: str) -> None:
+        async def update(completed: int, total: int, phase: str) -> None:
+            nonlocal last_persisted_completed, last_persisted_phase
             job.update(completed_clicks=completed, total_clicks=total, phase=phase)
+            should_checkpoint = (
+                phase != last_persisted_phase
+                or completed == total
+                or completed == 0
+                or completed - last_persisted_completed >= _PROGRESS_CHECKPOINT_EVERY_CLICKS
+            )
+            if not should_checkpoint:
+                return
+            try:
+                await history.save_progress(job)
+                last_persisted_completed = completed
+                last_persisted_phase = phase
+            except Exception as exc:
+                # Progress durability must never abort the frozen research replay.
+                job["history_error"] = f"Progress checkpoint {exc.__class__.__name__}: {str(exc)[:260]}"
 
         try:
             job["result"] = await run_first24h_underlying_15m(
@@ -92,6 +124,7 @@ async def _run_backtest_job(
             try:
                 await history.save_completed(job, job["result"])
                 job["history_persisted"] = True
+                job["history_error"] = None
             except Exception as exc:
                 job["history_persisted"] = False
                 job["history_error"] = f"{exc.__class__.__name__}: {str(exc)[:300]}"
@@ -123,6 +156,7 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
         history = PostgresBtcBacktestHistoryStore(database_url)
         try:
             await history.initialize()
+            await _reconcile_stale_history(history)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
 
@@ -159,6 +193,7 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
         history = PostgresBtcBacktestHistoryStore(database_url)
         try:
             await history.initialize()
+            await _reconcile_stale_history(history)
             persisted = await history.get_job(str(job_id))
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
@@ -176,6 +211,7 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
         history = PostgresBtcBacktestHistoryStore(database_url)
         try:
             await history.initialize()
+            await _reconcile_stale_history(history)
             items = await history.list_jobs(limit=limit)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
@@ -216,9 +252,11 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V2",
+        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V3",
         "user_backtest_allowed": True,
         "user_backtest_reports_real_progress": True,
+        "user_backtest_progress_checkpointed": True,
+        "interrupted_backtests_reconciled": True,
         "user_backtest_history_persisted": True,
         "user_backtest_history_readable": True,
         "user_live_shadow_setup_allowed": True,

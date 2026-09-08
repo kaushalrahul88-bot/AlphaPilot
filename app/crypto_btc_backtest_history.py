@@ -42,6 +42,15 @@ INSERT INTO {TABLE_NAME} (
 ON CONFLICT (job_id) DO NOTHING;
 """
 
+PROGRESS_SQL = f"""
+UPDATE {TABLE_NAME}
+SET phase = %s,
+    completed_clicks = %s,
+    total_clicks = %s,
+    updated_at = NOW()
+WHERE job_id = %s AND status = 'RUNNING';
+"""
+
 COMPLETE_SQL = f"""
 UPDATE {TABLE_NAME}
 SET status = 'COMPLETED',
@@ -69,6 +78,18 @@ SET status = 'FAILED',
     error = %s,
     updated_at = NOW()
 WHERE job_id = %s;
+"""
+
+FAIL_STALE_RUNNING_SQL = f"""
+UPDATE {TABLE_NAME}
+SET status = 'FAILED',
+    phase = 'INTERRUPTED',
+    finished_at = NOW(),
+    error = 'Backtest worker was interrupted before completion; rerun is safe because the replay is frozen.',
+    updated_at = NOW()
+WHERE status = 'RUNNING'
+  AND updated_at < NOW() - (%s * INTERVAL '1 second')
+RETURNING job_id;
 """
 
 SELECT_JOB_SQL = f"""
@@ -206,6 +227,23 @@ class PostgresBtcBacktestHistoryStore:
                 )
             conn.commit()
 
+    async def save_progress(self, job: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._save_progress_sync, job)
+
+    def _save_progress_sync(self, job: dict[str, Any]) -> None:
+        with _connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    PROGRESS_SQL,
+                    (
+                        str(job.get("phase") or "PROCESSING_CLICKS"),
+                        int(job.get("completed_clicks") or 0),
+                        int(job.get("total_clicks") or 96),
+                        str(job["job_id"]),
+                    ),
+                )
+            conn.commit()
+
     async def save_completed(self, job: dict[str, Any], result: dict[str, Any]) -> None:
         await asyncio.to_thread(self._save_completed_sync, job, result)
 
@@ -251,6 +289,18 @@ class PostgresBtcBacktestHistoryStore:
                     raise RuntimeError("BTC backtest history row disappeared before failure persistence")
             conn.commit()
 
+    async def fail_stale_running(self, *, stale_after_seconds: int = 60) -> list[str]:
+        safe_seconds = max(30, int(stale_after_seconds))
+        return await asyncio.to_thread(self._fail_stale_running_sync, safe_seconds)
+
+    def _fail_stale_running_sync(self, stale_after_seconds: int) -> list[str]:
+        with _connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(FAIL_STALE_RUNNING_SQL, (stale_after_seconds,))
+                job_ids = [str(row[0]) for row in cur.fetchall()]
+            conn.commit()
+        return job_ids
+
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._get_job_sync, job_id)
 
@@ -275,10 +325,12 @@ class PostgresBtcBacktestHistoryStore:
 
 def architecture_contract() -> dict[str, Any]:
     return {
-        "version": "BTC_DASHBOARD_BACKTEST_HISTORY_V1",
+        "version": "BTC_DASHBOARD_BACKTEST_HISTORY_V2",
         "backend": "POSTGRES",
         "completed_runs_persisted": True,
         "failed_runs_persisted": True,
+        "running_progress_checkpointed": True,
+        "stale_running_jobs_reconciled": True,
         "survives_browser_refresh": True,
         "survives_api_deploy": True,
         "full_terminal_result_retained": True,
