@@ -2,20 +2,13 @@ name: F&O Underlying Random Edge Backtest
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/fno-underlying-random-edge-backtest.yml"
-      - "app/fno_underlying_random_replay_v1.py"
-      - "app/fno_underlying_random_backtest_api.py"
-      - "app/__init__.py"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fno-underlying-random-edge-backtest
-  cancel-in-progress: true
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
 
 jobs:
   replay:
