@@ -1,0 +1,164 @@
+{
+  "protocol": "FNO_MARKET_BRAIN_V6_HOLDOUT_B_2026-09-08",
+  "windows": [
+    {
+      "id": "APRIL_2026",
+      "start": "2026-04-01",
+      "end": "2026-04-24",
+      "near_month_expiry": "2026-04-28"
+    },
+    {
+      "id": "MAY_2026",
+      "start": "2026-05-04",
+      "end": "2026-05-22",
+      "near_month_expiry": "2026-05-26"
+    }
+  ],
+  "policy": {
+    "use": "Static profiles classify sector drivers and peer baskets. Only completed candles and point-in-time events public by the simulated click may influence V6.",
+    "unknown_intraday_event_time": "NEXT_NSE_SESSION_OPEN",
+    "direction_rule": "Directional labels use only intrinsic information available at publication. Ambiguous or mixed announcements are NEUTRAL. Subsequent stock-price action is never used.",
+    "v3_development_rows_excluded": true,
+    "v5_holdout_a_outcomes_excluded": true,
+    "outcomes_used_to_build_archive": false,
+    "future_bars_used_for_decision": false,
+    "options_used_for_decision": false,
+    "futures_used_for_decision": false
+  },
+  "stocks": {
+    "RELIANCE": {
+      "category": "DIVERSIFIED_ENERGY_CONSUMER_DIGITAL",
+      "business": "Diversified Indian group spanning energy, petrochemicals, retail and digital communications.",
+      "primary_drivers": ["crude_and_refining_margins", "petrochemical_spreads", "retail_demand", "telecom_ARPU", "capex", "consumer_growth", "energy_transition", "INR_and_global_risk"],
+      "peer_basket": ["ONGC", "BPCL", "IOC", "GAIL"]
+    },
+    "TATASTEEL": {
+      "category": "STEEL",
+      "business": "Integrated steel producer with material India and European operations.",
+      "primary_drivers": ["steel_prices", "iron_ore_and_coking_coal", "China_demand", "India_infrastructure", "European_operations", "capacity_utilisation", "trade_policy", "energy_costs"],
+      "peer_basket": ["JSWSTEEL", "HINDALCO", "SAIL", "JINDALSTEL"]
+    },
+    "ITC": {
+      "category": "FMCG_CONSUMER",
+      "business": "Indian consumer company with cigarettes, FMCG, agri and paper businesses.",
+      "primary_drivers": ["consumer_demand", "cigarette_taxation", "input_costs", "rural_demand", "FMCG_margins", "agri_exports", "paper_cycle", "regulation"],
+      "peer_basket": ["HINDUNILVR", "NESTLEIND", "BRITANNIA", "DABUR"]
+    },
+    "BAJFINANCE": {
+      "category": "NON_BANK_FINANCE",
+      "business": "Large diversified Indian non-bank lender focused on consumer, SME and commercial finance.",
+      "primary_drivers": ["AUM_growth", "net_interest_income", "cost_of_funds", "credit_cost", "asset_quality", "consumer_demand", "RBI_policy", "liquidity"],
+      "peer_basket": ["BAJAJFINSV", "CHOLAFIN", "SHRIRAMFIN", "MUTHOOTFIN"]
+    },
+    "LT": {
+      "category": "ENGINEERING_CONSTRUCTION",
+      "business": "Indian engineering and construction group with infrastructure, energy, manufacturing and services exposure.",
+      "primary_drivers": ["order_inflows", "government_capex", "private_capex", "execution", "working_capital", "commodity_costs", "Middle_East_orders", "defence_and_energy_spending"],
+      "peer_basket": ["BHEL", "BEL", "SIEMENS", "ABB"]
+    },
+    "DRREDDY": {
+      "category": "PHARMACEUTICALS",
+      "business": "Indian pharmaceutical company with generics, branded medicines and global market exposure.",
+      "primary_drivers": ["US_generics", "new_launches", "price_erosion", "regulatory_inspections", "gross_margin", "R&D", "India_growth", "currency"],
+      "peer_basket": ["SUNPHARMA", "CIPLA", "DIVISLAB", "LUPIN"]
+    },
+    "ULTRACEMCO": {
+      "category": "CEMENT",
+      "business": "Large Indian cement producer with nationwide capacity and infrastructure/housing demand exposure.",
+      "primary_drivers": ["cement_prices", "volume_growth", "fuel_and_freight_cost", "capacity_utilisation", "housing_demand", "infrastructure_capex", "capacity_additions", "regional_pricing"],
+      "peer_basket": ["ACC", "AMBUJACEM", "SHREECEM", "DALBHARAT"]
+    },
+    "POWERGRID": {
+      "category": "POWER_TRANSMISSION",
+      "business": "Indian interstate power-transmission utility with regulated asset and project-execution exposure.",
+      "primary_drivers": ["regulated_asset_base", "transmission_capex", "project_commissioning", "power_demand", "interest_rates", "government_policy", "renewable_grid_integration", "execution"],
+      "peer_basket": ["NTPC", "TATAPOWER", "ADANIPOWER", "NHPC"]
+    }
+  },
+  "events": [
+    {
+      "id": "RBI_POLICY_2026_04_08",
+      "symbol": "MARKET",
+      "category": "RBI_POLICY",
+      "effective_at": "2026-04-09T09:15:00+05:30",
+      "title": "RBI held the repo rate at 5.25% with a neutral stance amid elevated energy and geopolitical uncertainty",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_RBI_POLICY",
+      "source": "https://www.reuters.com/world/india/indias-central-bank-holds-rates-iran-war-upends-economic-outlook-2026-04-08/",
+      "notes": "The policy outcome was mixed for equities; the archive uses the next-session-open rule rather than inferring an intraday market timestamp."
+    },
+    {
+      "id": "ULTRACEMCO_CAPACITY_2026_04_17",
+      "symbol": "ULTRACEMCO",
+      "category": "CAPACITY_COMMISSIONING",
+      "effective_at": "2026-04-20T09:15:00+05:30",
+      "title": "UltraTech announced commissioning of 8.7 MTPA of grinding capacity and crossing 200 MTPA domestic capacity",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.ultratechcement.com/corporate/media/stories/ultratech-surpasses-200-million-tonnes-per-annum-capacity-in-india",
+      "notes": "Publication was April 17. Intraday time is not frozen, so it becomes usable from the next NSE session open."
+    },
+    {
+      "id": "RELIANCE_Q4_FY26_2026_04_24",
+      "symbol": "RELIANCE",
+      "category": "EARNINGS",
+      "effective_at": "2026-04-27T09:15:00+05:30",
+      "title": "Reliance published financial and operational performance for the quarter and year ended March 31, 2026",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.ril.com/news-media/press-releases/financial-and-operational-performance-reliance-industries-limited-ril-1",
+      "notes": "The event is retained in the archive but its effective timestamp falls after the frozen April window. Direction is deliberately neutral to avoid post-hoc interpretation."
+    },
+    {
+      "id": "INDIA_CPI_2026_05_12",
+      "symbol": "MARKET",
+      "category": "INFLATION_RATES",
+      "effective_at": "2026-05-13T09:15:00+05:30",
+      "title": "India April retail inflation rose to 3.48%, below the Reuters poll forecast while energy risks remained elevated",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "TIER1_NEWS_WITH_OFFICIAL_CPI_DATA",
+      "source": "https://www.reuters.com/world/india/view-indias-april-retail-inflation-quickens-348-on-year-2026-05-12/",
+      "notes": "The combination of a below-consensus print and elevated energy risk is treated as mixed. Next-session-open timing avoids publication-time ambiguity."
+    },
+    {
+      "id": "DRREDDY_Q4_FY26_2026_05_12",
+      "symbol": "DRREDDY",
+      "category": "EARNINGS",
+      "effective_at": "2026-05-13T09:15:00+05:30",
+      "title": "Dr. Reddy's reported Q4 FY26 revenue down 11.6% year over year with gross margin compression",
+      "direction": "NEGATIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_FILING",
+      "source": "https://www.sec.gov/Archives/edgar/data/1135951/000157587226000301/rdy0894_ex99-2.htm",
+      "notes": "Direction is based only on the published financial comparison, not subsequent share-price reaction. Intraday publication time is not frozen, so the event is usable from the next NSE session open."
+    },
+    {
+      "id": "TATASTEEL_Q4_FY26_2026_05_15",
+      "symbol": "TATASTEEL",
+      "category": "EARNINGS",
+      "effective_at": "2026-05-18T09:15:00+05:30",
+      "title": "Tata Steel published Q4 FY26 and FY26 financial results",
+      "direction": "NEUTRAL",
+      "weight": 0,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://www.tatasteel.com/investors/stock-exchange-compliances/stock-exchange-releases/",
+      "notes": "The archive does not infer a directional surprise from later market reaction; result direction is therefore neutral."
+    },
+    {
+      "id": "ITC_Q4_FY26_2026_05_21",
+      "symbol": "ITC",
+      "category": "EARNINGS",
+      "effective_at": "2026-05-22T09:15:00+05:30",
+      "title": "ITC reported Q4 gross revenue growth of 17.5%, EBITDA growth of 7.3% and PAT growth of 5%",
+      "direction": "POSITIVE",
+      "weight": 1,
+      "source_quality": "OFFICIAL_COMPANY_RELEASE",
+      "source": "https://itcportal.com/media-centre/press-releases/media-statement-financial-results-for-the-quarter-and-year-ended-31st-march-2026.html",
+      "notes": "Direction reflects the published year-over-year growth figures only. Intraday publication time is not frozen, so the event is usable from the next session open."
+    }
+  ]
+}
