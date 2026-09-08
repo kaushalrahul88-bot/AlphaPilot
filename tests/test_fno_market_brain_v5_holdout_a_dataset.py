@@ -151,3 +151,24 @@ def test_status_and_result_polling_are_read_only():
         '@app.get("/v1/internal/fno/v5-holdout-a-dataset/status")', 1
     )[0]
     assert "_worker(" in start_block
+
+
+def test_full_result_compression_round_trip_preserves_frozen_payload():
+    payload = {
+        "status": "COMPLETED",
+        "protocol_id": dataset.PROTOCOL_ID,
+        "brain_frozen_commit": dataset.BRAIN_FROZEN_COMMIT,
+        "experiment": {"future_outcomes_resolved": False},
+        "rows": [
+            {"symbol": "INFY", "click_at": "2026-06-01T04:00:00+00:00", "decision": {"action": "NO_TRADE"}},
+            {"symbol": "HDFCBANK", "click_at": "2026-06-01T04:05:00+00:00", "decision": {"action": "LONG"}},
+        ],
+        "frozen_5m_tape_by_stock": {"INFY": [[1, 2, 3, 4, 5, 6]]},
+        "safety": dataset.architecture_contract(),
+    }
+    blob = dataset_api._encode_result(payload)
+    restored = dataset_api._decode_result(blob)
+    assert restored == payload
+    assert len(blob) < len(str(payload).encode("utf-8"))
+    assert dataset_api.RESULT_BLOB_CODEC == "zlib-json-v1"
+    assert sum(dataset_api.FINAL_DB_RETRY_DELAYS_SECONDS) >= 240

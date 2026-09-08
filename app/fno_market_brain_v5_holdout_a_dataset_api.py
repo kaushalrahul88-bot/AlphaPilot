@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import traceback
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Header, HTTPException
@@ -23,6 +25,8 @@ RUN_TABLE = "fno_market_brain_v5_holdout_a_dataset_runs"
 CACHE_TABLE = "fno_market_brain_v5_holdout_a_history_segments"
 STALE_AFTER = timedelta(minutes=10)
 DB_RETRY_DELAYS_SECONDS = (0.25, 0.75, 2.0, 5.0)
+FINAL_DB_RETRY_DELAYS_SECONDS = (1.0, 2.0, 5.0, 10.0, 15.0) + (30.0,) * 8
+RESULT_BLOB_CODEC = "zlib-json-v1"
 
 SQL = f"""CREATE TABLE IF NOT EXISTS {RUN_TABLE}(
 run_id TEXT PRIMARY KEY,
@@ -38,6 +42,7 @@ progress_json JSONB,
 result_json JSONB,
 error TEXT,
 traceback TEXT);
+ALTER TABLE {RUN_TABLE} ADD COLUMN IF NOT EXISTS result_blob BYTEA;
 CREATE INDEX IF NOT EXISTS fno_v5_holdout_a_dataset_started_idx
 ON {RUN_TABLE}(started_at DESC);
 CREATE TABLE IF NOT EXISTS {CACHE_TABLE}(
@@ -68,9 +73,10 @@ def _transient_db_error(exc: Exception) -> bool:
     return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
 
 
-async def _db_call(func, *args):
+async def _db_call(func, *args, retry_delays=None):
+    delays = tuple(DB_RETRY_DELAYS_SECONDS if retry_delays is None else retry_delays)
     last = None
-    attempts = len(DB_RETRY_DELAYS_SECONDS) + 1
+    attempts = len(delays) + 1
     for attempt in range(attempts):
         try:
             return await asyncio.to_thread(func, *args)
@@ -78,7 +84,7 @@ async def _db_call(func, *args):
             last = exc
             if not _transient_db_error(exc) or attempt >= attempts - 1:
                 raise
-            await asyncio.sleep(DB_RETRY_DELAYS_SECONDS[attempt])
+            await asyncio.sleep(delays[attempt])
     raise last  # pragma: no cover
 
 
@@ -166,24 +172,96 @@ async def _update(url, run_id, progress, increment=False):
     await _db_call(_update_sync, url, run_id, progress, increment)
 
 
+def _result_summary(result, *, blob_bytes=None):
+    summary = {
+        "status": result.get("status"),
+        "protocol_id": result.get("protocol_id"),
+        "brain_protocol_id": result.get("brain_protocol_id"),
+        "brain_frozen_commit": result.get("brain_frozen_commit"),
+        "experiment": result.get("experiment"),
+        "decision_counts": result.get("decision_counts"),
+        "data_coverage": result.get("data_coverage"),
+        "context_coverage": result.get("context_coverage"),
+        "frozen_5m_tape_hashes": result.get("frozen_5m_tape_hashes"),
+        "safety": result.get("safety"),
+        "result_blob_codec": RESULT_BLOB_CODEC,
+    }
+    if blob_bytes is not None:
+        summary["result_blob_bytes"] = int(blob_bytes)
+    return summary
+
+
+def _encode_result(result):
+    raw = json.dumps(
+        result,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return zlib.compress(raw, level=6)
+
+
+def _decode_result(blob):
+    if blob is None:
+        return None
+    raw = zlib.decompress(bytes(blob))
+    return json.loads(raw.decode("utf-8"))
+
+
 def _complete_sync(url, run_id, result):
+    blob = _encode_result(result)
+    summary = _result_summary(result, blob_bytes=len(blob))
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""UPDATE {RUN_TABLE}
-                SET status='COMPLETED',result_json=%s,progress_json=%s,error=NULL,
-                traceback=NULL,updated_at=NOW(),heartbeat_at=NOW(),completed_at=NOW()
+                SET status='COMPLETED',result_json=%s,result_blob=%s,
+                progress_json=%s,error=NULL,traceback=NULL,updated_at=NOW(),
+                heartbeat_at=NOW(),completed_at=NOW()
                 WHERE run_id=%s AND status='RUNNING'""",
-                (Jsonb(dict(result)), Jsonb({"stage": "COMPLETED"}), run_id),
+                (Jsonb(summary), blob, Jsonb({"stage": "COMPLETED"}), run_id),
             )
         connection.commit()
 
 
 async def _complete(url, run_id, result):
-    await _db_call(_complete_sync, url, run_id, result)
+    await _db_call(
+        _complete_sync,
+        url,
+        run_id,
+        result,
+        retry_delays=FINAL_DB_RETRY_DELAYS_SECONDS,
+    )
+
+
+def _full_result_sync(url, run_id):
+    with _connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT result_blob,result_json FROM {RUN_TABLE} WHERE run_id=%s",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            blob, summary = row
+            if blob is not None:
+                return _decode_result(blob)
+            return summary
+
+
+async def _full_result(url, run_id):
+    return await _db_call(_full_result_sync, url, run_id)
 
 
 def _fail_sync(url, run_id, error, trace, result=None):
+    failure_summary = None
+    if result:
+        failure_summary = {
+            "status": result.get("status"),
+            "protocol_id": result.get("protocol_id"),
+            "safety": result.get("safety"),
+        }
     with _connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -192,7 +270,7 @@ def _fail_sync(url, run_id, error, trace, result=None):
                 progress_json=%s,updated_at=NOW(),heartbeat_at=NOW(),
                 completed_at=NOW() WHERE run_id=%s AND status='RUNNING'""",
                 (
-                    Jsonb(dict(result)) if result else None,
+                    Jsonb(failure_summary) if failure_summary else None,
                     error,
                     trace,
                     Jsonb({"stage": "FAILED"}),
@@ -203,7 +281,15 @@ def _fail_sync(url, run_id, error, trace, result=None):
 
 
 async def _fail(url, run_id, error, trace, result=None):
-    await _db_call(_fail_sync, url, run_id, error, trace, result)
+    await _db_call(
+        _fail_sync,
+        url,
+        run_id,
+        error,
+        trace,
+        result,
+        retry_delays=FINAL_DB_RETRY_DELAYS_SECONDS,
+    )
 
 
 def _interrupt_sync(url, run_id, reason):
@@ -272,6 +358,7 @@ async def _cache_put(url, symbol, timeframe, window_start, window_end, rows):
 def _summary(run):
     if not run:
         return {"status": "IDLE", "protocol_id": PROTOCOL_ID, "safety": architecture_contract()}
+    run_id = str(run.get("run_id") or "")
     payload = {
         "run_id": run.get("run_id"),
         "protocol_id": run.get("protocol_id"),
@@ -280,6 +367,7 @@ def _summary(run):
         "attempt_count": int(run.get("attempt_count") or 0),
         "heartbeat_at": run.get("heartbeat_at"),
         "progress": run.get("progress_json") or {},
+        "worker_active": _active(run_id) if run_id else False,
         "error": run.get("error") if run.get("status") == "FAILED" else None,
         "safety": architecture_contract(),
     }
@@ -290,6 +378,7 @@ def _summary(run):
         payload["data_coverage"] = result.get("data_coverage")
         payload["context_coverage"] = result.get("context_coverage")
         payload["frozen_5m_tape_hashes"] = result.get("frozen_5m_tape_hashes")
+        payload["result_blob_bytes"] = result.get("result_blob_bytes")
     elif run.get("status") == "FAILED" and result:
         payload["failure_detail"] = result
     return payload
@@ -356,7 +445,16 @@ async def _run(settings, run_id):
                 f"{result.get('status')} "
                 f"{result.get('history_errors') or result.get('missing_required') or ''}"
             )
-        await _complete(settings.database_url, run_id, result)
+        try:
+            await _update(settings.database_url, run_id, {"stage": "PERSISTING_FROZEN_DATASET"})
+        except Exception:
+            pass
+        try:
+            await _complete(settings.database_url, run_id, result)
+        except Exception:
+            # The complete frozen result stays unscored. Explicit POST /start can
+            # resume from durable history cache if persistence remains unavailable.
+            return
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -453,4 +551,7 @@ def register_fno_market_brain_v5_holdout_a_dataset_routes(app, settings, collect
             raise HTTPException(500, detail={"run_id": run.get("run_id"), "error": run.get("error"), "failure_detail": run.get("result_json"), "traceback": run.get("traceback")})
         if run.get("status") != "COMPLETED":
             raise HTTPException(409, detail=_summary(run))
-        return run.get("result_json")
+        payload = await _full_result(settings.database_url, run["run_id"])
+        if payload is None:
+            raise HTTPException(500, detail={"run_id": run.get("run_id"), "error": "COMPLETED_RESULT_MISSING"})
+        return payload
