@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from datetime import timedelta
-from typing import Any
+import inspect
+from typing import Any, Awaitable, Callable
 
 from app.coindcx_btc_public_provider import CoinDcxBtcProviderPolicy, CoinDcxBtcPublicProvider
 from app.crypto_btc_first24h_backtest import (
@@ -59,7 +60,23 @@ def _summary(clicks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def run_first24h_underlying_15m(database_url: str) -> dict[str, Any]:
+ProgressCallback = Callable[[int, int, str], Awaitable[None] | None]
+
+
+async def _progress(callback: ProgressCallback | None, completed: int, total: int, phase: str) -> None:
+    if callback is None:
+        return
+    result = callback(completed, total, phase)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def run_first24h_underlying_15m(
+    database_url: str,
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    await _progress(progress_callback, 0, 96, "LOADING_ARCHIVED_INPUTS")
     start, _delta_snapshots = await asyncio.to_thread(_load_inputs, database_url)
     clicks = frozen_clicks(start)
     window_end = start + timedelta(hours=24)
@@ -78,6 +95,7 @@ async def run_first24h_underlying_15m(database_url: str) -> dict[str, Any]:
         end_at=window_end,
         resolution="5m",
     )
+    await _progress(progress_callback, 0, len(clicks), "PROCESSING_CLICKS")
     cached = _CachedCoinDcx({"1h": one_hour, "1m": one_minute})
     pit = PostgresBtcPitArchiveStore(database_url)
     # This policy is required by the existing immutable decision-tape contract.
@@ -114,6 +132,7 @@ async def run_first24h_underlying_15m(database_url: str) -> dict[str, Any]:
             "setup": setup,
             "outcome": outcome,
         })
+        await _progress(progress_callback, index + 1, len(clicks), "PROCESSING_CLICKS")
     return {
         "mode": MODE,
         "status": "COMPLETED",

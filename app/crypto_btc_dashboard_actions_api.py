@@ -17,6 +17,7 @@ from app.crypto_btc_prospective_proof_runtime import BtcProspectiveProofRuntimeC
 
 _backtest_lock = asyncio.Lock()
 _live_click_lock = asyncio.Lock()
+_backtest_jobs: dict[str, dict] = {}
 
 
 def _database_url(settings) -> str:
@@ -31,14 +32,71 @@ def _request_id() -> str:
     return f"dashboard-{stamp}-{uuid4().hex[:10]}"
 
 
+def _public_job(job: dict) -> dict:
+    completed, total = int(job.get("completed_clicks", 0)), int(job.get("total_clicks", 96))
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "phase": job.get("phase"),
+        "completed_clicks": completed,
+        "total_clicks": total,
+        "progress_pct": round(completed / total * 100.0, 1) if total else 0.0,
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
+
+
+async def _run_backtest_job(job_id: str, database_url: str) -> None:
+    async with _backtest_lock:
+        job = _backtest_jobs[job_id]
+
+        def update(completed: int, total: int, phase: str) -> None:
+            job.update(completed_clicks=completed, total_clicks=total, phase=phase)
+
+        try:
+            job["result"] = await run_first24h_underlying_15m(
+                database_url,
+                progress_callback=update,
+            )
+            job.update(status="COMPLETED", phase="COMPLETED", completed_clicks=job["total_clicks"])
+        except Exception as exc:
+            job.update(status="FAILED", phase="FAILED", error=f"{exc.__class__.__name__}: {str(exc)[:300]}")
+        finally:
+            job["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
 def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
     @app.post("/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest")
     async def run_user_underlying_backtest(response: Response):
         if _backtest_lock.locked():
             raise HTTPException(status_code=409, detail="BTC underlying backtest is already running")
+        database_url = _database_url(settings)
         response.headers["Cache-Control"] = "no-store"
-        async with _backtest_lock:
-            return await run_first24h_underlying_15m(_database_url(settings))
+        job_id = _request_id()
+        _backtest_jobs.clear()
+        _backtest_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "RUNNING",
+            "phase": "QUEUED",
+            "completed_clicks": 0,
+            "total_clicks": 96,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error": None,
+            "result": None,
+        }
+        asyncio.create_task(_run_backtest_job(job_id, database_url))
+        return _public_job(_backtest_jobs[job_id])
+
+    @app.get("/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest/{job_id}")
+    async def read_user_underlying_backtest(job_id: str, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        job = _backtest_jobs.get(str(job_id))
+        if job is None:
+            raise HTTPException(status_code=404, detail="BTC backtest job is unavailable or expired")
+        return _public_job(job)
 
     @app.post("/v1/dashboard/crypto/btc/actions/live-shadow-click")
     async def generate_user_live_shadow_setup(response: Response):
@@ -72,6 +130,7 @@ def architecture_contract() -> dict:
     return {
         "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V1",
         "user_backtest_allowed": True,
+        "user_backtest_reports_real_progress": True,
         "user_live_shadow_setup_allowed": True,
         "broker_order_placement_allowed": False,
         "credentials_accepted_from_browser": False,
