@@ -1,0 +1,172 @@
+name: F&O V6 Historical Holdout B Dataset
+
+on:
+  pull_request:
+    paths:
+      - 'app/fno_market_brain_v6.py'
+      - 'app/fno_market_brain_v6_holdout_b_dataset.py'
+      - 'app/fno_market_brain_v6_holdout_b_dataset_api.py'
+      - 'data/fno_market_brain_v6_holdout_b_knowledge.json'
+      - 'docs/fno_market_brain_v6_holdout_b_protocol.md'
+      - 'tests/test_fno_market_brain_v6.py'
+      - 'tests/test_fno_market_brain_v6_holdout_b_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v6-historical-holdout-b-dataset.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/fno_market_brain_v6.py'
+      - 'app/fno_market_brain_v6_holdout_b_dataset.py'
+      - 'app/fno_market_brain_v6_holdout_b_dataset_api.py'
+      - 'data/fno_market_brain_v6_holdout_b_knowledge.json'
+      - 'docs/fno_market_brain_v6_holdout_b_protocol.md'
+      - 'tests/test_fno_market_brain_v6.py'
+      - 'tests/test_fno_market_brain_v6_holdout_b_dataset.py'
+      - 'app/__init__.py'
+      - '.github/workflows/fno-v6-historical-holdout-b-dataset.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests/test_fno_market_brain_v5.py tests/test_fno_market_brain_v6.py tests/test_fno_market_brain_v6_holdout_b_dataset.py
+      - run: python -m py_compile app/fno_market_brain_v5.py app/fno_market_brain_v6.py app/fno_market_brain_v6_holdout_b_dataset.py app/fno_market_brain_v6_holdout_b_dataset_api.py app/__init__.py
+
+  build-dataset:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for deployed V6 Holdout B endpoint
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..180}; do
+            if curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 --retry-all-errors "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render V6 Holdout B deployment"
+          exit 1
+
+      - name: Start frozen Holdout B dataset build
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/v6-holdout-b-dataset/start" \
+            -o start.json
+          cat start.json
+
+      - name: Poll Holdout B dataset build
+        run: |
+          set -euo pipefail
+          : > status.json
+          deadline=$((SECONDS + 5400))
+          while (( SECONDS < deadline )); do
+            if curl -fsS --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 --retry-all-errors \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/v6-holdout-b-dataset/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then exit 0; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+            fi
+            sleep 10
+          done
+          echo "Timed out after 90 minutes waiting for V6 Holdout B dataset"
+          cat status.json || true
+          exit 1
+
+      - name: Fetch and validate frozen historical holdout dataset
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/v6-holdout-b-dataset/result" -o dataset.json
+          python - <<'PY'
+          import json
+          d=json.load(open('dataset.json'))
+          assert d['status']=='COMPLETED'
+          assert d['protocol_id']=='FNO_MARKET_BRAIN_V6_HOLDOUT_B_2026-09-08'
+          assert d['brain_protocol_id']=='FNO_MARKET_BRAIN_V6_EVIDENCE_TRANSITION_2026-09-08'
+          assert d['brain_frozen_commit']=='09fe4ca938b4b47c5d9cb8d33b91f321d5368ef6'
+          e=d['experiment']
+          assert e['kind']=='HISTORICAL_HOLDOUT_NOT_FORWARD_TEST'
+          assert [x['symbol'] for x in e['stocks']]==[
+              'RELIANCE','TATASTEEL','ITC','BAJFINANCE','LT','DRREDDY','ULTRACEMCO','POWERGRID'
+          ]
+          assert [(w['id'],w['start'],w['end']) for w in e['windows']]==[
+              ('APRIL_2026','2026-04-01','2026-04-24'),
+              ('MAY_2026','2026-05-04','2026-05-22'),
+          ]
+          assert all(w['session_count']>0 for w in e['windows'])
+          assert e['clicks_per_session']==20
+          assert e['observations']==e['session_count']*20*8
+          assert e['same_click_times_across_stocks'] is True
+          assert e['thesis_tracker_reset_each_stock_session'] is True
+          assert e['future_outcomes_resolved'] is False
+          assert e['evaluation_metrics_computed'] is False
+          s=d['safety']
+          assert s['historical_backtest_dataset_only'] is True
+          assert s['forward_test'] is False
+          assert s['completed_candles_only'] is True
+          assert s['point_in_time_context_only'] is True
+          assert s['clicks_deterministic_and_frozen'] is True
+          assert s['thesis_deduplication_enabled'] is True
+          assert s['future_tape_frozen'] is True
+          assert s['future_outcomes_resolved'] is False
+          assert s['evaluation_metrics_computed'] is False
+          assert s['options_read_for_decision'] is False
+          assert s['futures_read_for_decision'] is False
+          assert s['v3_development_rows_used_as_holdout'] is False
+          assert s['v5_holdout_a_rows_used_as_holdout'] is False
+          assert s['live_execution'] is False
+          assert s['capital_committed']==0
+          assert s['history_transport_cache_only'] is True
+          assert s['history_cache_may_change_decisions'] is False
+          assert s['bounded_fetch_concurrency']==4
+          rows=d['rows']
+          assert len(rows)==e['observations']
+          by_day_symbol={}
+          for row in rows:
+              by_day_symbol.setdefault((row['trade_date'],row['symbol']),set()).add(row['click_at'])
+          assert all(len(clicks)==20 for clicks in by_day_symbol.values())
+          # Same click manifest applies to every primary stock on each session.
+          assert set(d['click_manifest'])=={w for w in {r['trade_date'] for r in rows}}
+          summary={
+              'protocol_id':d['protocol_id'],
+              'brain_protocol_id':d['brain_protocol_id'],
+              'brain_frozen_commit':d['brain_frozen_commit'],
+              'experiment':e,
+              'decision_counts':d['decision_counts'],
+              'data_coverage':d['data_coverage'],
+              'context_coverage':d['context_coverage'],
+              'missing_optional_context':d.get('missing_optional_context'),
+              'frozen_5m_tape_hashes':d['frozen_5m_tape_hashes'],
+              'safety':s,
+          }
+          json.dump(summary,open('dataset-summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-v6-historical-holdout-b-dataset
+          path: |
+            dataset.json
+            dataset-summary.json
