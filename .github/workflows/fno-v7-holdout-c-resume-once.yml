@@ -1,0 +1,117 @@
+name: F&O V7 Holdout C Resume Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fno-v7-holdout-c-resume-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
+
+jobs:
+  resume-holdout-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    env:
+      API_BASE: https://alphapilot-api-pnio.onrender.com
+      COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
+    steps:
+      - name: Wait for matching Render deployment
+        run: |
+          set -euo pipefail
+          test -n "$COLLECTOR_TOKEN"
+          for i in {1..180}; do
+            if curl -fsS --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 --retry-all-errors "$API_BASE/health" -o health.json; then
+              DEPLOYED=$(python -c 'import json;print(json.load(open("health.json")).get("deployment_commit") or "")')
+              echo "Render commit: $DEPLOYED; expected: $GITHUB_SHA"
+              if [ "$DEPLOYED" = "$GITHUB_SHA" ]; then exit 0; fi
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for matching Render deployment"
+          exit 1
+
+      - name: Resume frozen Holdout C dataset
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            -X POST "$API_BASE/v1/internal/fno/v7-holdout-c-dataset/start" \
+            -o start.json
+          cat start.json
+
+      - name: Poll Holdout C until complete
+        run: |
+          set -euo pipefail
+          : > status.json
+          deadline=$((SECONDS + 7200))
+          while (( SECONDS < deadline )); do
+            if curl -fsS --connect-timeout 5 --max-time 15 --retry 1 --retry-delay 2 --retry-all-errors \
+              -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+              "$API_BASE/v1/internal/fno/v7-holdout-c-dataset/status" -o status.json; then
+              STATE=$(python -c 'import json;print(json.load(open("status.json")).get("status","UNKNOWN"))')
+              ACTIVE=$(python -c 'import json;print("true" if json.load(open("status.json")).get("worker_active") is True else "false")')
+              python -c 'import json;d=json.load(open("status.json"));print("state:",d.get("status"),"attempt:",d.get("attempt_count"),"worker_active:",d.get("worker_active"),"deployment_commit:",d.get("deployment_commit"),"progress:",d.get("progress"))'
+              if [ "$STATE" = "COMPLETED" ]; then exit 0; fi
+              if [ "$STATE" = "FAILED" ]; then cat status.json; exit 1; fi
+              if [ "$STATE" = "RUNNING" ] && [ "$ACTIVE" != "true" ]; then
+                echo "RUNNING dataset has no active worker; resuming from durable transport cache"
+                curl -fsS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 3 --retry-all-errors \
+                  -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+                  -X POST "$API_BASE/v1/internal/fno/v7-holdout-c-dataset/start" \
+                  -o resume.json
+                cat resume.json
+              fi
+            fi
+            sleep 10
+          done
+          echo "Timed out after 120 minutes waiting for V7 Holdout C dataset"
+          cat status.json || true
+          exit 1
+
+      - name: Fetch and validate frozen dataset
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 3 --retry-all-errors \
+            -H "X-Collector-Token: $COLLECTOR_TOKEN" \
+            "$API_BASE/v1/internal/fno/v7-holdout-c-dataset/result" -o dataset.json
+          python - <<'PY'
+          import json
+          d=json.load(open('dataset.json'))
+          assert d['status']=='COMPLETED'
+          assert d['protocol_id']=='FNO_MARKET_BRAIN_V7_HOLDOUT_C_2026-09-08'
+          assert d['brain_frozen_commit']=='461053bb98ef60ffdad9f9bd34ce4a5e599016c3'
+          e=d['experiment']
+          assert e['kind']=='HISTORICAL_HOLDOUT_NOT_FORWARD_TEST'
+          assert e['observations']==e['session_count']*20*12
+          s=d['safety']
+          assert s['future_outcomes_resolved'] is False
+          assert s['evaluation_metrics_computed'] is False
+          assert s['live_execution'] is False
+          summary={
+              'protocol_id': d['protocol_id'],
+              'brain_protocol_id': d['brain_protocol_id'],
+              'brain_frozen_commit': d['brain_frozen_commit'],
+              'experiment': e,
+              'decision_counts': d['decision_counts'],
+              'data_coverage': d['data_coverage'],
+              'context_coverage': d['context_coverage'],
+              'missing_optional_context': d.get('missing_optional_context'),
+              'frozen_5m_tape_hashes': d['frozen_5m_tape_hashes'],
+              'safety': s,
+          }
+          json.dump(summary,open('dataset-summary.json','w'),indent=2,sort_keys=True)
+          print(json.dumps(summary,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fno-v7-historical-holdout-c-dataset-resumed
+          path: |
+            dataset.json
+            dataset-summary.json
