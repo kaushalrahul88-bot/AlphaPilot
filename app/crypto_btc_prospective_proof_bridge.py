@@ -4,17 +4,20 @@ This module composes point-in-time-safe inputs when a caller explicitly invokes
 it:
 
 1. reconstruct completed CoinDCX BTC spot candles by bar-completion time;
-2. read derivatives rows already visible in the immutable BTC PIT store;
+2. read already-visible rows from the immutable BTC PIT store;
 3. optionally admit caller-supplied completed Delta India BTC OI history;
 4. derive Spot Structure + one reconciled leveraged-positioning origin;
-5. freeze a ``Prospective BTC Thesis Tape`` decision;
-6. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
+5. admit fresh Deribit options and stablecoin-liquidity context already visible
+   at the decision time;
+6. freeze a ``Prospective BTC Thesis Tape`` decision;
+7. later reconstruct completed CoinDCX BTC candles through the frozen horizon and
    resolve the BTC-only outcome.
 
 Missing positioning data remains UNKNOWN context. Multiple providers sharing the
 same leveraged-positioning causal origin are never double-counted; disagreement
-within that origin cancels it to UNKNOWN. No Options contract, premium, P&L,
-Futures trade, order, or live capital is created.
+within that origin cancels it to UNKNOWN. Options and stablecoin context are
+read-only Market Brain inputs and cannot create a trade by themselves. No Options
+contract, premium, P&L, Futures trade, order, or live capital is created.
 """
 from __future__ import annotations
 
@@ -38,7 +41,12 @@ from app.crypto_btc_prospective_thesis_tape import (
     resolve_prospective_btc_thesis,
 )
 from app.crypto_btc_random_click_experience import BtcForwardPriceObservation
+from app.crypto_deribit_options_evidence import deribit_options_evidence_from_pit_records
 from app.crypto_market_intelligence import Evidence
+from app.crypto_stablecoin_liquidity import (
+    StablecoinLiquidityPolicy,
+    aggregate_stablecoin_liquidity_context,
+)
 from app.delta_india_btc_derivatives_context import (
     DeltaIndiaBtcOiCandle,
     derive_delta_oi_positioning_evidence,
@@ -170,6 +178,30 @@ def _reconcile_positioning_evidence(*rows: Evidence | None) -> Evidence | None:
     return max(candidates, key=lambda row: (_utc(row.observed_at), float(row.confidence), str(row.source)))
 
 
+def _options_context_is_available(evidence: Evidence) -> bool:
+    return str(evidence.metadata.get("status") or "") == "DERIBIT_OPTIONS_CONTEXT_READY"
+
+
+def _stablecoin_context_is_available(evidence: Evidence) -> bool:
+    latest_seen = evidence.metadata.get("latest_first_seen_at")
+    if latest_seen is None:
+        return False
+    age = evidence.metadata.get("snapshot_age_seconds")
+    if age is None:
+        return True
+    max_age = StablecoinLiquidityPolicy().validated().max_snapshot_age_seconds
+    return 0 <= float(age) <= int(max_age)
+
+
+def _stablecoin_context_status(evidence: Evidence, *, available: bool) -> str:
+    if available:
+        state = str(evidence.metadata.get("liquidity_state") or "UNKNOWN")
+        return "READY" if state != "UNKNOWN" else "FRESH_INSUFFICIENT_COMPARISON_HISTORY"
+    if evidence.metadata.get("latest_first_seen_at") is None:
+        return "MISSING"
+    return "STALE"
+
+
 async def _visible_pit_rows(store: Any, *, decision_at: datetime) -> list[dict]:
     result = store.visible_as_of(_utc(decision_at))
     if inspect.isawaitable(result):
@@ -287,9 +319,24 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
         delta_oi_evidence,
     )
 
+    options_evidence = deribit_options_evidence_from_pit_records(
+        pit_rows,
+        decision_at=decision,
+    )
+    options_context_available = _options_context_is_available(options_evidence)
+    stablecoin_evidence = aggregate_stablecoin_liquidity_context(
+        pit_rows,
+        decision_at=decision,
+    )
+    stablecoin_context_available = _stablecoin_context_is_available(stablecoin_evidence)
+
     evidence = [spot_evidence]
     if derivatives_evidence is not None:
         evidence.append(derivatives_evidence)
+    if options_context_available:
+        evidence.append(options_evidence)
+    if stablecoin_context_available:
+        evidence.append(stablecoin_evidence)
 
     frozen = freeze_prospective_btc_thesis(
         click_id=click_id,
@@ -315,6 +362,14 @@ async def freeze_prospective_btc_thesis_from_existing_sources(
         "pit_derivatives_evidence_status": None if pit_derivatives_evidence is None else pit_derivatives_evidence.stance,
         "delta_oi_evidence_status": None if delta_oi_evidence is None else delta_oi_evidence.stance,
         "derivatives_evidence_status": None if derivatives_evidence is None else derivatives_evidence.stance,
+        "options_context_status": str(options_evidence.metadata.get("status") or "UNKNOWN"),
+        "options_context_available": options_context_available,
+        "stablecoin_context_status": _stablecoin_context_status(
+            stablecoin_evidence,
+            available=stablecoin_context_available,
+        ),
+        "stablecoin_liquidity_state": str(stablecoin_evidence.metadata.get("liquidity_state") or "UNKNOWN"),
+        "stablecoin_context_available": stablecoin_context_available,
         "frozen_thesis": frozen,
         "provider_called": True,
         "pit_store_read": True,
@@ -395,12 +450,17 @@ def architecture_contract() -> dict:
         "explicit_invocation_required": True,
         "spot_source": "COINDCX_PUBLIC_COMPLETED_CANDLES",
         "derivatives_source": "EXISTING_IMMUTABLE_BTC_PIT_STORE_PLUS_OPTIONAL_COMPLETED_DELTA_OI",
+        "options_context_source": "EXISTING_DERIBIT_PIT_ROWS",
+        "stablecoin_context_source": "EXISTING_DEFILLAMA_PIT_ROWS",
         "optional_completed_delta_oi_context": True,
         "same_positioning_origin_double_counted": False,
         "same_origin_provider_conflict_cancels_direction": True,
         "derivatives_missing_equals_neutral_vote": False,
         "oi_liquidations_may_be_fabricated": False,
         "decision_uses_only_pit_visible_rows": True,
+        "options_context_uses_only_pit_visible_rows": True,
+        "stablecoin_context_uses_only_pit_visible_rows": True,
+        "missing_context_marks_lane_available": False,
         "outcome_uses_only_completed_coindcx_candles": True,
         "uses_existing_prospective_thesis_tape": True,
         "options_contract_data_required": False,
