@@ -24,6 +24,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     from .crude_oil_mini_manual_api import register_crude_oil_mini_manual_routes  # noqa: E402
     from .crude_oil_mini_option_observation_store import register_crude_oil_mini_option_observation_startup  # noqa: E402
     from .crypto_btc_capture_startup import register_btc_capture_startup  # noqa: E402
+    from .crypto_btc_context_capture_startup import register_btc_context_capture_startup  # noqa: E402
     from .crypto_btc_dashboard_api import register_crypto_btc_dashboard_routes  # noqa: E402
     from .crypto_btc_first24h_backtest_api import register_crypto_btc_first24h_backtest_routes  # noqa: E402
     from .crypto_btc_delta_options_probe_api import register_delta_options_probe_routes  # noqa: E402
@@ -55,6 +56,7 @@ if os.getenv("RENDER_GIT_COMMIT"):
     register_copper_direction_v2_prospective_startup(_app, _settings)
     register_copper_commodity_brain_prospective_startup(_app, _settings)
     register_btc_capture_startup(_app)
+    register_btc_context_capture_startup(_app)
     register_delta_options_probe_startup(_app)
     register_btc_prospective_proof_startup(_app, _settings)
     register_btc_prospective_resolution_startup(_app, _settings)
