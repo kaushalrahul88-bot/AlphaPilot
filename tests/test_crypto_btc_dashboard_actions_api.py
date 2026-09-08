@@ -17,6 +17,10 @@ def test_dashboard_actions_remain_research_only_and_history_enabled():
     assert contract["interrupted_backtests_reconciled"] is True
     assert contract["user_backtest_history_persisted"] is True
     assert contract["user_backtest_history_readable"] is True
+    assert contract["original_first_24h_replay_preserved"] is True
+    assert contract["later_enriched_24h_replay_available"] is True
+    assert contract["later_enriched_24h_requires_readiness_gate"] is True
+    assert contract["enriched_replay_may_run_before_full_context_window"] is False
     assert contract["user_live_shadow_setup_allowed"] is True
     assert contract["broker_order_placement_allowed"] is False
     assert contract["credentials_accepted_from_browser"] is False
@@ -26,11 +30,13 @@ def test_dashboard_actions_remain_research_only_and_history_enabled():
     assert contract["capital_committed_inr"] == 0
 
 
-def test_public_job_reports_determinate_click_progress():
+def test_public_job_reports_determinate_click_progress_and_mode():
     result = _public_job({
-        "job_id": "job-1", "status": "RUNNING", "phase": "PROCESSING_CLICKS",
+        "job_id": "job-1", "mode": "ENRICHED_PIT_24H",
+        "status": "RUNNING", "phase": "PROCESSING_ENRICHED_CLICKS",
         "completed_clicks": 37, "total_clicks": 96, "started_at": "now",
     })
+    assert result["mode"] == "ENRICHED_PIT_24H"
     assert result["completed_clicks"] == 37
     assert result["total_clicks"] == 96
     assert result["progress_pct"] == 38.5

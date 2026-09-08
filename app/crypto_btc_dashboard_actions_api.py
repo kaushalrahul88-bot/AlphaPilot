@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import HTTPException, Query, Response
 
 from app.crypto_btc_backtest_history import PostgresBtcBacktestHistoryStore
+from app.crypto_btc_enriched24h_underlying_backtest import (
+    enriched_24h_readiness,
+    run_enriched24h_underlying_15m,
+)
 from app.crypto_btc_first24h_underlying_backtest import run_first24h_underlying_15m
 from app.crypto_btc_live_shadow_click import run_explicit_live_shadow_click
 from app.crypto_btc_prospective_proof_runtime import BtcProspectiveProofRuntimeConfig
@@ -21,6 +26,7 @@ _live_click_lock = asyncio.Lock()
 _backtest_jobs: dict[str, dict] = {}
 _MAX_IN_MEMORY_BACKTEST_JOBS = 20
 _PROGRESS_CHECKPOINT_EVERY_CLICKS = 4
+BacktestRunner = Callable[..., Awaitable[dict]]
 
 
 def _database_url(settings) -> str:
@@ -39,6 +45,7 @@ def _public_job(job: dict) -> dict:
     completed, total = int(job.get("completed_clicks", 0)), int(job.get("total_clicks", 96))
     return {
         "job_id": job["job_id"],
+        "mode": job.get("mode"),
         "status": job["status"],
         "phase": job.get("phase"),
         "completed_clicks": completed,
@@ -85,6 +92,7 @@ async def _run_backtest_job(
     job_id: str,
     database_url: str,
     history: PostgresBtcBacktestHistoryStore,
+    runner: BacktestRunner,
 ) -> None:
     async with _backtest_lock:
         job = _backtest_jobs[job_id]
@@ -111,7 +119,7 @@ async def _run_backtest_job(
                 job["history_error"] = f"Progress checkpoint {exc.__class__.__name__}: {str(exc)[:260]}"
 
         try:
-            job["result"] = await run_first24h_underlying_15m(
+            job["result"] = await runner(
                 database_url,
                 progress_callback=update,
             )
@@ -146,6 +154,37 @@ async def _run_backtest_job(
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
+async def _create_backtest_job(
+    *,
+    database_url: str,
+    history: PostgresBtcBacktestHistoryStore,
+    mode: str,
+    runner: BacktestRunner,
+) -> dict:
+    job_id = _request_id()
+    job = {
+        "job_id": job_id,
+        "mode": mode,
+        "status": "RUNNING",
+        "phase": "QUEUED",
+        "completed_clicks": 0,
+        "total_clicks": 96,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "error": None,
+        "result": None,
+        "history_persisted": False,
+        "history_error": None,
+    }
+    try:
+        await history.create_job(job)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"BTC backtest could not be stored before start: {exc}") from exc
+    _remember_in_memory(job)
+    asyncio.create_task(_run_backtest_job(job_id, database_url, history, runner))
+    return _public_job(job)
+
+
 def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
     @app.post("/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest")
     async def run_user_underlying_backtest(response: Response):
@@ -159,28 +198,54 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
             await _reconcile_stale_history(history)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
+        return await _create_backtest_job(
+            database_url=database_url,
+            history=history,
+            mode="FIRST_SHARED_24H",
+            runner=run_first24h_underlying_15m,
+        )
 
-        job_id = _request_id()
-        job = {
-            "job_id": job_id,
-            "status": "RUNNING",
-            "phase": "QUEUED",
-            "completed_clicks": 0,
-            "total_clicks": 96,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-            "error": None,
-            "result": None,
-            "history_persisted": False,
-            "history_error": None,
-        }
+    @app.get("/v1/dashboard/crypto/btc/actions/enriched-24h-underlying-backtest/readiness")
+    async def read_enriched_underlying_readiness(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        database_url = _database_url(settings)
         try:
-            await history.create_job(job)
+            return await enriched_24h_readiness(database_url)
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"BTC backtest could not be stored before start: {exc}") from exc
-        _remember_in_memory(job)
-        asyncio.create_task(_run_backtest_job(job_id, database_url, history))
-        return _public_job(job)
+            raise HTTPException(status_code=503, detail=f"BTC enriched replay readiness is unavailable: {exc}") from exc
+
+    @app.post("/v1/dashboard/crypto/btc/actions/enriched-24h-underlying-backtest")
+    async def run_user_enriched_underlying_backtest(response: Response):
+        if _backtest_lock.locked():
+            raise HTTPException(status_code=409, detail="BTC underlying backtest is already running")
+        database_url = _database_url(settings)
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            readiness = await enriched_24h_readiness(database_url)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"BTC enriched replay readiness is unavailable: {exc}") from exc
+        if readiness.get("ready") is not True:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "BTC_ENRICHED_24H_NOT_READY",
+                    "message": str(readiness.get("next_requirement") or "Enriched BTC 24h replay is still collecting context."),
+                    "readiness": readiness,
+                },
+            )
+
+        history = PostgresBtcBacktestHistoryStore(database_url)
+        try:
+            await history.initialize()
+            await _reconcile_stale_history(history)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"BTC backtest history is unavailable: {exc}") from exc
+        return await _create_backtest_job(
+            database_url=database_url,
+            history=history,
+            mode="ENRICHED_PIT_24H",
+            runner=run_enriched24h_underlying_15m,
+        )
 
     @app.get("/v1/dashboard/crypto/btc/actions/first-24h-underlying-backtest/{job_id}")
     async def read_user_underlying_backtest(job_id: str, response: Response):
@@ -252,13 +317,17 @@ def register_crypto_btc_dashboard_action_routes(app, settings) -> None:
 
 def architecture_contract() -> dict:
     return {
-        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V3",
+        "version": "BTC_DASHBOARD_USER_ACTIONS_CONTRACT_V4",
         "user_backtest_allowed": True,
         "user_backtest_reports_real_progress": True,
         "user_backtest_progress_checkpointed": True,
         "interrupted_backtests_reconciled": True,
         "user_backtest_history_persisted": True,
         "user_backtest_history_readable": True,
+        "original_first_24h_replay_preserved": True,
+        "later_enriched_24h_replay_available": True,
+        "later_enriched_24h_requires_readiness_gate": True,
+        "enriched_replay_may_run_before_full_context_window": False,
         "user_live_shadow_setup_allowed": True,
         "broker_order_placement_allowed": False,
         "credentials_accepted_from_browser": False,
