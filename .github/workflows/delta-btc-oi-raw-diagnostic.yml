@@ -2,19 +2,12 @@ name: Delta BTC OI Raw Diagnostic
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/delta-btc-oi-raw-diagnostic.yml'
-      - 'app/delta_india_btc_derivatives_context.py'
 
 permissions:
   contents: read
 
 jobs:
   probe:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[delta-oi-probe]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
