@@ -2,16 +2,13 @@ name: Crypto BTC First 24h 15m Backtest
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/crypto-btc-first24h-15m-backtest.yml"
-      - "app/crypto_btc_first24h_backtest.py"
-      - "app/crypto_btc_first24h_backtest_api.py"
-      - "app/__init__.py"
 
 permissions:
   contents: read
+
+concurrency:
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
 
 jobs:
   replay:

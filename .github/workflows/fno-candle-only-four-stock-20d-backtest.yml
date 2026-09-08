@@ -2,21 +2,13 @@ name: F&O Candle-Only Four-Stock 20-Day Backtest
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/fno-candle-only-four-stock-20d-backtest.yml"
-      - "app/fno_candle_only_four_stock_backtest_v1.py"
-      - "app/fno_candle_only_four_stock_backtest_api.py"
-      - "app/fno_candle_only_symbol_alias_v1.py"
-      - "app/__init__.py"
 
 permissions:
   contents: read
 
 concurrency:
-  group: fno-candle-only-four-stock-20d-backtest
-  cancel-in-progress: true
+  group: alphapilot-production-heavy-render-job
+  cancel-in-progress: false
 
 jobs:
   replay:

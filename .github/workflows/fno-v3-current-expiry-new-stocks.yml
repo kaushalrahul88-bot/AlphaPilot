@@ -33,9 +33,12 @@ jobs:
       - run: python -m py_compile app/fno_market_brain_v3.py app/fno_market_brain_v3_current_expiry_dataset.py app/fno_market_brain_v3_current_expiry_dataset_api.py app/__init__.py
 
   build-dataset:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
+    concurrency:
+      group: alphapilot-production-heavy-render-job
+      cancel-in-progress: false
     env:
       API_BASE: https://alphapilot-api-pnio.onrender.com
       COLLECTOR_TOKEN: ${{ secrets.COMMODITY_COLLECTOR_TOKEN }}
