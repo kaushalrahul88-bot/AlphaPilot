@@ -1,0 +1,25 @@
+name: BTC Delta Microstructure Capture Check
+
+on:
+  pull_request:
+    paths:
+      - 'app/crypto_btc_delta_microstructure_capture.py'
+      - 'app/crypto_btc_source_capabilities.py'
+      - 'app/__init__.py'
+      - 'tests/test_crypto_btc_delta_microstructure_capture.py'
+      - '.github/workflows/btc-delta-microstructure-capture-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest tests.test_crypto_btc_delta_microstructure_capture -v
+      - run: python -m py_compile app/crypto_btc_delta_microstructure_capture.py app/crypto_btc_source_capabilities.py app/__init__.py
