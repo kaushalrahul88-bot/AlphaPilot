@@ -1,0 +1,88 @@
+name: Crude No-News Random Click Replay
+
+on:
+  pull_request:
+    paths:
+      - "app/crude_random_click_replay.py"
+      - "tests/test_crude_random_click_replay.py"
+      - ".github/workflows/crude-random-click-replay.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  random-clicks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest tests.test_crude_random_click_replay -v
+
+      - name: Run 20 deterministic clicks per complete August session
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          python - <<'PY'
+          import asyncio,json,os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          import psycopg
+
+          from app.crude_research_brain import read_exact_crude_contract_from_store
+          from app.crude_random_click_replay import run_crude_random_click_replay
+
+          IST=ZoneInfo("Asia/Kolkata")
+          start=datetime(2026,8,3,9,0,tzinfo=IST)
+          end=datetime(2026,8,31,23,30,tzinfo=IST)
+          with psycopg.connect(os.environ["DATABASE_URL"],connect_timeout=10) as connection:
+              with connection.cursor() as cursor:
+                  cursor.execute("""
+                      SELECT trading_symbol,COUNT(*) n FROM commodity_candles
+                      WHERE provider='GROWW' AND symbol='CRUDEOIL' AND timeframe_minutes=5
+                        AND candle_at >= %s AND candle_at <= %s
+                      GROUP BY trading_symbol ORDER BY n DESC,trading_symbol ASC LIMIT 1
+                  """,(start,end))
+                  row=cursor.fetchone()
+          assert row and row[0],"No exact Crude contract data available"
+          contract,count=row
+          candles=asyncio.run(read_exact_crude_contract_from_store(os.environ["DATABASE_URL"],contract,start,end))
+          result=run_crude_random_click_replay(candles,trading_symbol=contract,clicks_per_session=20)
+          result["contract_selection"]={"method":"MOST_COMPLETE_EXACT_CONTRACT_IN_REPLAY_WINDOW","trading_symbol":contract,"stored_rows":count}
+          Path("crude-random-click-replay.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          print(json.dumps({
+              "mode":result["mode"],
+              "contract":contract,
+              "coverage":result["coverage"],
+              "baseline_brain_a":result["baseline_brain_a"],
+              "long_only_shadow":result["long_only_shadow"],
+              "wait_attribution":result["wait_attribution"],
+              "sessions":result["sessions"],
+              "next_gate":result["next_gate"],
+          },indent=2,sort_keys=True))
+          assert result["news_enabled"] is False
+          assert result["candidate_frozen_before_click_schedule"] is True
+          assert result["click_schedule_outcome_blind"] is True
+          assert result["coverage"]["exact_click_coverage"] is True
+          assert result["coverage"]["sessions"]>=15
+          assert result["coverage"]["scheduled_clicks"]==result["coverage"]["sessions"]*20
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crude-random-click-replay-no-news
+          path: crude-random-click-replay.json
+          if-no-files-found: warn
+          retention-days: 30
