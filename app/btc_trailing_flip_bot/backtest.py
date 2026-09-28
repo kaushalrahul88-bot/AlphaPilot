@@ -1,6 +1,5 @@
 from __future__ import annotations
 import csv
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,11 +106,9 @@ def run_backtest(trades: Iterable[Trade], config: Config, start_ms: int, end_ms:
         if prev_bucket is None:
             prev_bucket = bucket
         elif bucket != prev_bucket:
-            close_price = getattr(run_backtest, "_unused", None)
-            if 'bucket_close' in locals():
-                e9 = emas9.update(bucket_close)
-                e21 = emas21.update(bucket_close)
-                completed_ema = (e9, e21)
+            e9 = emas9.update(bucket_close)
+            e21 = emas21.update(bucket_close)
+            completed_ema = (e9, e21) if emas21.ready else None
             prev_bucket = bucket
         bucket_close = trade.price
         if completed_ema and all(states[t] is None for t in states):
@@ -135,7 +132,8 @@ def run_backtest(trades: Iterable[Trade], config: Config, start_ms: int, end_ms:
             xf = fee(xp, pos.quantity, config.exit_fee_rate)
             slip = abs(pos.entry_price - pos.market_entry_price) * pos.quantity + abs(xp - trade.price) * pos.quantity
             net = gross - pos.entry_fee - xf - slip - pos.funding
-            rows[trail].append(TradeRecord(trail, _iso(int(pos.entry_time.timestamp()*1000)), _iso(trade.timestamp_ms), pos.side, pos.entry_price, xp, gross, pos.entry_fee, xf, slip, pos.funding, net, trade.timestamp_ms - int(pos.entry_time.timestamp()*1000), "TRAILING_STOP"))
+            entry_ms = int(pos.entry_time.timestamp() * 1000)
+            rows[trail].append(TradeRecord(trail, _iso(entry_ms), _iso(trade.timestamp_ms), pos.side, pos.entry_price, xp, gross, pos.entry_fee, xf, slip, pos.funding, net, (trade.timestamp_ms - entry_ms) / 1000.0, "TRAILING_STOP"))
             new_side = "SHORT" if pos.side == "LONG" else "LONG"
             ep = entry_fill(new_side, trade.price, config.slippage_rate)
             qty = config.notional_usdt / ep
