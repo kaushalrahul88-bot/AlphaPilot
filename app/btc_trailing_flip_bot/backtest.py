@@ -101,6 +101,7 @@ def run_backtest(trades: Iterable[Trade], config: Config, start_ms: int, end_ms:
     rows: dict[float, list[TradeRecord]] = {t: [] for t in config.trail_percentages}
     prev_bucket: int | None = None
     completed_ema: tuple[float, float] | None = None
+    bucket_close = 0.0
     for trade in trades:
         bucket = trade.timestamp_ms // 300_000
         if prev_bucket is None:
@@ -118,17 +119,17 @@ def run_backtest(trades: Iterable[Trade], config: Config, start_ms: int, end_ms:
                     ep = entry_fill(side, trade.price, config.slippage_rate)
                     qty = config.notional_usdt / ep
                     ef = fee(ep, qty, config.entry_fee_rate)
-                    positions[trail] = Position(side, datetime.fromtimestamp(trade.timestamp_ms/1000, tz=timezone.utc), ep, trade.price, trade.price, config.notional_usdt, ef)
+                    positions[trail] = Position(side, datetime.fromtimestamp(trade.timestamp_ms / 1000, tz=timezone.utc), ep, trade.price, trade.price, config.notional_usdt, ef)
                     states[trail] = TrailState(side, trade.price, trail)
         for trail, state in states.items():
             pos = positions[trail]
             if state is None or pos is None:
                 continue
-            stop, hit = state.update(trade.price)
+            _, hit = state.update(trade.price)
             if not hit:
                 continue
             xp = exit_fill(pos.side, trade.price, config.slippage_rate)
-            gross = _gross(pos.side, pos.quantity, pos.entry_price, xp)
+            gross = _gross(pos.side, pos.quantity, pos.market_entry_price, trade.price)
             xf = fee(xp, pos.quantity, config.exit_fee_rate)
             slip = abs(pos.entry_price - pos.market_entry_price) * pos.quantity + abs(xp - trade.price) * pos.quantity
             net = gross - pos.entry_fee - xf - slip - pos.funding
@@ -138,12 +139,12 @@ def run_backtest(trades: Iterable[Trade], config: Config, start_ms: int, end_ms:
             ep = entry_fill(new_side, trade.price, config.slippage_rate)
             qty = config.notional_usdt / ep
             ef = fee(ep, qty, config.entry_fee_rate)
-            positions[trail] = Position(new_side, datetime.fromtimestamp(trade.timestamp_ms/1000, tz=timezone.utc), ep, trade.price, trade.price, config.notional_usdt, ef)
+            positions[trail] = Position(new_side, datetime.fromtimestamp(trade.timestamp_ms / 1000, tz=timezone.utc), ep, trade.price, trade.price, config.notional_usdt, ef)
             states[trail] = TrailState(new_side, trade.price, trail)
     results: dict[float, dict] = {}
     results_dir.mkdir(parents=True, exist_ok=True)
     for trail, trail_rows in rows.items():
-        pct = f"{trail:.4%}".replace("%","pct")
+        pct = f"{trail:.4%}".replace("%", "pct")
         _write_ledger(results_dir / f"trades_{pct}.csv", trail_rows)
         results[trail] = _summary(trail_rows, positions[trail] is not None)
     with (results_dir / "summary.csv").open("w", newline="", encoding="utf-8") as f:
